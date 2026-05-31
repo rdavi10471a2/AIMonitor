@@ -271,7 +271,7 @@ internal static class Program
             preMergeValidation = validation,
             diffLaunch = result,
             nextStep = record.IsNewFile
-                ? "After WinMerge review, save the staged candidate into the runtime review target for accept, or leave it unchanged for reject. Then run edit record-decision."
+                ? "After WinMerge review, save the staged candidate into watched source for accept, or leave watched source absent for reject. Then run edit record-decision."
                 : "After WinMerge review, save the staged candidate into the watched source for accept, or leave watched source unchanged for reject. Then run edit record-decision."
         };
     }
@@ -514,6 +514,19 @@ internal static class Program
                 Status = "missing-staged-file",
                 IsError = true,
                 Message = "Pre-merge validation failed because the staged candidate file is missing."
+            };
+        }
+
+        string currentStagedHash = FileHash.Compute(record.StagedFilePath);
+        if (!currentStagedHash.Equals(record.StagedHash, StringComparison.OrdinalIgnoreCase))
+        {
+            return new PreMergeValidationResult
+            {
+                Status = "staged-hash-mismatch",
+                IsError = true,
+                DiagnosticCount = 1,
+                Diagnostics = ["Staged candidate content changed after staging. Edit the Working file and run edit stage again."],
+                Message = "Pre-merge validation failed because the staged candidate no longer matches its recorded hash."
             };
         }
 

@@ -263,12 +263,26 @@ public sealed class WorkflowEditService
             throw new FileNotFoundException("Working candidate file was not found.", manifest.WorkingFilePath);
         }
 
+        return CreateCompareSnapshot(
+            fullWatchedPath,
+            manifest,
+            manifest.WorkingFilePath,
+            ledgerSummary);
+    }
+
+    private CompareSnapshotResult CreateCompareSnapshot(
+        string fullWatchedPath,
+        EditSessionManifest manifest,
+        string candidateFilePath,
+        string? ledgerSummary)
+    {
         string runId = $"{DateTimeOffset.Now:yyyyMMddTHHmmssfff}-{Environment.ProcessId}-{Guid.NewGuid():N}"[..44];
         WorkflowRunRecorder recorder = new(paths.HistoryRoot, runId);
         recorder.Stage(runId, "compare-start", new Dictionary<string, string>
         {
             ["watchedFile"] = fullWatchedPath,
-            ["workingFile"] = manifest.WorkingFilePath
+            ["workingFile"] = manifest.WorkingFilePath,
+            ["candidateFile"] = candidateFilePath
         });
 
         string reviewBaselineFilePath = fullWatchedPath;
@@ -277,13 +291,13 @@ public sealed class WorkflowEditService
             reviewBaselineFilePath = CreateBlankReviewBaseline(manifest.RelativePath, runId);
         }
 
-        if (!manifest.IsNewFile && FilesAreIdentical(fullWatchedPath, manifest.WorkingFilePath))
+        if (!manifest.IsNewFile && FilesAreIdentical(fullWatchedPath, candidateFilePath))
         {
             recorder.Stage(runId, "compare-skipped-identical");
             return new CompareSnapshotResult
             {
                 WatchedFilePath = reviewBaselineFilePath,
-                WorkingFilePath = manifest.WorkingFilePath,
+                WorkingFilePath = candidateFilePath,
                 RunId = runId,
                 RunLogPath = recorder.RunLogPath,
                 TelemetryPath = recorder.TelemetryPath,
@@ -295,15 +309,15 @@ public sealed class WorkflowEditService
 
         string historyDirectory = Path.Combine(paths.HistoryRoot, Path.GetDirectoryName(manifest.RelativePath) ?? string.Empty);
         Directory.CreateDirectory(historyDirectory);
-        string baseName = Path.GetFileNameWithoutExtension(manifest.WorkingFilePath);
-        string extension = Path.GetExtension(manifest.WorkingFilePath);
+        string baseName = Path.GetFileNameWithoutExtension(candidateFilePath);
+        string extension = Path.GetExtension(candidateFilePath);
         string proposedSnapshotPath = Path.Combine(historyDirectory, $"{baseName}_{DateTimeOffset.Now:yyyyMMdd_HHmmssfff}_{Sanitize(runId)}{extension}");
-        File.Copy(manifest.WorkingFilePath, proposedSnapshotPath, overwrite: false);
+        File.Copy(candidateFilePath, proposedSnapshotPath, overwrite: false);
         string ledgerPath = new FileLedgerWriter().AppendEntry(
             paths.HistoryRoot,
             manifest.RelativePath,
             fullWatchedPath,
-            manifest.WorkingFilePath,
+            candidateFilePath,
             proposedSnapshotPath,
             ledgerSummary);
 
@@ -322,7 +336,7 @@ public sealed class WorkflowEditService
         return new CompareSnapshotResult
         {
             WatchedFilePath = reviewBaselineFilePath,
-            WorkingFilePath = manifest.WorkingFilePath,
+            WorkingFilePath = candidateFilePath,
             ProposedSnapshotPath = proposedSnapshotPath,
             LedgerPath = ledgerPath,
             RunLogPath = recorder.RunLogPath,
@@ -371,7 +385,11 @@ public sealed class WorkflowEditService
         Directory.CreateDirectory(Path.GetDirectoryName(stagedFilePath) ?? ".");
         File.Copy(manifest.WorkingFilePath, stagedFilePath, overwrite: false);
 
-        CompareSnapshotResult compare = Compare(fullWatchedPath, ledgerSummary);
+        CompareSnapshotResult compare = CreateCompareSnapshot(
+            fullWatchedPath,
+            manifest,
+            stagedFilePath,
+            ledgerSummary);
         StagedEditRecord record = new()
         {
             StagedRecordId = stagedRecordId,
@@ -449,7 +467,7 @@ public sealed class WorkflowEditService
         }
 
         RemoveEmptyNewFilePlaceholderOnReject(record, decision);
-        string reviewedFilePath = GetReviewedFilePath(record, normalizedDecision);
+        string reviewedFilePath = GetReviewedFilePath(record);
         bool reviewedFileExists = File.Exists(reviewedFilePath);
         string reviewedHash = reviewedFileExists ? FileHash.Compute(reviewedFilePath) : string.Empty;
         ReviewDecisionResult result = new ReviewDecisionClassifier().Classify(
@@ -462,15 +480,6 @@ public sealed class WorkflowEditService
                 string.IsNullOrWhiteSpace(record.StagedNormalizedHash) ? null : record.StagedNormalizedHash,
                 record.IsNewFile,
                 reviewedFileExists));
-
-        if (record.IsNewFile
-            && !File.Exists(record.WatchedFilePath)
-            && reviewedFilePath.Equals(record.ReviewBaselineFilePath, StringComparison.OrdinalIgnoreCase)
-            && result.Classification is "accepted" or "accepted-normalized")
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(record.WatchedFilePath) ?? ".");
-            File.Copy(reviewedFilePath, record.WatchedFilePath, overwrite: false);
-        }
 
         record.Decision = decision;
         record.DecisionAtUtc = DateTimeOffset.UtcNow.ToString("O");
@@ -491,16 +500,8 @@ public sealed class WorkflowEditService
         return record;
     }
 
-    private static string GetReviewedFilePath(StagedEditRecord record, string normalizedDecision)
+    private static string GetReviewedFilePath(StagedEditRecord record)
     {
-        if (record.IsNewFile
-            && normalizedDecision == "accepted"
-            && !File.Exists(record.WatchedFilePath)
-            && !string.IsNullOrWhiteSpace(record.ReviewBaselineFilePath))
-        {
-            return record.ReviewBaselineFilePath;
-        }
-
         return record.WatchedFilePath;
     }
 
