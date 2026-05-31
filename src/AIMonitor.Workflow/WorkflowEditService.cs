@@ -449,7 +449,7 @@ public sealed class WorkflowEditService
         }
 
         RemoveEmptyNewFilePlaceholderOnReject(record, decision);
-        string reviewedFilePath = GetReviewedFilePath(record);
+        string reviewedFilePath = GetReviewedFilePath(record, normalizedDecision);
         bool reviewedFileExists = File.Exists(reviewedFilePath);
         string reviewedHash = reviewedFileExists ? FileHash.Compute(reviewedFilePath) : string.Empty;
         ReviewDecisionResult result = new ReviewDecisionClassifier().Classify(
@@ -491,9 +491,10 @@ public sealed class WorkflowEditService
         return record;
     }
 
-    private static string GetReviewedFilePath(StagedEditRecord record)
+    private static string GetReviewedFilePath(StagedEditRecord record, string normalizedDecision)
     {
         if (record.IsNewFile
+            && normalizedDecision == "accepted"
             && !File.Exists(record.WatchedFilePath)
             && !string.IsNullOrWhiteSpace(record.ReviewBaselineFilePath))
         {
