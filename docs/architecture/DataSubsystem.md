@@ -34,3 +34,15 @@ The first schema stores the current MSBuild solution model, not a history of ind
 - `diagnostics` records MSBuild workspace diagnostics.
 
 Future symbol, caller, reference, Razor, WinForms, and workflow tables should attach to `projects` and `documents` instead of inventing a second project identity source. Refresh history can be added later as telemetry, but it is not the primary navigation model.
+
+## Semantic Provider Boundary
+
+The database can store language-neutral project and document rows for any MSBuild-loaded project. Semantic rows should identify the provider that produced them when provider-specific tables are added.
+
+Current implementation focus:
+
+- MSBuild project/document/reference facts are the shared baseline.
+- C# is the first semantic indexing provider.
+- Non-C# documents should not disappear just because C# symbol indexing cannot interpret them yet.
+
+This keeps the schema aligned with the monitor's real goal: navigate a watched solution by project truth first, then layer language-specific intelligence on top.

@@ -10,6 +10,8 @@ This repository is the clean V2 monitor implementation.
 - Prefer MSBuild-loaded project truth over filesystem guessing.
 - Keep generated runtime state under `runtime/` and out of watched projects.
 - Do not hide data storage row/result classes inside repositories; storage records get their own files.
+- Treat MSBuild project/document loading as language-neutral; C# is the first semantic provider, not the whole architecture.
+- Prefer smoke/regression tests for end-to-end monitor behavior. Use unit tests sparingly for small contracts that smoke tests would make slow or vague, such as path derivation and SQLite row mapping.
 
 ## Edit Safety
 
