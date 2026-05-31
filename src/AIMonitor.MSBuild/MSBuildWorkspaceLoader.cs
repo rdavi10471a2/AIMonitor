@@ -1022,6 +1022,16 @@ internal sealed class ProjectSymbolIndex
             return invocationSymbol;
         }
 
+        if (node is ObjectCreationExpressionSyntax objectCreation)
+        {
+            return GetConstructionTarget(model.GetSymbolInfo(objectCreation, cancellationToken));
+        }
+
+        if (node is ImplicitObjectCreationExpressionSyntax implicitObjectCreation)
+        {
+            return GetConstructionTarget(model.GetSymbolInfo(implicitObjectCreation, cancellationToken));
+        }
+
         if (node is CastExpressionSyntax castExpression)
         {
             return model.GetConversion(castExpression.Expression).MethodSymbol;
@@ -1041,6 +1051,14 @@ internal sealed class ProjectSymbolIndex
         }
 
         return symbol;
+    }
+
+    private static ISymbol? GetConstructionTarget(SymbolInfo symbolInfo)
+    {
+        ISymbol? symbol = symbolInfo.Symbol ?? symbolInfo.CandidateSymbols.FirstOrDefault();
+        return symbol is IMethodSymbol { MethodKind: MethodKind.Constructor } constructor
+            ? constructor.ContainingType
+            : symbol;
     }
 
     private static bool IsNestedDuplicateReferenceCandidate(SyntaxNode node)
