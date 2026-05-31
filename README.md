@@ -10,7 +10,7 @@ The goal is to keep the proven Monitor workflow while starting from a cleaner ar
 - CLI as the Codex-friendly adapter.
 - Tests, samples, and docs as top-level peers of product source.
 - First-class watched-project support for Blazor/Razor, WinForms, and console apps.
-- A SQLite solution index under `runtime/data` built from one configured watched solution path.
+- A SQLite solution index under each watched solution workspace built from one configured watched solution path.
 - Unified JSON-lines logging under `runtime/logs`.
 
 ## Initial Scope
@@ -45,6 +45,8 @@ runtime/   generated monitor state; ignored
 `Monitor:WatchedSolutionPath` is the single authoritative path for the watched solution. MSBuild loading, indexing, MCP, CLI, and the app host should all flow through that setting.
 
 Generated monitor logs go under `runtime/logs/aimonitor.ndjson`. Adapters may print human status to their console/UI, but durable operational events should use the shared logger.
+
+Generated solution-specific state goes under `runtime/watched-solutions/<solution-name>-<path-hash>/`.
 
 ## Build
 

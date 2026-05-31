@@ -13,10 +13,12 @@ Do not add separate settings such as `RoslynSolutionPath`, `IndexSolutionPath`, 
 The default index database is:
 
 ```text
-runtime/data/solution-index.sqlite
+runtime/watched-solutions/<solution-name>-<path-hash>/data/solution-index.sqlite
 ```
 
-The path is derived from `MonitorSettings.RuntimeRoot`, not from the watched project folder. Generated monitor state stays with AIMonitor.
+The path is derived from `MonitorSettings.RuntimeRoot` and `MonitorSettings.WatchedSolutionPath`, not from the watched project folder directly. Generated monitor state stays with AIMonitor, but each watched solution gets its own monitor-owned workspace folder.
+
+The solution folder name includes a short hash of the full solution path so two different watched solutions named `App.sln` do not collide.
 
 ## Current Schema
 

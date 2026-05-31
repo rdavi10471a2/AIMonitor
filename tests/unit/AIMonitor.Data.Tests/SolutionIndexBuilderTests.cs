@@ -52,6 +52,10 @@ public sealed class SolutionIndexBuilderTests
         IReadOnlyList<IndexedDocumentRow> documents = store.ListDocuments(summary.RunId);
 
         Assert.True(File.Exists(databasePath));
+        Assert.StartsWith(
+            MonitorWorkspacePaths.GetWatchedSolutionWorkspaceRoot(settings),
+            databasePath,
+            StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, summary.ProjectCount);
         Assert.Contains(documents, document => document.Name == "Program.cs");
     }
