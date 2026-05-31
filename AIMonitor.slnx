@@ -10,7 +10,6 @@
     <Project Path="src/AIMonitor.McpServer/AIMonitor.McpServer.csproj" />
     <Project Path="src/AIMonitor.MSBuild/AIMonitor.MSBuild.csproj" />
     <Project Path="src/AIMonitor.Runtime/AIMonitor.Runtime.csproj" />
-    <Project Path="src/AIMonitor.Storage/AIMonitor.Storage.csproj" />
     <Project Path="src/AIMonitor.Workflow/AIMonitor.Workflow.csproj" />
   </Folder>
   <Folder Name="/tests/unit/">
@@ -27,6 +26,7 @@
   <Folder Name="/tests/smoke/">
     <Project Path="tests/smoke/AIMonitor.LanguageCorpusSmokeTests/AIMonitor.LanguageCorpusSmokeTests.csproj" />
     <Project Path="tests/smoke/AIMonitor.SmokeTests/AIMonitor.SmokeTests.csproj" />
+    <Project Path="tests/smoke/AIMonitor.ToolSmokeTests/AIMonitor.ToolSmokeTests.csproj" />
   </Folder>
   <Folder Name="/tests/fixtures/">
     <File Path="tests/fixtures/README.md" />
@@ -48,10 +48,13 @@
     <File Path="docs/decisions/0001-name-and-scope.md" />
   </Folder>
   <Folder Name="/docs/feature-maps/">
+    <File Path="docs/feature-maps/CliWorkflowEditLoop.md" />
     <File Path="docs/feature-maps/README.md" />
+    <File Path="docs/feature-maps/SharedAdapterSurface.md" />
   </Folder>
   <Folder Name="/docs/findings/">
     <File Path="docs/findings/README.md" />
+    <File Path="docs/findings/SmokeCoverageTodo.md" />
   </Folder>
   <Folder Name="/docs/setup/">
     <File Path="docs/setup/LocalSetup.md" />

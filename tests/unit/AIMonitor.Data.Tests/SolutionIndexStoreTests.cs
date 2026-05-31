@@ -29,7 +29,7 @@ public sealed class SolutionIndexStoreTests
                     "enable",
                     "latest",
                     [
-                        new MSBuildDocumentSnapshot("document:test", "Program.cs", @"C:\Example\Program.cs", [])
+                        new MSBuildDocumentSnapshot("document:test", "Program.cs", @"C:\Example\Program.cs", [], "abc123")
                     ],
                     [
                         new MSBuildSymbolSnapshot(
@@ -73,6 +73,7 @@ public sealed class SolutionIndexStoreTests
         Assert.Equal(1, summary.DiagnosticCount);
         Assert.Single(documents);
         Assert.Equal("Program.cs", documents[0].Name);
+        Assert.Equal("abc123", documents[0].ContentHash);
         Assert.Single(projects);
         Assert.Equal("project:test", projects[0].StableKey);
         Assert.Equal("net10.0", projects[0].TargetFramework);
