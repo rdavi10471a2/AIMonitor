@@ -42,7 +42,6 @@ public sealed class SolutionIndexControl : UserControl
     private SolutionIndexStore? store;
     private IMonitorLogger? logger;
     private bool splitterLayoutSized;
-    private bool suppressSymbolSelectionChanged;
     private SolutionIndexSummary currentSummary = new(string.Empty, DateTimeOffset.MinValue, 0, 0, 0);
     private IReadOnlyList<IndexedProjectRow> projects = [];
     private IReadOnlyList<IndexedDocumentRow> documents = [];
@@ -258,7 +257,7 @@ public sealed class SolutionIndexControl : UserControl
         openWatchedFolderMenuItem.Click += (_, _) => OpenFolder(settings?.WatchedProjectFolder);
         openDatabaseFolderMenuItem.Click += (_, _) => OpenFolder(Path.GetDirectoryName(databasePathBox.Text));
         indexTree.AfterSelect += (_, args) => SelectTreeNode(args.Node);
-        symbolsGrid.SelectionChanged += (_, _) => LoadReferencesForSelectedSymbol();
+        symbolsGrid.CellDoubleClick += (_, _) => LoadReferencesForSelectedSymbol();
     }
 
     private void LoadSettingsAndRefresh()
@@ -717,11 +716,6 @@ public sealed class SolutionIndexControl : UserControl
 
     private void LoadReferencesForSelectedSymbol()
     {
-        if (suppressSymbolSelectionChanged)
-        {
-            return;
-        }
-
         if (symbolsGrid.CurrentRow?.DataBoundItem is not IndexedSymbolRow symbol)
         {
             return;
@@ -801,15 +795,7 @@ public sealed class SolutionIndexControl : UserControl
 
     private void SetSymbolsGrid(IEnumerable<IndexedSymbolRow> rows)
     {
-        suppressSymbolSelectionChanged = true;
-        try
-        {
-            symbolsGrid.DataSource = rows.ToList();
-        }
-        finally
-        {
-            suppressSymbolSelectionChanged = false;
-        }
+        symbolsGrid.DataSource = rows.ToList();
     }
 
     private static string FormatIndexedAt(DateTimeOffset indexedAtUtc)
