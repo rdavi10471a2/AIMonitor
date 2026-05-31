@@ -750,8 +750,8 @@ internal static class Program
             IntPtr.Zero,
             message,
             "AIMonitor Pre-Merge Validation",
-            MessageBoxTypeOkCancel | MessageBoxIconWarning | MessageBoxDefaultButton2 | MessageBoxSetForeground);
-        return result == MessageBoxResultOk;
+            MessageBoxTypeYesNo | MessageBoxIconWarning | MessageBoxDefaultButton2 | MessageBoxSetForeground);
+        return result == MessageBoxResultYes;
     }
 
     private static bool TryPromptForValidationOverrideWithTaskDialog(string message, out bool launchApproved)
@@ -829,7 +829,9 @@ internal static class Program
 
     private static bool CanShowValidationDialog()
     {
-        return OperatingSystem.IsWindows() && Environment.UserInteractive;
+        return OperatingSystem.IsWindows()
+            && Environment.UserInteractive
+            && !string.Equals(Environment.GetEnvironmentVariable("AIMONITOR_DISABLE_VALIDATION_DIALOG"), "1", StringComparison.Ordinal);
     }
 
     private static int StartHub(string[] args)
@@ -1041,11 +1043,11 @@ internal static class Program
         out int radioButton,
         [MarshalAs(UnmanagedType.Bool)] out bool verificationFlagChecked);
 
-    private const uint MessageBoxTypeOkCancel = 0x00000001;
+    private const uint MessageBoxTypeYesNo = 0x00000004;
     private const uint MessageBoxIconWarning = 0x00000030;
     private const uint MessageBoxDefaultButton2 = 0x00000100;
     private const uint MessageBoxSetForeground = 0x00010000;
-    private const int MessageBoxResultOk = 1;
+    private const int MessageBoxResultYes = 6;
     private const int TaskDialogButtonLaunch = 1001;
     private const int TaskDialogButtonCancel = 2;
     private const uint TaskDialogAllowDialogCancellation = 0x00000008;
