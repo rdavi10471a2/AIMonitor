@@ -461,11 +461,6 @@ public sealed class WorkflowEditService
 
         if (normalizedDecision == "accepted")
         {
-            if (!record.LaunchStatus.Equals("launched", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException("Cannot accept a staged record before a successful diff review launch.");
-            }
-
             if (string.IsNullOrWhiteSpace(expectedStagedHash))
             {
                 throw new InvalidOperationException("--expected-staged-hash is required when recording an accepted decision.");
@@ -474,6 +469,11 @@ public sealed class WorkflowEditService
             if (!record.StagedHash.Equals(expectedStagedHash, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException("Staged record hash does not match --expected-staged-hash.");
+            }
+
+            if (!record.LaunchStatus.Equals("launched", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Cannot accept a staged record before a successful diff review launch.");
             }
         }
 
