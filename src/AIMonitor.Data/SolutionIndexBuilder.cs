@@ -14,7 +14,7 @@ public sealed class SolutionIndexBuilder
         this.store = store;
     }
 
-    public async Task<SolutionIndexRunSummary> RebuildAsync(
+    public async Task<SolutionIndexSummary> RebuildAsync(
         MonitorSettings settings,
         CancellationToken cancellationToken = default)
     {

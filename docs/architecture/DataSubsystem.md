@@ -22,12 +22,15 @@ The solution folder name includes a short hash of the full solution path so two 
 
 ## Current Schema
 
-The first schema is deliberately small:
+The first schema stores the current MSBuild solution model, not a history of index runs:
 
-- `index_runs` records each rebuild.
-- `indexed_solutions` records the input solution for the run.
-- `indexed_projects` records MSBuild project identity, language, path, and preprocessor symbols.
-- `indexed_documents` records source files by project path.
-- `index_diagnostics` records MSBuild workspace diagnostics.
+- `solution_state` records the currently indexed solution path, refresh time, and counts.
+- `projects` records MSBuild project identity, target framework data, output type, SDK, assembly/root namespace, nullable/implicit using settings, language version, and preprocessor symbols.
+- `documents` records compile documents by project path.
+- `project_references` records evaluated MSBuild project references.
+- `package_references` records evaluated PackageReference items.
+- `framework_references` records evaluated FrameworkReference items.
+- `global_usings` records evaluated MSBuild `Using` items.
+- `diagnostics` records MSBuild workspace diagnostics.
 
-Future symbol, Razor, WinForms, and workflow tables should attach to an index run instead of inventing a second project identity source.
+Future symbol, caller, reference, Razor, WinForms, and workflow tables should attach to `projects` and `documents` instead of inventing a second project identity source. Refresh history can be added later as telemetry, but it is not the primary navigation model.

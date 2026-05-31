@@ -18,6 +18,11 @@ public sealed class SolutionIndexDatabase
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath) ?? ".");
         SqliteConnection connection = new($"Data Source={databasePath}");
         connection.Open();
+
+        using SqliteCommand pragma = connection.CreateCommand();
+        pragma.CommandText = "pragma journal_mode=wal; pragma foreign_keys=on;";
+        pragma.ExecuteNonQuery();
+
         return connection;
     }
 
@@ -27,8 +32,8 @@ public sealed class SolutionIndexDatabase
         using SqliteTransaction transaction = connection.BeginTransaction();
 
         Execute(connection, transaction, """
-            create table if not exists index_runs (
-                id integer primary key autoincrement,
+            create table if not exists solution_state (
+                id integer primary key check (id = 1),
                 input_path text not null,
                 indexed_at_utc text not null,
                 project_count integer not null,
@@ -38,46 +43,84 @@ public sealed class SolutionIndexDatabase
             """);
 
         Execute(connection, transaction, """
-            create table if not exists indexed_solutions (
+            create table if not exists projects (
                 id integer primary key autoincrement,
-                run_id integer not null references index_runs(id) on delete cascade,
-                input_path text not null
-            );
-            """);
-
-        Execute(connection, transaction, """
-            create table if not exists indexed_projects (
-                id integer primary key autoincrement,
-                run_id integer not null references index_runs(id) on delete cascade,
                 name text not null,
-                project_path text not null,
+                project_path text not null unique,
                 language text not null,
+                target_framework text not null,
+                target_frameworks text not null,
+                output_type text not null,
+                sdk text not null,
+                assembly_name text not null,
+                root_namespace text not null,
+                nullable text not null,
+                implicit_usings text not null,
+                lang_version text not null,
                 preprocessor_symbols text not null
             );
             """);
 
         Execute(connection, transaction, """
-            create table if not exists indexed_documents (
+            create table if not exists documents (
                 id integer primary key autoincrement,
-                run_id integer not null references index_runs(id) on delete cascade,
-                project_path text not null,
+                project_id integer not null references projects(id) on delete cascade,
                 name text not null,
                 file_path text not null,
-                folders text not null
+                folders text not null,
+                unique(project_id, file_path)
             );
             """);
 
         Execute(connection, transaction, """
-            create table if not exists index_diagnostics (
+            create table if not exists project_references (
                 id integer primary key autoincrement,
-                run_id integer not null references index_runs(id) on delete cascade,
+                project_id integer not null references projects(id) on delete cascade,
+                include text not null,
+                full_path text not null
+            );
+            """);
+
+        Execute(connection, transaction, """
+            create table if not exists package_references (
+                id integer primary key autoincrement,
+                project_id integer not null references projects(id) on delete cascade,
+                include text not null,
+                version text not null
+            );
+            """);
+
+        Execute(connection, transaction, """
+            create table if not exists framework_references (
+                id integer primary key autoincrement,
+                project_id integer not null references projects(id) on delete cascade,
+                include text not null
+            );
+            """);
+
+        Execute(connection, transaction, """
+            create table if not exists global_usings (
+                id integer primary key autoincrement,
+                project_id integer not null references projects(id) on delete cascade,
+                include text not null,
+                is_static text not null,
+                alias text not null
+            );
+            """);
+
+        Execute(connection, transaction, """
+            create table if not exists diagnostics (
+                id integer primary key autoincrement,
                 message text not null
             );
             """);
 
-        Execute(connection, transaction, "create index if not exists idx_indexed_projects_run on indexed_projects(run_id);");
-        Execute(connection, transaction, "create index if not exists idx_indexed_documents_run on indexed_documents(run_id);");
-        Execute(connection, transaction, "create index if not exists idx_indexed_documents_file on indexed_documents(file_path);");
+        Execute(connection, transaction, "create index if not exists idx_projects_path on projects(project_path);");
+        Execute(connection, transaction, "create index if not exists idx_documents_file on documents(file_path);");
+        Execute(connection, transaction, "create index if not exists idx_project_references_full_path on project_references(full_path);");
+        Execute(connection, transaction, "create index if not exists idx_package_references_include on package_references(include);");
+        Execute(connection, transaction, "create index if not exists idx_framework_references_include on framework_references(include);");
+        Execute(connection, transaction, "create index if not exists idx_global_usings_include on global_usings(include);");
 
         transaction.Commit();
     }

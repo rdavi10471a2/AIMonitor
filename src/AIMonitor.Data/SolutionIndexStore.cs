@@ -12,100 +12,75 @@ public sealed class SolutionIndexStore
         this.database = database;
     }
 
-    public SolutionIndexRunSummary SaveSnapshot(MSBuildSolutionSnapshot snapshot)
+    public SolutionIndexSummary SaveSnapshot(MSBuildSolutionSnapshot snapshot)
     {
         database.EnsureCreated();
 
         using SqliteConnection connection = database.OpenConnection();
         using SqliteTransaction transaction = connection.BeginTransaction();
-        long runId = InsertRun(connection, transaction, snapshot);
 
-        Execute(connection, transaction, """
-            insert into indexed_solutions(run_id, input_path)
-            values ($runId, $inputPath);
-            """,
-            ("$runId", runId),
-            ("$inputPath", snapshot.InputPath));
+        ClearCurrentState(connection, transaction);
+        SaveSolutionState(connection, transaction, snapshot);
 
         foreach (MSBuildProjectSnapshot project in snapshot.Projects)
         {
-            Execute(connection, transaction, """
-                insert into indexed_projects(run_id, name, project_path, language, preprocessor_symbols)
-                values ($runId, $name, $projectPath, $language, $preprocessorSymbols);
-                """,
-                ("$runId", runId),
-                ("$name", project.Name),
-                ("$projectPath", project.ProjectPath),
-                ("$language", project.Language),
-                ("$preprocessorSymbols", string.Join(";", project.PreprocessorSymbols)));
-
-            foreach (MSBuildDocumentSnapshot document in project.Documents)
-            {
-                Execute(connection, transaction, """
-                    insert into indexed_documents(run_id, project_path, name, file_path, folders)
-                    values ($runId, $projectPath, $name, $filePath, $folders);
-                    """,
-                    ("$runId", runId),
-                    ("$projectPath", project.ProjectPath),
-                    ("$name", document.Name),
-                    ("$filePath", document.FilePath),
-                    ("$folders", string.Join("/", document.Folders)));
-            }
+            long projectId = InsertProject(connection, transaction, project);
+            InsertDocuments(connection, transaction, projectId, project.Documents);
+            InsertProjectReferences(connection, transaction, projectId, project.ProjectReferences);
+            InsertPackageReferences(connection, transaction, projectId, project.PackageReferences);
+            InsertFrameworkReferences(connection, transaction, projectId, project.FrameworkReferences);
+            InsertGlobalUsings(connection, transaction, projectId, project.GlobalUsings);
         }
 
         foreach (string diagnostic in snapshot.Diagnostics)
         {
             Execute(connection, transaction, """
-                insert into index_diagnostics(run_id, message)
-                values ($runId, $message);
+                insert into diagnostics(message)
+                values ($message);
                 """,
-                ("$runId", runId),
                 ("$message", diagnostic));
         }
 
         transaction.Commit();
-        return GetRunSummary(runId);
+        return GetSummary();
     }
 
-    public SolutionIndexRunSummary GetRunSummary(long runId)
+    public SolutionIndexSummary GetSummary()
     {
         database.EnsureCreated();
         using SqliteConnection connection = database.OpenConnection();
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = """
-            select id, input_path, indexed_at_utc, project_count, document_count, diagnostic_count
-            from index_runs
-            where id = $runId;
+            select input_path, indexed_at_utc, project_count, document_count, diagnostic_count
+            from solution_state
+            where id = 1;
             """;
-        command.Parameters.AddWithValue("$runId", runId);
 
         using SqliteDataReader reader = command.ExecuteReader();
         if (!reader.Read())
         {
-            throw new InvalidOperationException($"Index run {runId} was not found.");
+            return new SolutionIndexSummary(string.Empty, DateTimeOffset.MinValue, 0, 0, 0);
         }
 
-        return new SolutionIndexRunSummary(
-            reader.GetInt64(0),
-            reader.GetString(1),
-            DateTimeOffset.Parse(reader.GetString(2)),
+        return new SolutionIndexSummary(
+            reader.GetString(0),
+            DateTimeOffset.Parse(reader.GetString(1)),
+            reader.GetInt32(2),
             reader.GetInt32(3),
-            reader.GetInt32(4),
-            reader.GetInt32(5));
+            reader.GetInt32(4));
     }
 
-    public IReadOnlyList<IndexedDocumentRow> ListDocuments(long runId)
+    public IReadOnlyList<IndexedDocumentRow> ListDocuments()
     {
         database.EnsureCreated();
         using SqliteConnection connection = database.OpenConnection();
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = """
-            select project_path, name, file_path, folders
-            from indexed_documents
-            where run_id = $runId
-            order by file_path;
+            select projects.project_path, documents.name, documents.file_path, documents.folders
+            from documents
+            inner join projects on projects.id = documents.project_id
+            order by documents.file_path;
             """;
-        command.Parameters.AddWithValue("$runId", runId);
 
         List<IndexedDocumentRow> rows = [];
         using SqliteDataReader reader = command.ExecuteReader();
@@ -121,26 +96,219 @@ public sealed class SolutionIndexStore
         return rows;
     }
 
-    private static long InsertRun(SqliteConnection connection, SqliteTransaction transaction, MSBuildSolutionSnapshot snapshot)
+    public IReadOnlyList<IndexedProjectRow> ListProjects()
     {
-        int projectCount = snapshot.Projects.Count;
-        int documentCount = snapshot.Projects.Sum(project => project.Documents.Count);
+        database.EnsureCreated();
+        using SqliteConnection connection = database.OpenConnection();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            select name, project_path, language, target_framework, target_frameworks, output_type,
+                   sdk, assembly_name, root_namespace, nullable, implicit_usings, lang_version,
+                   preprocessor_symbols
+            from projects
+            order by project_path;
+            """;
+
+        List<IndexedProjectRow> rows = [];
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new IndexedProjectRow(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.GetString(7),
+                reader.GetString(8),
+                reader.GetString(9),
+                reader.GetString(10),
+                reader.GetString(11),
+                reader.GetString(12)));
+        }
+
+        return rows;
+    }
+
+    public IReadOnlyList<IndexedPackageReferenceRow> ListPackageReferences()
+    {
+        database.EnsureCreated();
+        using SqliteConnection connection = database.OpenConnection();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            select projects.project_path, package_references.include, package_references.version
+            from package_references
+            inner join projects on projects.id = package_references.project_id
+            order by projects.project_path, package_references.include;
+            """;
+
+        List<IndexedPackageReferenceRow> rows = [];
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new IndexedPackageReferenceRow(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2)));
+        }
+
+        return rows;
+    }
+
+    private static void ClearCurrentState(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        Execute(connection, transaction, "delete from diagnostics;");
+        Execute(connection, transaction, "delete from global_usings;");
+        Execute(connection, transaction, "delete from framework_references;");
+        Execute(connection, transaction, "delete from package_references;");
+        Execute(connection, transaction, "delete from project_references;");
+        Execute(connection, transaction, "delete from documents;");
+        Execute(connection, transaction, "delete from projects;");
+        Execute(connection, transaction, "delete from solution_state;");
+    }
+
+    private static void SaveSolutionState(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        MSBuildSolutionSnapshot snapshot)
+    {
+        Execute(connection, transaction, """
+            insert into solution_state(id, input_path, indexed_at_utc, project_count, document_count, diagnostic_count)
+            values (1, $inputPath, $indexedAtUtc, $projectCount, $documentCount, $diagnosticCount);
+            """,
+            ("$inputPath", snapshot.InputPath),
+            ("$indexedAtUtc", DateTimeOffset.UtcNow.ToString("O")),
+            ("$projectCount", snapshot.Projects.Count),
+            ("$documentCount", snapshot.Projects.Sum(project => project.Documents.Count)),
+            ("$diagnosticCount", snapshot.Diagnostics.Count));
+    }
+
+    private static long InsertProject(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        MSBuildProjectSnapshot project)
+    {
         using SqliteCommand command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            insert into index_runs(input_path, indexed_at_utc, project_count, document_count, diagnostic_count)
-            values ($inputPath, $indexedAtUtc, $projectCount, $documentCount, $diagnosticCount);
+            insert into projects(name, project_path, language, target_framework, target_frameworks,
+                                 output_type, sdk, assembly_name, root_namespace, nullable,
+                                 implicit_usings, lang_version, preprocessor_symbols)
+            values ($name, $projectPath, $language, $targetFramework, $targetFrameworks,
+                    $outputType, $sdk, $assemblyName, $rootNamespace, $nullable,
+                    $implicitUsings, $langVersion, $preprocessorSymbols);
 
             select last_insert_rowid();
             """;
-        command.Parameters.AddWithValue("$inputPath", snapshot.InputPath);
-        command.Parameters.AddWithValue("$indexedAtUtc", DateTimeOffset.UtcNow.ToString("O"));
-        command.Parameters.AddWithValue("$projectCount", projectCount);
-        command.Parameters.AddWithValue("$documentCount", documentCount);
-        command.Parameters.AddWithValue("$diagnosticCount", snapshot.Diagnostics.Count);
+        command.Parameters.AddWithValue("$name", project.Name);
+        command.Parameters.AddWithValue("$projectPath", project.ProjectPath);
+        command.Parameters.AddWithValue("$language", project.Language);
+        command.Parameters.AddWithValue("$targetFramework", project.TargetFramework);
+        command.Parameters.AddWithValue("$targetFrameworks", project.TargetFrameworks);
+        command.Parameters.AddWithValue("$outputType", project.OutputType);
+        command.Parameters.AddWithValue("$sdk", project.Sdk);
+        command.Parameters.AddWithValue("$assemblyName", project.AssemblyName);
+        command.Parameters.AddWithValue("$rootNamespace", project.RootNamespace);
+        command.Parameters.AddWithValue("$nullable", project.Nullable);
+        command.Parameters.AddWithValue("$implicitUsings", project.ImplicitUsings);
+        command.Parameters.AddWithValue("$langVersion", project.LangVersion);
+        command.Parameters.AddWithValue("$preprocessorSymbols", string.Join(";", project.PreprocessorSymbols));
 
         object? result = command.ExecuteScalar();
         return Convert.ToInt64(result);
+    }
+
+    private static void InsertDocuments(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long projectId,
+        IReadOnlyList<MSBuildDocumentSnapshot> documents)
+    {
+        foreach (MSBuildDocumentSnapshot document in documents)
+        {
+            Execute(connection, transaction, """
+                insert into documents(project_id, name, file_path, folders)
+                values ($projectId, $name, $filePath, $folders);
+                """,
+                ("$projectId", projectId),
+                ("$name", document.Name),
+                ("$filePath", document.FilePath),
+                ("$folders", string.Join("/", document.Folders)));
+        }
+    }
+
+    private static void InsertProjectReferences(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long projectId,
+        IReadOnlyList<MSBuildProjectReferenceSnapshot> references)
+    {
+        foreach (MSBuildProjectReferenceSnapshot reference in references)
+        {
+            Execute(connection, transaction, """
+                insert into project_references(project_id, include, full_path)
+                values ($projectId, $include, $fullPath);
+                """,
+                ("$projectId", projectId),
+                ("$include", reference.Include),
+                ("$fullPath", reference.FullPath));
+        }
+    }
+
+    private static void InsertPackageReferences(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long projectId,
+        IReadOnlyList<MSBuildPackageReferenceSnapshot> references)
+    {
+        foreach (MSBuildPackageReferenceSnapshot reference in references)
+        {
+            Execute(connection, transaction, """
+                insert into package_references(project_id, include, version)
+                values ($projectId, $include, $version);
+                """,
+                ("$projectId", projectId),
+                ("$include", reference.Include),
+                ("$version", reference.Version));
+        }
+    }
+
+    private static void InsertFrameworkReferences(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long projectId,
+        IReadOnlyList<MSBuildFrameworkReferenceSnapshot> references)
+    {
+        foreach (MSBuildFrameworkReferenceSnapshot reference in references)
+        {
+            Execute(connection, transaction, """
+                insert into framework_references(project_id, include)
+                values ($projectId, $include);
+                """,
+                ("$projectId", projectId),
+                ("$include", reference.Include));
+        }
+    }
+
+    private static void InsertGlobalUsings(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long projectId,
+        IReadOnlyList<MSBuildGlobalUsingSnapshot> usings)
+    {
+        foreach (MSBuildGlobalUsingSnapshot globalUsing in usings)
+        {
+            Execute(connection, transaction, """
+                insert into global_usings(project_id, include, is_static, alias)
+                values ($projectId, $include, $isStatic, $alias);
+                """,
+                ("$projectId", projectId),
+                ("$include", globalUsing.Include),
+                ("$isStatic", globalUsing.Static),
+                ("$alias", globalUsing.Alias));
+        }
     }
 
     private static void Execute(
@@ -161,16 +329,35 @@ public sealed class SolutionIndexStore
     }
 }
 
-public sealed record SolutionIndexRunSummary(
-    long RunId,
+public sealed record SolutionIndexSummary(
     string InputPath,
     DateTimeOffset IndexedAtUtc,
     int ProjectCount,
     int DocumentCount,
     int DiagnosticCount);
 
+public sealed record IndexedProjectRow(
+    string Name,
+    string ProjectPath,
+    string Language,
+    string TargetFramework,
+    string TargetFrameworks,
+    string OutputType,
+    string Sdk,
+    string AssemblyName,
+    string RootNamespace,
+    string Nullable,
+    string ImplicitUsings,
+    string LangVersion,
+    string PreprocessorSymbols);
+
 public sealed record IndexedDocumentRow(
     string ProjectPath,
     string Name,
     string FilePath,
     string Folders);
+
+public sealed record IndexedPackageReferenceRow(
+    string ProjectPath,
+    string Include,
+    string Version);

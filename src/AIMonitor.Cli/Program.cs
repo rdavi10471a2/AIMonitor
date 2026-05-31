@@ -56,7 +56,7 @@ internal static class Program
 
             SolutionIndexStore store = new(new SolutionIndexDatabase(databasePath));
             SolutionIndexBuilder builder = new(new MSBuildWorkspaceLoader(), store);
-            SolutionIndexRunSummary summary = await builder.RebuildAsync(settings);
+            SolutionIndexSummary summary = await builder.RebuildAsync(settings);
 
             logger.Write(
                 MonitorLogLevel.Information,
@@ -65,7 +65,6 @@ internal static class Program
                 "Solution index rebuild completed.",
                 new Dictionary<string, string>
                 {
-                    ["runId"] = summary.RunId.ToString(),
                     ["projectCount"] = summary.ProjectCount.ToString(),
                     ["documentCount"] = summary.DocumentCount.ToString(),
                     ["diagnosticCount"] = summary.DiagnosticCount.ToString()
@@ -74,7 +73,6 @@ internal static class Program
             Console.WriteLine($"Indexed solution: {settings.WatchedSolutionPath}");
             Console.WriteLine($"Database: {databasePath}");
             Console.WriteLine($"Log: {logger.LogPath}");
-            Console.WriteLine($"Run: {summary.RunId}");
             Console.WriteLine($"Projects: {summary.ProjectCount}");
             Console.WriteLine($"Documents: {summary.DocumentCount}");
             Console.WriteLine($"Diagnostics: {summary.DiagnosticCount}");

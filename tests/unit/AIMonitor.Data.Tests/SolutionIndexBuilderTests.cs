@@ -48,8 +48,9 @@ public sealed class SolutionIndexBuilderTests
         SolutionIndexStore store = new(new SolutionIndexDatabase(databasePath));
         SolutionIndexBuilder builder = new(new MSBuildWorkspaceLoader(), store);
 
-        SolutionIndexRunSummary summary = await builder.RebuildAsync(settings);
-        IReadOnlyList<IndexedDocumentRow> documents = store.ListDocuments(summary.RunId);
+        SolutionIndexSummary summary = await builder.RebuildAsync(settings);
+        IReadOnlyList<IndexedDocumentRow> documents = store.ListDocuments();
+        IReadOnlyList<IndexedProjectRow> projects = store.ListProjects();
 
         Assert.True(File.Exists(databasePath));
         Assert.StartsWith(
@@ -57,6 +58,8 @@ public sealed class SolutionIndexBuilderTests
             databasePath,
             StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, summary.ProjectCount);
+        Assert.Single(projects);
+        Assert.Equal("net10.0", projects[0].TargetFramework);
         Assert.Contains(documents, document => document.Name == "Program.cs");
     }
 }
