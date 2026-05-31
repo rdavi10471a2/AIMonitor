@@ -21,7 +21,7 @@ public sealed class SolutionIndexControl : UserControl
     private readonly TextBox databasePathBox;
     private readonly Label statusLabel;
     private readonly TreeView indexTree;
-    private readonly TextBox overviewBox;
+    private readonly SelectionDetailsControl selectionDetailsControl;
     private readonly DataGridView projectsGrid;
     private readonly DataGridView documentsGrid;
     private readonly DataGridView symbolsGrid;
@@ -71,15 +71,7 @@ public sealed class SolutionIndexControl : UserControl
             Dock = DockStyle.Fill,
             HideSelection = false
         };
-        overviewBox = new TextBox
-        {
-            Dock = DockStyle.Fill,
-            Multiline = true,
-            ReadOnly = true,
-            ScrollBars = ScrollBars.Both,
-            WordWrap = false,
-            Font = new Font(FontFamily.GenericMonospace, 9)
-        };
+        selectionDetailsControl = new SelectionDetailsControl();
         projectsGrid = CreateGrid();
         documentsGrid = CreateGrid();
         symbolsGrid = CreateGrid();
@@ -113,7 +105,7 @@ public sealed class SolutionIndexControl : UserControl
         {
             Dock = DockStyle.Fill
         };
-        overviewTab = BuildTextTab("Overview", overviewBox);
+        overviewTab = BuildControlTab("Overview", selectionDetailsControl);
         projectsTab = BuildGridTab("Projects", projectsGrid);
         documentsTab = BuildGridTab("Documents", documentsGrid);
         symbolsTab = BuildGridTab("Symbols", symbolsGrid);
@@ -246,6 +238,13 @@ public sealed class SolutionIndexControl : UserControl
     {
         TabPage page = new(title);
         page.Controls.Add(textBox);
+        return page;
+    }
+
+    private static TabPage BuildControlTab(string title, Control control)
+    {
+        TabPage page = new(title);
+        page.Controls.Add(control);
         return page;
     }
 
@@ -528,20 +527,23 @@ public sealed class SolutionIndexControl : UserControl
         SetSymbolsGrid(symbols);
         SetGrid(referencesGrid, references);
         SetGrid(packagesGrid, packages);
-        overviewBox.Text = $"""
-            Solution
-            ========
-            Path: {settings?.WatchedSolutionPath ?? currentSummary.InputPath}
-            Indexed: {FormatIndexedAt(currentSummary.IndexedAtUtc)}
-
-            Projects: {projects.Count}
-            Documents: {documents.Count}
-            Symbols: {symbols.Count}
-            References: {references.Count}
-            Packages: {packages.Count}
-            Diagnostics: {currentSummary.DiagnosticCount}
-            """;
-        rawBox.Text = overviewBox.Text;
+        selectionDetailsControl.ShowDetails(
+            "Solution",
+            settings?.WatchedSolutionPath ?? currentSummary.InputPath,
+            [
+                ("Indexed", FormatIndexedAt(currentSummary.IndexedAtUtc)),
+                ("Projects", projects.Count.ToString()),
+                ("Documents", documents.Count.ToString()),
+                ("Symbols", symbols.Count.ToString()),
+                ("References", references.Count.ToString()),
+                ("Packages", packages.Count.ToString()),
+                ("Diagnostics", currentSummary.DiagnosticCount.ToString())
+            ],
+            "Projects",
+            projects,
+            "Documents",
+            documents);
+        rawBox.Text = $"Solution: {settings?.WatchedSolutionPath ?? currentSummary.InputPath}";
         detailTabs.SelectedTab = overviewTab;
     }
 
@@ -563,28 +565,30 @@ public sealed class SolutionIndexControl : UserControl
         SetSymbolsGrid(projectSymbols);
         SetGrid(referencesGrid, projectReferences);
         SetGrid(packagesGrid, projectPackages);
-        overviewBox.Text = $"""
-            Project
-            =======
-            Name: {project.Name}
-            Path: {project.ProjectPath}
-            Stable Key: {project.StableKey}
-            Language: {project.Language}
-            Target Framework: {project.TargetFramework}
-            Target Frameworks: {project.TargetFrameworks}
-            Output Type: {project.OutputType}
-            SDK: {project.Sdk}
-            Assembly Name: {project.AssemblyName}
-            Root Namespace: {project.RootNamespace}
-            Nullable: {project.Nullable}
-            Implicit Usings: {project.ImplicitUsings}
-            Lang Version: {project.LangVersion}
-
-            Documents: {projectDocuments.Count}
-            Symbols: {projectSymbols.Count}
-            References: {projectReferences.Count}
-            Packages: {projectPackages.Count}
-            """;
+        selectionDetailsControl.ShowDetails(
+            $"Project: {project.Name}",
+            project.ProjectPath,
+            [
+                ("Stable Key", project.StableKey),
+                ("Language", project.Language),
+                ("Target Framework", project.TargetFramework),
+                ("Target Frameworks", project.TargetFrameworks),
+                ("Output Type", project.OutputType),
+                ("SDK", project.Sdk),
+                ("Assembly Name", project.AssemblyName),
+                ("Root Namespace", project.RootNamespace),
+                ("Nullable", project.Nullable),
+                ("Implicit Usings", project.ImplicitUsings),
+                ("Lang Version", project.LangVersion),
+                ("Documents", projectDocuments.Count.ToString()),
+                ("Symbols", projectSymbols.Count.ToString()),
+                ("References", projectReferences.Count.ToString()),
+                ("Packages", projectPackages.Count.ToString())
+            ],
+            "Documents",
+            projectDocuments,
+            "Package References",
+            projectPackages);
         rawBox.Text = project.ToString();
         detailTabs.SelectedTab = overviewTab;
         SetStatus($"Project {project.Name} | Documents: {projectDocuments.Count} | Symbols: {projectSymbols.Count} | References: {projectReferences.Count}");
@@ -595,14 +599,16 @@ public sealed class SolutionIndexControl : UserControl
         List<IndexedPackageReferenceRow> projectPackages = packages.Where(package => PathEquals(package.ProjectPath, projectPath)).ToList();
         SetGrid(packagesGrid, projectPackages);
         SetGrid(projectsGrid, projects.Where(project => PathEquals(project.ProjectPath, projectPath)).ToList());
-        overviewBox.Text = $"""
-            Dependencies
-            ============
-            Project: {projectPath}
-            Package References: {projectPackages.Count}
-            """;
+        selectionDetailsControl.ShowDetails(
+            "Dependencies",
+            projectPath,
+            [("Package References", projectPackages.Count.ToString())],
+            "Package References",
+            projectPackages,
+            "Project",
+            projects.Where(project => PathEquals(project.ProjectPath, projectPath)).ToList());
         rawBox.Text = string.Join(Environment.NewLine, projectPackages.Select(package => $"{package.Include} {package.Version}"));
-        detailTabs.SelectedTab = packagesTab;
+        detailTabs.SelectedTab = overviewTab;
         SetStatus($"Dependencies | Packages: {projectPackages.Count}");
     }
 
@@ -617,13 +623,18 @@ public sealed class SolutionIndexControl : UserControl
         }
 
         SetGrid(packagesGrid, new[] { package });
-        overviewBox.Text = $"""
-            Package
-            =======
-            Include: {package.Include}
-            Version: {package.Version}
-            Project: {package.ProjectPath}
-            """;
+        selectionDetailsControl.ShowDetails(
+            $"Package: {package.Include}",
+            package.ProjectPath,
+            [
+                ("Include", package.Include),
+                ("Version", package.Version),
+                ("Project", package.ProjectPath)
+            ],
+            "Package",
+            new[] { package },
+            "Project",
+            projects.Where(project => PathEquals(project.ProjectPath, projectPath)).ToList());
         rawBox.Text = package.ToString();
         detailTabs.SelectedTab = overviewTab;
         SetStatus($"Package {package.Include} {package.Version}");
@@ -642,17 +653,19 @@ public sealed class SolutionIndexControl : UserControl
         SetGrid(documentsGrid, folderDocuments);
         SetSymbolsGrid(folderSymbols);
         SetGrid(projectsGrid, projects.Where(project => PathEquals(project.ProjectPath, projectPath)).ToList());
-        overviewBox.Text = $"""
-            Folder
-            ======
-            Name: {folderNode.Text}
-            Project: {projectPath}
-
-            Documents: {folderDocuments.Count}
-            Symbols: {folderSymbols.Count}
-            """;
+        selectionDetailsControl.ShowDetails(
+            $"Folder: {folderNode.Text}",
+            projectPath,
+            [
+                ("Documents", folderDocuments.Count.ToString()),
+                ("Symbols", folderSymbols.Count.ToString())
+            ],
+            "Documents",
+            folderDocuments,
+            "Symbols",
+            folderSymbols);
         rawBox.Text = string.Join(Environment.NewLine, folderDocuments.Select(document => document.FilePath));
-        detailTabs.SelectedTab = documentsTab;
+        detailTabs.SelectedTab = overviewTab;
         SetStatus($"Folder {folderNode.Text} | Documents: {folderDocuments.Count} | Symbols: {folderSymbols.Count}");
     }
 
@@ -670,18 +683,20 @@ public sealed class SolutionIndexControl : UserControl
         SetSymbolsGrid(documentSymbols);
         SetGrid(referencesGrid, documentReferences);
         SetGrid(projectsGrid, projects.Where(project => PathEquals(project.ProjectPath, document.ProjectPath)).ToList());
-        overviewBox.Text = $"""
-            File
-            ====
-            Name: {document.Name}
-            Path: {document.FilePath}
-            Stable Key: {document.StableKey}
-            Project: {document.ProjectPath}
-            Folders: {document.Folders}
-
-            Declared Symbols: {documentSymbols.Count}
-            References In File: {documentReferences.Count}
-            """;
+        selectionDetailsControl.ShowDetails(
+            $"File: {document.Name}",
+            document.FilePath,
+            [
+                ("Stable Key", document.StableKey),
+                ("Project", document.ProjectPath),
+                ("Folders", document.Folders),
+                ("Declared Symbols", documentSymbols.Count.ToString()),
+                ("References In File", documentReferences.Count.ToString())
+            ],
+            "Declared Symbols",
+            documentSymbols,
+            "References In File",
+            documentReferences);
         rawBox.Text = document.ToString();
         detailTabs.SelectedTab = overviewTab;
         SetStatus($"File {document.Name} | Symbols: {documentSymbols.Count} | References in file: {documentReferences.Count}");
@@ -700,20 +715,21 @@ public sealed class SolutionIndexControl : UserControl
         SetGrid(referencesGrid, symbolReferences);
         SetGrid(documentsGrid, documents.Where(document => PathEquals(document.FilePath, symbol.FilePath)).ToList());
         SetGrid(projectsGrid, projects.Where(project => PathEquals(project.ProjectPath, symbol.ProjectPath)).ToList());
-        overviewBox.Text = $"""
-            Symbol
-            ======
-            Kind: {symbol.Kind}
-            Name: {symbol.Name}
-            Namespace: {symbol.Namespace}
-            Containing Type: {symbol.ContainingType}
-            Signature: {symbol.Signature}
-            Stable Key: {symbol.StableKey}
-            File: {symbol.FilePath}
-            Lines: {symbol.StartLine}-{symbol.EndLine}
-
-            References: {symbolReferences.Count}
-            """;
+        selectionDetailsControl.ShowDetails(
+            $"{symbol.Kind}: {symbol.Name}",
+            symbol.FilePath,
+            [
+                ("Stable Key", symbol.StableKey),
+                ("Namespace", symbol.Namespace),
+                ("Containing Type", symbol.ContainingType),
+                ("Signature", symbol.Signature),
+                ("Lines", $"{symbol.StartLine}-{symbol.EndLine}"),
+                ("References", symbolReferences.Count.ToString())
+            ],
+            "References",
+            symbolReferences,
+            "Containing File",
+            documents.Where(document => PathEquals(document.FilePath, symbol.FilePath)).ToList());
         rawBox.Text = symbol.ToString();
         detailTabs.SelectedTab = overviewTab;
         SetStatus($"Symbol {symbol.Kind} {symbol.Name} | References: {symbolReferences.Count}");
