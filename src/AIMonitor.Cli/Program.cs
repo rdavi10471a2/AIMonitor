@@ -37,7 +37,7 @@ internal static class Program
             Console.WriteLine("  edit status --file <path> [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  edit stage --file <path> [--ledger-summary <text>] [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  edit launch-diff --staged-record-id <id> [--diff-tool <path>] [--force-validation] [--repo-root <path>] [--config <path>]");
-            Console.WriteLine("  edit record-decision --staged-record-id <id> --decision accepted|rejected [--repo-root <path>] [--config <path>]");
+            Console.WriteLine("  edit record-decision --staged-record-id <id> --decision accepted|rejected [--expected-staged-hash <hash>] [--repo-root <path>] [--config <path>]");
             return 0;
         }
 
@@ -258,7 +258,6 @@ internal static class Program
             };
         }
 
-        EnsureNewFileReviewTarget(record);
         DiffLaunchResult result = new WinMergeDiffToolLauncher().Launch(new DiffLaunchRequest
         {
             OriginalFilePath = GetDiffOriginalFilePath(record),
@@ -271,39 +270,14 @@ internal static class Program
             stagedRecord = updatedRecord,
             preMergeValidation = validation,
             diffLaunch = result,
-            nextStep = "After WinMerge review, save the staged candidate into the watched source for accept, or leave watched source unchanged for reject. Then run edit record-decision."
+            nextStep = record.IsNewFile
+                ? "After WinMerge review, save the staged candidate into the runtime review target for accept, or leave it unchanged for reject. Then run edit record-decision."
+                : "After WinMerge review, save the staged candidate into the watched source for accept, or leave watched source unchanged for reject. Then run edit record-decision."
         };
-    }
-
-    private static void EnsureNewFileReviewTarget(StagedEditRecord record)
-    {
-        if (!record.IsNewFile || File.Exists(record.WatchedFilePath))
-        {
-            return;
-        }
-
-        string? watchedDirectory = Path.GetDirectoryName(record.WatchedFilePath);
-        if (!string.IsNullOrWhiteSpace(watchedDirectory))
-        {
-            Directory.CreateDirectory(watchedDirectory);
-        }
-
-        File.WriteAllText(record.WatchedFilePath, string.Empty);
     }
 
     private static string GetDiffOriginalFilePath(StagedEditRecord record)
     {
-        if (record.IsNewFile)
-        {
-            string? watchedDirectory = Path.GetDirectoryName(record.WatchedFilePath);
-            if (!string.IsNullOrWhiteSpace(watchedDirectory))
-            {
-                Directory.CreateDirectory(watchedDirectory);
-            }
-
-            return record.WatchedFilePath;
-        }
-
         return string.IsNullOrWhiteSpace(record.ReviewBaselineFilePath)
             ? record.WatchedFilePath
             : record.ReviewBaselineFilePath;
@@ -313,7 +287,8 @@ internal static class Program
     {
         StagedEditRecord record = service.RecordDecision(
             RequireOption(args, "--staged-record-id"),
-            RequireOption(args, "--decision"));
+            RequireOption(args, "--decision"),
+            GetOption(args, "--expected-staged-hash"));
         PostAcceptIndexRefreshResult? indexRefresh = null;
         if (record.Classification is "accepted" or "accepted-normalized")
         {
@@ -560,7 +535,7 @@ internal static class Program
         string validationSolutionPath = Path.Combine(validationRoot, Path.GetRelativePath(sourceRoot, settings.WatchedSolutionPath));
         try
         {
-            CopyDirectoryForValidation(sourceRoot, validationRoot);
+            CopyDirectoryForValidation(sourceRoot, validationRoot, [settings.RuntimeRoot, validationRoot]);
             string validationCandidatePath = Path.Combine(validationRoot, record.RelativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(validationCandidatePath) ?? validationRoot);
             File.Copy(record.StagedFilePath, validationCandidatePath, overwrite: true);
@@ -606,11 +581,19 @@ internal static class Program
         }
     }
 
-    private static void CopyDirectoryForValidation(string sourceRoot, string destinationRoot)
+    private static void CopyDirectoryForValidation(
+        string sourceRoot,
+        string destinationRoot,
+        IReadOnlyList<string> excludedRoots)
     {
         Directory.CreateDirectory(destinationRoot);
         foreach (string directoryPath in Directory.EnumerateDirectories(sourceRoot, "*", SearchOption.AllDirectories))
         {
+            if (IsPathUnderAny(directoryPath, excludedRoots))
+            {
+                continue;
+            }
+
             string directoryName = Path.GetFileName(directoryPath);
             if (IsSkippedValidationDirectory(directoryName))
             {
@@ -628,6 +611,11 @@ internal static class Program
 
         foreach (string filePath in Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories))
         {
+            if (IsPathUnderAny(filePath, excludedRoots))
+            {
+                continue;
+            }
+
             string relativePath = Path.GetRelativePath(sourceRoot, filePath);
             if (relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(IsSkippedValidationDirectory))
             {
@@ -638,6 +626,32 @@ internal static class Program
             Directory.CreateDirectory(Path.GetDirectoryName(destinationPath) ?? destinationRoot);
             File.Copy(filePath, destinationPath, overwrite: true);
         }
+    }
+
+    private static bool IsPathUnderAny(string path, IReadOnlyList<string> roots)
+    {
+        string fullPath = Path.GetFullPath(path);
+        foreach (string root in roots)
+        {
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                continue;
+            }
+
+            string fullRoot = Path.GetFullPath(root);
+            if (fullPath.Equals(fullRoot, StringComparison.OrdinalIgnoreCase)
+                || fullPath.StartsWith(
+                    fullRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase)
+                || fullPath.StartsWith(
+                    fullRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.AltDirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsSkippedValidationDirectory(string directoryName)

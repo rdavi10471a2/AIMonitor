@@ -421,7 +421,7 @@ public sealed class WorkflowEditService
         return record;
     }
 
-    public StagedEditRecord RecordDecision(string stagedRecordId, string decision)
+    public StagedEditRecord RecordDecision(string stagedRecordId, string decision, string? expectedStagedHash = null)
     {
         StagedEditRecord record = GetStagedRecord(stagedRecordId);
         if (!File.Exists(record.WatchedFilePath) && !record.IsNewFile)
@@ -434,19 +434,43 @@ public sealed class WorkflowEditService
             throw new FileNotFoundException("Staged candidate file was not found.", record.StagedFilePath);
         }
 
+        string normalizedDecision = decision.Trim().ToLowerInvariant();
+        if (normalizedDecision == "accepted")
+        {
+            if (string.IsNullOrWhiteSpace(expectedStagedHash))
+            {
+                throw new InvalidOperationException("--expected-staged-hash is required when recording an accepted decision.");
+            }
+
+            if (!record.StagedHash.Equals(expectedStagedHash, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Staged record hash does not match --expected-staged-hash.");
+            }
+        }
+
         RemoveEmptyNewFilePlaceholderOnReject(record, decision);
-        bool watchedFileExists = File.Exists(record.WatchedFilePath);
-        string watchedHash = watchedFileExists ? FileHash.Compute(record.WatchedFilePath) : string.Empty;
+        string reviewedFilePath = GetReviewedFilePath(record);
+        bool reviewedFileExists = File.Exists(reviewedFilePath);
+        string reviewedHash = reviewedFileExists ? FileHash.Compute(reviewedFilePath) : string.Empty;
         ReviewDecisionResult result = new ReviewDecisionClassifier().Classify(
             new ReviewDecisionInput(
                 decision,
                 record.OriginalHash,
                 record.StagedHash,
-                watchedHash,
-                watchedFileExists ? FileHash.ComputeNormalizedFile(record.WatchedFilePath) : null,
+                reviewedHash,
+                reviewedFileExists ? FileHash.ComputeNormalizedFile(reviewedFilePath) : null,
                 FileHash.ComputeNormalizedFile(record.StagedFilePath),
                 record.IsNewFile,
-                watchedFileExists));
+                reviewedFileExists));
+
+        if (record.IsNewFile
+            && !File.Exists(record.WatchedFilePath)
+            && reviewedFilePath.Equals(record.ReviewBaselineFilePath, StringComparison.OrdinalIgnoreCase)
+            && result.Classification is "accepted" or "accepted-normalized")
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(record.WatchedFilePath) ?? ".");
+            File.Copy(reviewedFilePath, record.WatchedFilePath, overwrite: false);
+        }
 
         record.Decision = decision;
         record.DecisionAtUtc = DateTimeOffset.UtcNow.ToString("O");
@@ -465,6 +489,18 @@ public sealed class WorkflowEditService
         }
 
         return record;
+    }
+
+    private static string GetReviewedFilePath(StagedEditRecord record)
+    {
+        if (record.IsNewFile
+            && !File.Exists(record.WatchedFilePath)
+            && !string.IsNullOrWhiteSpace(record.ReviewBaselineFilePath))
+        {
+            return record.ReviewBaselineFilePath;
+        }
+
+        return record.WatchedFilePath;
     }
 
     private static void RemoveEmptyNewFilePlaceholderOnReject(StagedEditRecord record, string decision)
@@ -499,7 +535,7 @@ public sealed class WorkflowEditService
             throw new InvalidOperationException("Staged record hash does not match --expected-hash.");
         }
 
-        RecordDecision(record.StagedRecordId, "accepted");
+        RecordDecision(record.StagedRecordId, "accepted", expectedStagedHash);
         return GetStatus(fullWatchedPath);
     }
 
