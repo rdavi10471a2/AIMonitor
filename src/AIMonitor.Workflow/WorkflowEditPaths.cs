@@ -52,9 +52,7 @@ public sealed class WorkflowEditPaths
 
     public string GetMetadataPath(string watchedFilePath)
     {
-        string relativePath = GetRelativeWatchedPath(watchedFilePath)
-            .Replace(Path.DirectorySeparatorChar, '_')
-            .Replace(Path.AltDirectorySeparatorChar, '_');
+        string relativePath = GetRelativeWatchedPath(watchedFilePath);
         return Path.Combine(MetadataRoot, $"{relativePath}.json");
     }
 

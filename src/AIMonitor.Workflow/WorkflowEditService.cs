@@ -453,8 +453,19 @@ public sealed class WorkflowEditService
         }
 
         string normalizedDecision = decision.Trim().ToLowerInvariant();
+        string currentStagedHash = FileHash.Compute(record.StagedFilePath);
+        if (!currentStagedHash.Equals(record.StagedHash, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Staged candidate content changed after staging. Edit the Working file and run edit stage again.");
+        }
+
         if (normalizedDecision == "accepted")
         {
+            if (!record.LaunchStatus.Equals("launched", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Cannot accept a staged record before a successful diff review launch.");
+            }
+
             if (string.IsNullOrWhiteSpace(expectedStagedHash))
             {
                 throw new InvalidOperationException("--expected-staged-hash is required when recording an accepted decision.");
@@ -466,7 +477,6 @@ public sealed class WorkflowEditService
             }
         }
 
-        RemoveEmptyNewFilePlaceholderOnReject(record, decision);
         string reviewedFilePath = GetReviewedFilePath(record);
         bool reviewedFileExists = File.Exists(reviewedFilePath);
         string reviewedHash = reviewedFileExists ? FileHash.Compute(reviewedFilePath) : string.Empty;
@@ -503,22 +513,6 @@ public sealed class WorkflowEditService
     private static string GetReviewedFilePath(StagedEditRecord record)
     {
         return record.WatchedFilePath;
-    }
-
-    private static void RemoveEmptyNewFilePlaceholderOnReject(StagedEditRecord record, string decision)
-    {
-        if (!record.IsNewFile
-            || !decision.Trim().Equals("rejected", StringComparison.OrdinalIgnoreCase)
-            || !File.Exists(record.WatchedFilePath))
-        {
-            return;
-        }
-
-        FileInfo watchedFile = new(record.WatchedFilePath);
-        if (watchedFile.Length == 0)
-        {
-            File.Delete(record.WatchedFilePath);
-        }
     }
 
     public EditSessionStatus Accept(string watchedFilePath, string expectedStagedHash)

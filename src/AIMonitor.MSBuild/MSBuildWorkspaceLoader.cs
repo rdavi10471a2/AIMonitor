@@ -102,7 +102,9 @@ public sealed class MSBuildWorkspaceLoader
             ProjectSymbolIndex symbolIndex = compilation is null
                 ? ProjectSymbolIndex.Empty
                 : await ProjectSymbolIndex.BuildDeclarationsAsync(project, compilation, cancellationToken);
-            IReadOnlyList<RazorDocumentIndex> razorDocuments = RazorDocumentIndex.BuildForProject(project);
+            IReadOnlyList<RazorDocumentIndex> razorDocuments = RazorDocumentIndex.BuildForProject(
+                project,
+                evaluatedProject.RazorLikeFiles);
             razorDocumentsByProject[project.Id] = razorDocuments;
             if (compilation is not null && razorDocuments.Count > 0)
             {
@@ -357,6 +359,7 @@ internal sealed record MSBuildEvaluatedProject(
     string Nullable,
     string ImplicitUsings,
     string LangVersion,
+    IReadOnlyList<string> RazorLikeFiles,
     IReadOnlyList<MSBuildProjectReferenceSnapshot> ProjectReferences,
     IReadOnlyList<MSBuildPackageReferenceSnapshot> PackageReferences,
     IReadOnlyList<MSBuildFrameworkReferenceSnapshot> FrameworkReferences,
@@ -372,6 +375,7 @@ internal sealed record MSBuildEvaluatedProject(
         string.Empty,
         string.Empty,
         string.Empty,
+        [],
         [],
         [],
         [],
@@ -393,6 +397,7 @@ internal sealed record MSBuildEvaluatedProject(
                 GetProperty(project, "Nullable"),
                 GetProperty(project, "ImplicitUsings"),
                 GetProperty(project, "LangVersion"),
+                GetRazorLikeFiles(project, projectPath),
                 GetProjectReferences(project),
                 GetPackageReferences(project),
                 GetFrameworkReferences(project),
@@ -417,6 +422,46 @@ internal sealed record MSBuildEvaluatedProject(
                 item.GetMetadataValue("FullPath")))
             .OrderBy(item => item.FullPath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private static IReadOnlyList<string> GetRazorLikeFiles(MSBuildProject project, string projectPath)
+    {
+        string projectDirectory = Path.GetDirectoryName(projectPath) ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(projectDirectory))
+        {
+            return [];
+        }
+
+        return project.AllEvaluatedItems
+            .Select(item => ResolveProjectItemPath(projectDirectory, item))
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(Path.GetFullPath)
+            .Where(path => File.Exists(path))
+            .Where(path => path.EndsWith(".razor", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".razor.cs", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !MSBuildWorkspaceLoader.PathHasIgnoredDirectory(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string ResolveProjectItemPath(string projectDirectory, ProjectItem item)
+    {
+        string fullPath = item.GetMetadataValue("FullPath");
+        if (!string.IsNullOrWhiteSpace(fullPath))
+        {
+            return fullPath;
+        }
+
+        string evaluatedInclude = item.EvaluatedInclude;
+        if (string.IsNullOrWhiteSpace(evaluatedInclude))
+        {
+            return string.Empty;
+        }
+
+        return Path.IsPathRooted(evaluatedInclude)
+            ? evaluatedInclude
+            : Path.Combine(projectDirectory, evaluatedInclude);
     }
 
     private static IReadOnlyList<MSBuildPackageReferenceSnapshot> GetPackageReferences(MSBuildProject project)
@@ -1187,7 +1232,9 @@ internal sealed class RazorDocumentIndex
 
     private IReadOnlyList<SourceMapping> Mappings { get; }
 
-    public static IReadOnlyList<RazorDocumentIndex> BuildForProject(Microsoft.CodeAnalysis.Project project)
+    public static IReadOnlyList<RazorDocumentIndex> BuildForProject(
+        Microsoft.CodeAnalysis.Project project,
+        IReadOnlyList<string> razorLikeFiles)
     {
         string? projectDirectory = Path.GetDirectoryName(project.FilePath ?? string.Empty);
         if (string.IsNullOrWhiteSpace(projectDirectory) || !Directory.Exists(projectDirectory))
@@ -1208,7 +1255,7 @@ internal sealed class RazorDocumentIndex
         List<RazorDocumentIndex> documents = [];
         CSharpParseOptions parseOptions = project.ParseOptions as CSharpParseOptions
             ?? CSharpParseOptions.Default;
-        foreach (string filePath in EnumerateRazorLikeFiles(projectDirectory))
+        foreach (string filePath in EnumerateRazorLikeFiles(razorLikeFiles))
         {
             if (TryCreate(projectDirectory, filePath, fileSystem, engine, parseOptions, out RazorDocumentIndex? document)
                 && document is not null)
@@ -1272,10 +1319,9 @@ internal sealed class RazorDocumentIndex
         return SourceText.Lines[zeroBasedLine].ToString().Trim();
     }
 
-    private static IEnumerable<string> EnumerateRazorLikeFiles(string projectDirectory)
+    private static IEnumerable<string> EnumerateRazorLikeFiles(IReadOnlyList<string> razorLikeFiles)
     {
-        foreach (string filePath in Directory.EnumerateFiles(projectDirectory, "*.razor", SearchOption.AllDirectories)
-            .Concat(Directory.EnumerateFiles(projectDirectory, "*.razor.cs", SearchOption.AllDirectories)))
+        foreach (string filePath in razorLikeFiles)
         {
             if (MSBuildWorkspaceLoader.PathHasIgnoredDirectory(filePath))
             {
