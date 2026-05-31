@@ -14,3 +14,5 @@ The core design rule:
 > MCP is not the workflow. MCP is the Claude adapter over the shared workflow engine.
 
 Prefer MSBuild project truth over directory enumeration. When adding behavior, add tests beside it.
+
+Do not hide data storage row/result classes inside repository classes. Storage records get their own files so schema-shaped data stays visible in reviews.

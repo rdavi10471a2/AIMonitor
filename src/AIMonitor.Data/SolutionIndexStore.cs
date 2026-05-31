@@ -328,36 +328,3 @@ public sealed class SolutionIndexStore
         command.ExecuteNonQuery();
     }
 }
-
-public sealed record SolutionIndexSummary(
-    string InputPath,
-    DateTimeOffset IndexedAtUtc,
-    int ProjectCount,
-    int DocumentCount,
-    int DiagnosticCount);
-
-public sealed record IndexedProjectRow(
-    string Name,
-    string ProjectPath,
-    string Language,
-    string TargetFramework,
-    string TargetFrameworks,
-    string OutputType,
-    string Sdk,
-    string AssemblyName,
-    string RootNamespace,
-    string Nullable,
-    string ImplicitUsings,
-    string LangVersion,
-    string PreprocessorSymbols);
-
-public sealed record IndexedDocumentRow(
-    string ProjectPath,
-    string Name,
-    string FilePath,
-    string Folders);
-
-public sealed record IndexedPackageReferenceRow(
-    string ProjectPath,
-    string Include,
-    string Version);

@@ -9,6 +9,7 @@ This repository is the clean V2 monitor implementation.
 - Add tests in parallel with workflow behavior.
 - Prefer MSBuild-loaded project truth over filesystem guessing.
 - Keep generated runtime state under `runtime/` and out of watched projects.
+- Do not hide data storage row/result classes inside repositories; storage records get their own files.
 
 ## Edit Safety
 
