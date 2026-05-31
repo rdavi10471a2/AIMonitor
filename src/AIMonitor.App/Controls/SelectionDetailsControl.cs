@@ -8,10 +8,14 @@ public sealed class SelectionDetailsControl : UserControl
     private readonly Label titleLabel;
     private readonly Label subtitleLabel;
     private readonly PropertyGrid propertyGrid;
+    private readonly SplitContainer contentSplit;
+    private readonly TabControl relatedTabs;
     private readonly Label primaryLabel;
     private readonly DataGridView primaryGrid;
     private readonly Label secondaryLabel;
     private readonly DataGridView secondaryGrid;
+    private readonly TextBox notesBox;
+    private bool splitterSized;
 
     public SelectionDetailsControl()
     {
@@ -39,12 +43,34 @@ public sealed class SelectionDetailsControl : UserControl
             ToolbarVisible = false,
             PropertySort = PropertySort.CategorizedAlphabetical
         };
+        contentSplit = new SplitContainer
+        {
+            Dock = DockStyle.Fill,
+            Orientation = Orientation.Vertical,
+            FixedPanel = FixedPanel.Panel1,
+            SplitterWidth = 10,
+            BackColor = SystemColors.ControlDark
+        };
+        relatedTabs = new TabControl
+        {
+            Dock = DockStyle.Fill
+        };
         primaryLabel = CreateSectionLabel();
         primaryGrid = CreateGrid();
         secondaryLabel = CreateSectionLabel();
         secondaryGrid = CreateGrid();
+        notesBox = new TextBox
+        {
+            Dock = DockStyle.Fill,
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            Font = new Font(FontFamily.GenericMonospace, 9)
+        };
 
         Controls.Add(BuildLayout());
+        Load += (_, _) => BeginInvoke(ApplyInitialSplitterLayout);
     }
 
     public void ShowDetails<TPrimary, TSecondary>(
@@ -63,6 +89,9 @@ public sealed class SelectionDetailsControl : UserControl
         primaryGrid.DataSource = primaryRows.ToList();
         secondaryLabel.Text = secondaryTitle;
         secondaryGrid.DataSource = secondaryRows.ToList();
+        notesBox.Text = string.Join(
+            Environment.NewLine,
+            properties.Select(property => $"{property.Name}: {property.Value}"));
     }
 
     private Control BuildLayout()
@@ -71,13 +100,11 @@ public sealed class SelectionDetailsControl : UserControl
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 4,
+            RowCount = 2,
             Padding = new Padding(10)
         };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 170));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         TableLayoutPanel header = new()
         {
@@ -90,10 +117,15 @@ public sealed class SelectionDetailsControl : UserControl
         header.Controls.Add(titleLabel, 0, 0);
         header.Controls.Add(subtitleLabel, 0, 1);
 
+        relatedTabs.TabPages.Add(BuildTab(primaryLabel, primaryGrid));
+        relatedTabs.TabPages.Add(BuildTab(secondaryLabel, secondaryGrid));
+        relatedTabs.TabPages.Add(BuildTab("Selected Values", notesBox));
+
+        contentSplit.Panel1.Controls.Add(WrapSection("Inspector", propertyGrid));
+        contentSplit.Panel2.Controls.Add(relatedTabs);
+
         root.Controls.Add(header, 0, 0);
-        root.Controls.Add(WrapSection("Properties", propertyGrid), 0, 1);
-        root.Controls.Add(WrapSection(primaryLabel, primaryGrid), 0, 2);
-        root.Controls.Add(WrapSection(secondaryLabel, secondaryGrid), 0, 3);
+        root.Controls.Add(contentSplit, 0, 1);
         return root;
     }
 
@@ -129,6 +161,34 @@ public sealed class SelectionDetailsControl : UserControl
         section.Controls.Add(label, 0, 0);
         section.Controls.Add(content, 0, 1);
         return section;
+    }
+
+    private static TabPage BuildTab(Label label, Control content)
+    {
+        TabPage page = new(label.Text);
+        label.TextChanged += (_, _) => page.Text = label.Text;
+        page.Controls.Add(content);
+        return page;
+    }
+
+    private static TabPage BuildTab(string title, Control content)
+    {
+        TabPage page = new(title);
+        page.Controls.Add(content);
+        return page;
+    }
+
+    private void ApplyInitialSplitterLayout()
+    {
+        if (splitterSized || contentSplit.Width < 700)
+        {
+            return;
+        }
+
+        splitterSized = true;
+        contentSplit.Panel1MinSize = 320;
+        contentSplit.Panel2MinSize = 360;
+        contentSplit.SplitterDistance = Math.Clamp(420, contentSplit.Panel1MinSize, contentSplit.Width - contentSplit.Panel2MinSize - contentSplit.SplitterWidth);
     }
 
     private static DataGridView CreateGrid()

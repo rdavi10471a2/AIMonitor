@@ -1,0 +1,23 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v10.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v10.0": {
+      "AIMonitor.Core/1.0.0": {
+        "runtime": {
+          "AIMonitor.Core.dll": {}
+        }
+      }
+    }
+  },
+  "libraries": {
+    "AIMonitor.Core/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

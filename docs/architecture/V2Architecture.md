@@ -19,7 +19,6 @@ AIMonitor V2 starts from the lessons of MonitorBaseClaude:
 | `AIMonitor.Workflow` | Candidate staging, review classification, queues, ledgers, and recovery rules. |
 | `AIMonitor.MSBuild` | Solution/project loading, project graph, compile items, target frameworks, and diagnostics. |
 | `AIMonitor.Indexing` | Symbols, references, callers, relationships, and source maps from MSBuild-loaded projects. |
-| `AIMonitor.Storage` | Future durable workflow state that is not the source index. |
 | `AIMonitor.Runtime` | Build, test, process, diff, and external tool execution adapters. |
 | `AIMonitor.McpServer` | Claude-facing MCP adapter. |
 | `AIMonitor.Cli` | Codex-friendly command adapter. |
@@ -30,7 +29,22 @@ AIMonitor V2 starts from the lessons of MonitorBaseClaude:
 
 The first real capability is loading SDK-style projects through `MSBuildWorkspace` and preserving project identity before indexing.
 
-The first persisted capability is rebuilding `runtime/data/solution-index.sqlite` from `Monitor:WatchedSolutionPath`.
+The first persisted capability is rebuilding the monitor-owned solution index from `Monitor:WatchedSolutionPath`.
+
+`AIMonitor.Data` owns SQLite schema and durable index state. Do not reintroduce a separate `AIMonitor.Storage` project for the current index model; future durable workflow state should be added deliberately when it has real behavior and tests.
+
+## Semantic Boundary
+
+The V2 index should be conservative. It stores project-system truth from MSBuild and source-symbol facts from providers that can prove their mappings.
+
+For C# and Razor work:
+
+- regular C# and clean `.razor.cs` code-behind are C# provider inputs;
+- user `.razor` files are indexed only through reliable Razor/compiler source mappings;
+- legacy mixed `.razor.cs` files are accepted only when Razor syntax and source mappings prove they are Razor input;
+- full Blazor UI binding semantics are not part of the initial index contract.
+
+This boundary is intentional. The current monitor workflow is already useful with MSBuild truth, C# symbols/references, representative Razor mappings, grep-verified smoke tests, and compiler/build feedback. A future Razor binding provider can extend the model without rewriting the core architecture.
 
 ## Logging Boundary
 

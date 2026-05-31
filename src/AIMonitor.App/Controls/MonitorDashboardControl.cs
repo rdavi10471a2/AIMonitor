@@ -9,9 +9,10 @@ public sealed class MonitorDashboardControl : UserControl
 {
     private readonly TabControl mainTabs;
     private readonly SolutionIndexControl solutionIndexControl;
-    private readonly SharedLogControl sharedLogControl;
+    private readonly AdapterSurfaceControl adapterSurfaceControl;
     private readonly Label statusLabel;
     private MonitorLogService? logService;
+    private MonitorLogPipeServer? logPipeServer;
 
     public MonitorDashboardControl()
     {
@@ -33,13 +34,13 @@ public sealed class MonitorDashboardControl : UserControl
             MinimumSize = new Size(850, 360)
         };
         solutionIndexControl.StatusChanged += status => statusLabel.Text = status;
-        sharedLogControl = new SharedLogControl
+        adapterSurfaceControl = new AdapterSurfaceControl
         {
             Dock = DockStyle.Fill
         };
-
+        adapterSurfaceControl.StatusChanged += status => statusLabel.Text = status;
         mainTabs.TabPages.Add(BuildTab("Solution Index", solutionIndexControl));
-        mainTabs.TabPages.Add(BuildTab("Shared Log", sharedLogControl));
+        mainTabs.TabPages.Add(BuildTab("Monitor Status", adapterSurfaceControl));
 
         Controls.Add(BuildLayout());
 
@@ -86,13 +87,34 @@ public sealed class MonitorDashboardControl : UserControl
             string repositoryRoot = AppPathResolver.FindRepositoryRoot();
             MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot);
             logService = new MonitorLogService(MonitorLogPaths.GetDefaultLogPath(settings));
+            logPipeServer?.Dispose();
+            logPipeServer = new MonitorLogPipeServer(MonitorLogPipeNames.GetDefaultPipeName(settings), logService);
+            logPipeServer.Start();
             solutionIndexControl.SetLogger(logService);
-            sharedLogControl.Connect(logService.LogPath, logService);
-            logService.Write(MonitorLogLevel.Information, "AIMonitor.App", "app.started", "AIMonitor UI logging service connected.");
+            adapterSurfaceControl.Connect(logService.LogPath, logService);
+            logService.Write(
+                MonitorLogLevel.Information,
+                "AIMonitor.App",
+                "adapter.hub.started",
+                "AIMonitor hub log pipe started.",
+                new Dictionary<string, string>
+                {
+                    ["pipeName"] = logPipeServer.PipeName
+                });
         }
         catch (Exception ex)
         {
             statusLabel.Text = ex.Message;
         }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            logPipeServer?.Dispose();
+        }
+
+        base.Dispose(disposing);
     }
 }

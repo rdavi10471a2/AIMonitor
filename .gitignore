@@ -12,11 +12,14 @@ obj/
 
 # Local runtime/config state
 config/appsettings.json
+config/local-smoke-samples.json
 .claude-local/
 runtime/
 
 # Local-only probes
 local/
+samples/watched-solutions/*
+!samples/watched-solutions/README.md
 
 # Logs/temp
 *.log
