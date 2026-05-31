@@ -13,6 +13,7 @@ public sealed class SolutionIndexControl : UserControl
 
     private readonly Button rebuildButton;
     private readonly Button refreshButton;
+    private readonly Button chooseSolutionButton;
     private readonly TextBox watchedSolutionBox;
     private readonly TextBox databasePathBox;
     private readonly Label statusLabel;
@@ -36,6 +37,7 @@ public sealed class SolutionIndexControl : UserControl
 
         rebuildButton = new Button { Text = "Rebuild Index", AutoSize = true };
         refreshButton = new Button { Text = "Refresh", AutoSize = true };
+        chooseSolutionButton = new Button { Text = "Choose...", AutoSize = true };
         watchedSolutionBox = new TextBox { Dock = DockStyle.Fill, ReadOnly = true };
         databasePathBox = new TextBox { Dock = DockStyle.Fill, ReadOnly = true };
         statusLabel = new Label
@@ -121,6 +123,7 @@ public sealed class SolutionIndexControl : UserControl
         };
         toolbar.Controls.Add(rebuildButton);
         toolbar.Controls.Add(refreshButton);
+        toolbar.Controls.Add(chooseSolutionButton);
 
         TableLayoutPanel watchedRow = BuildLabeledRow("Watched Solution", watchedSolutionBox);
         TableLayoutPanel databaseRow = BuildLabeledRow("Database", databasePathBox);
@@ -192,6 +195,7 @@ public sealed class SolutionIndexControl : UserControl
     {
         rebuildButton.Click += async (_, _) => await RebuildIndexAsync();
         refreshButton.Click += (_, _) => LoadSettingsAndRefresh();
+        chooseSolutionButton.Click += (_, _) => ChooseWatchedSolution();
         indexTree.AfterSelect += (_, args) => SelectTreeNode(args.Node);
         symbolsGrid.SelectionChanged += (_, _) => LoadReferencesForSelectedSymbol();
     }
@@ -207,6 +211,56 @@ public sealed class SolutionIndexControl : UserControl
             watchedSolutionBox.Text = settings.WatchedSolutionPath;
             databasePathBox.Text = databasePath;
             RefreshFromStore();
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message);
+        }
+    }
+
+    private void ChooseWatchedSolution()
+    {
+        using OpenFileDialog dialog = new()
+        {
+            Title = "Choose watched solution",
+            Filter = "Solution files (*.sln;*.slnx)|*.sln;*.slnx|All files (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+
+        if (settings is not null && File.Exists(settings.WatchedSolutionPath))
+        {
+            dialog.InitialDirectory = Path.GetDirectoryName(settings.WatchedSolutionPath);
+            dialog.FileName = Path.GetFileName(settings.WatchedSolutionPath);
+        }
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        try
+        {
+            string repositoryRoot = AppPathResolver.FindRepositoryRoot();
+            string runtimeRoot = settings is null
+                ? "runtime"
+                : Path.GetRelativePath(repositoryRoot, settings.RuntimeRoot);
+            string settingsPath = MonitorSettingsLoader.SaveLocal(
+                repositoryRoot,
+                dialog.FileName,
+                runtimeRoot);
+            logger?.Write(
+                MonitorLogLevel.Information,
+                "AIMonitor.App",
+                "settings.watched_solution.changed",
+                "Watched solution path saved.",
+                new Dictionary<string, string>
+                {
+                    ["settingsPath"] = settingsPath,
+                    ["watchedSolutionPath"] = dialog.FileName
+                });
+            LoadSettingsAndRefresh();
+            SetStatus($"Watched solution saved: {dialog.FileName}");
         }
         catch (Exception ex)
         {
@@ -401,6 +455,7 @@ public sealed class SolutionIndexControl : UserControl
     {
         rebuildButton.Enabled = !busy;
         refreshButton.Enabled = !busy;
+        chooseSolutionButton.Enabled = !busy;
         Cursor = busy ? Cursors.WaitCursor : Cursors.Default;
         if (busy)
         {

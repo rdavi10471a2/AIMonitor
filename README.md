@@ -44,6 +44,8 @@ runtime/   generated monitor state; ignored
 
 `Monitor:WatchedSolutionPath` is the single authoritative path for the watched solution. MSBuild loading, indexing, MCP, CLI, and the app host should all flow through that setting.
 
+Use the WinForms `Choose...` button or edit ignored `config/appsettings.json` to switch watched solutions. Do not copy the AIMonitor repo per watched solution; generated state is already isolated under the per-solution runtime workspace.
+
 Generated monitor logs go under `runtime/logs/aimonitor.ndjson`. Adapters may print human status to their console/UI, but durable operational events should use the shared logger.
 
 The operator app owns the shared logging service. Child controls and subsystems receive an `IMonitorLogger` and send log messages to it; they should not create their own UI log panes or long-lived file handles. The app log view listens to in-process log events while the service writes JSON-lines entries with shared file access.

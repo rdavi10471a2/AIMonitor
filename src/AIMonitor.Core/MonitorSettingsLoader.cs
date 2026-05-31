@@ -1,14 +1,24 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace AIMonitor.Core;
 
 public static class MonitorSettingsLoader
 {
+    private static readonly JsonSerializerOptions SerializerOptions = new()
+    {
+        WriteIndented = true
+    };
+
+    static MonitorSettingsLoader()
+    {
+        SerializerOptions.Converters.Add(new JsonStringEnumConverter());
+    }
+
     public static MonitorSettings Load(string repositoryRoot, string? settingsPath = null)
     {
         string resolvedRepositoryRoot = Path.GetFullPath(repositoryRoot);
-        string resolvedSettingsPath = Path.GetFullPath(
-            settingsPath ?? Path.Combine(resolvedRepositoryRoot, "config", "appsettings.json"));
+        string resolvedSettingsPath = ResolveSettingsPath(resolvedRepositoryRoot, settingsPath);
 
         if (!File.Exists(resolvedSettingsPath))
         {
@@ -26,6 +36,34 @@ public static class MonitorSettingsLoader
             resolvedRepositoryRoot,
             ResolvePath(watchedSolutionPath, settingsDirectory),
             ResolvePath(runtimeRoot, resolvedRepositoryRoot));
+    }
+
+    public static string SaveLocal(
+        string repositoryRoot,
+        string watchedSolutionPath,
+        string? runtimeRoot = null,
+        string? settingsPath = null)
+    {
+        string resolvedRepositoryRoot = Path.GetFullPath(repositoryRoot);
+        string resolvedSettingsPath = ResolveSettingsPath(resolvedRepositoryRoot, settingsPath);
+        string resolvedWatchedSolutionPath = Path.GetFullPath(watchedSolutionPath);
+        string resolvedRuntimeRoot = string.IsNullOrWhiteSpace(runtimeRoot)
+            ? "runtime"
+            : runtimeRoot;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(resolvedSettingsPath) ?? resolvedRepositoryRoot);
+        LocalSettingsFile file = new(
+            new LocalMonitorSettings(
+                resolvedWatchedSolutionPath,
+                resolvedRuntimeRoot));
+        File.WriteAllText(resolvedSettingsPath, JsonSerializer.Serialize(file, SerializerOptions) + Environment.NewLine);
+        return resolvedSettingsPath;
+    }
+
+    private static string ResolveSettingsPath(string resolvedRepositoryRoot, string? settingsPath)
+    {
+        return Path.GetFullPath(
+            settingsPath ?? Path.Combine(resolvedRepositoryRoot, "config", "appsettings.json"));
     }
 
     private static string RequireString(JsonElement element, string propertyName)
@@ -53,4 +91,10 @@ public static class MonitorSettingsLoader
             ? Path.GetFullPath(path)
             : Path.GetFullPath(Path.Combine(baseDirectory, path));
     }
+
+    private sealed record LocalSettingsFile(LocalMonitorSettings Monitor);
+
+    private sealed record LocalMonitorSettings(
+        string WatchedSolutionPath,
+        string RuntimeRoot);
 }
