@@ -1,18 +1,48 @@
 <Solution>
-  <Project Path="src/AIMonitor.App/AIMonitor.App.csproj" />
-  <Project Path="src/AIMonitor.Bridge/AIMonitor.Bridge.csproj" />
-  <Project Path="src/AIMonitor.Cli/AIMonitor.Cli.csproj" />
-  <Project Path="src/AIMonitor.Core/AIMonitor.Core.csproj" />
-  <Project Path="src/AIMonitor.Indexing/AIMonitor.Indexing.csproj" />
-  <Project Path="src/AIMonitor.McpServer/AIMonitor.McpServer.csproj" />
-  <Project Path="src/AIMonitor.MSBuild/AIMonitor.MSBuild.csproj" />
-  <Project Path="src/AIMonitor.Runtime/AIMonitor.Runtime.csproj" />
-  <Project Path="src/AIMonitor.Storage/AIMonitor.Storage.csproj" />
-  <Project Path="src/AIMonitor.Workflow/AIMonitor.Workflow.csproj" />
-  <Project Path="tests/integration/AIMonitor.Integration.Tests/AIMonitor.Integration.Tests.csproj" />
-  <Project Path="tests/smoke/AIMonitor.SmokeTests/AIMonitor.SmokeTests.csproj" />
-  <Project Path="tests/unit/AIMonitor.Core.Tests/AIMonitor.Core.Tests.csproj" />
-  <Project Path="tests/unit/AIMonitor.Indexing.Tests/AIMonitor.Indexing.Tests.csproj" />
-  <Project Path="tests/unit/AIMonitor.MSBuild.Tests/AIMonitor.MSBuild.Tests.csproj" />
-  <Project Path="tests/unit/AIMonitor.Workflow.Tests/AIMonitor.Workflow.Tests.csproj" />
+  <Folder Name="/src/">
+    <Project Path="src/AIMonitor.App/AIMonitor.App.csproj" />
+    <Project Path="src/AIMonitor.Bridge/AIMonitor.Bridge.csproj" />
+    <Project Path="src/AIMonitor.Cli/AIMonitor.Cli.csproj" />
+    <Project Path="src/AIMonitor.Core/AIMonitor.Core.csproj" />
+    <Project Path="src/AIMonitor.Indexing/AIMonitor.Indexing.csproj" />
+    <Project Path="src/AIMonitor.McpServer/AIMonitor.McpServer.csproj" />
+    <Project Path="src/AIMonitor.MSBuild/AIMonitor.MSBuild.csproj" />
+    <Project Path="src/AIMonitor.Runtime/AIMonitor.Runtime.csproj" />
+    <Project Path="src/AIMonitor.Storage/AIMonitor.Storage.csproj" />
+    <Project Path="src/AIMonitor.Workflow/AIMonitor.Workflow.csproj" />
+  </Folder>
+  <Folder Name="/tests/unit/">
+    <Project Path="tests/unit/AIMonitor.Core.Tests/AIMonitor.Core.Tests.csproj" />
+    <Project Path="tests/unit/AIMonitor.Indexing.Tests/AIMonitor.Indexing.Tests.csproj" />
+    <Project Path="tests/unit/AIMonitor.MSBuild.Tests/AIMonitor.MSBuild.Tests.csproj" />
+    <Project Path="tests/unit/AIMonitor.Workflow.Tests/AIMonitor.Workflow.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tests/integration/">
+    <Project Path="tests/integration/AIMonitor.Integration.Tests/AIMonitor.Integration.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tests/smoke/">
+    <Project Path="tests/smoke/AIMonitor.SmokeTests/AIMonitor.SmokeTests.csproj" />
+  </Folder>
+  <Folder Name="/tests/fixtures/">
+    <File Path="tests/fixtures/README.md" />
+  </Folder>
+  <Folder Name="/samples/">
+    <File Path="samples/watched-solutions/README.md" />
+  </Folder>
+  <Folder Name="/docs/">
+    <File Path="README.md" />
+    <File Path="AGENTS.md" />
+    <File Path="CLAUDE.md" />
+    <File Path="docs/architecture/MSBuildFirst.md" />
+    <File Path="docs/architecture/V2Architecture.md" />
+    <File Path="docs/decisions/0001-name-and-scope.md" />
+    <File Path="docs/feature-maps/README.md" />
+    <File Path="docs/findings/README.md" />
+    <File Path="docs/setup/LocalSetup.md" />
+    <File Path="docs/workflows/SafeEditWorkflow.md" />
+  </Folder>
+  <Folder Name="/config/">
+    <File Path="config/appsettings.template.json" />
+    <File Path="config/mcp.template.json" />
+  </Folder>
 </Solution>
