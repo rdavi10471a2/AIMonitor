@@ -7,7 +7,7 @@ public sealed class SelectionDetailsControl : UserControl
 {
     private readonly Label titleLabel;
     private readonly Label subtitleLabel;
-    private readonly DataGridView propertiesGrid;
+    private readonly PropertyGrid propertyGrid;
     private readonly Label primaryLabel;
     private readonly DataGridView primaryGrid;
     private readonly Label secondaryLabel;
@@ -32,7 +32,13 @@ public sealed class SelectionDetailsControl : UserControl
             TextAlign = ContentAlignment.MiddleLeft,
             AutoEllipsis = true
         };
-        propertiesGrid = CreateGrid();
+        propertyGrid = new PropertyGrid
+        {
+            Dock = DockStyle.Fill,
+            HelpVisible = false,
+            ToolbarVisible = false,
+            PropertySort = PropertySort.CategorizedAlphabetical
+        };
         primaryLabel = CreateSectionLabel();
         primaryGrid = CreateGrid();
         secondaryLabel = CreateSectionLabel();
@@ -52,9 +58,7 @@ public sealed class SelectionDetailsControl : UserControl
     {
         titleLabel.Text = title;
         subtitleLabel.Text = subtitle;
-        propertiesGrid.DataSource = properties
-            .Select(property => new DetailPropertyRow(property.Name, property.Value))
-            .ToList();
+        propertyGrid.SelectedObject = new DetailPropertyBag(properties);
         primaryLabel.Text = primaryTitle;
         primaryGrid.DataSource = primaryRows.ToList();
         secondaryLabel.Text = secondaryTitle;
@@ -87,7 +91,7 @@ public sealed class SelectionDetailsControl : UserControl
         header.Controls.Add(subtitleLabel, 0, 1);
 
         root.Controls.Add(header, 0, 0);
-        root.Controls.Add(WrapSection("Properties", propertiesGrid), 0, 1);
+        root.Controls.Add(WrapSection("Properties", propertyGrid), 0, 1);
         root.Controls.Add(WrapSection(primaryLabel, primaryGrid), 0, 2);
         root.Controls.Add(WrapSection(secondaryLabel, secondaryGrid), 0, 3);
         return root;
@@ -146,5 +150,76 @@ public sealed class SelectionDetailsControl : UserControl
         };
     }
 
-    private sealed record DetailPropertyRow(string Name, string Value);
+    private sealed class DetailPropertyBag : ICustomTypeDescriptor
+    {
+        private readonly IReadOnlyList<DetailProperty> properties;
+
+        public DetailPropertyBag(IEnumerable<(string Name, string Value)> properties)
+        {
+            this.properties = properties
+                .Select(property => new DetailProperty(property.Name, property.Value))
+                .ToList();
+        }
+
+        public AttributeCollection GetAttributes() => AttributeCollection.Empty;
+
+        public string? GetClassName() => null;
+
+        public string? GetComponentName() => null;
+
+        public TypeConverter GetConverter() => new TypeConverter();
+
+        public EventDescriptor? GetDefaultEvent() => null;
+
+        public PropertyDescriptor? GetDefaultProperty() => null;
+
+        public object? GetEditor(Type editorBaseType) => null;
+
+        public EventDescriptorCollection GetEvents(Attribute[]? attributes) => EventDescriptorCollection.Empty;
+
+        public EventDescriptorCollection GetEvents() => EventDescriptorCollection.Empty;
+
+        public PropertyDescriptorCollection GetProperties(Attribute[]? attributes)
+        {
+            return new PropertyDescriptorCollection(
+                properties.Select(property => new DetailPropertyDescriptor(property)).ToArray());
+        }
+
+        public PropertyDescriptorCollection GetProperties() => GetProperties(null);
+
+        public object? GetPropertyOwner(PropertyDescriptor? pd) => this;
+    }
+
+    private sealed record DetailProperty(string Name, string Value);
+
+    private sealed class DetailPropertyDescriptor : PropertyDescriptor
+    {
+        private readonly DetailProperty property;
+
+        public DetailPropertyDescriptor(DetailProperty property)
+            : base(property.Name, null)
+        {
+            this.property = property;
+        }
+
+        public override Type ComponentType => typeof(DetailPropertyBag);
+
+        public override bool IsReadOnly => true;
+
+        public override Type PropertyType => typeof(string);
+
+        public override bool CanResetValue(object component) => false;
+
+        public override object GetValue(object? component) => property.Value;
+
+        public override void ResetValue(object component)
+        {
+        }
+
+        public override void SetValue(object? component, object? value)
+        {
+        }
+
+        public override bool ShouldSerializeValue(object component) => false;
+    }
 }
