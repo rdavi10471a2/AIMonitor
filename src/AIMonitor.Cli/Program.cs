@@ -587,7 +587,16 @@ internal static class Program
         IReadOnlyList<string> excludedRoots)
     {
         Directory.CreateDirectory(destinationRoot);
-        foreach (string directoryPath in Directory.EnumerateDirectories(sourceRoot, "*", SearchOption.AllDirectories))
+        CopyDirectoryContentsForValidation(sourceRoot, sourceRoot, destinationRoot, excludedRoots);
+    }
+
+    private static void CopyDirectoryContentsForValidation(
+        string sourceRoot,
+        string currentRoot,
+        string destinationRoot,
+        IReadOnlyList<string> excludedRoots)
+    {
+        foreach (string directoryPath in Directory.EnumerateDirectories(currentRoot))
         {
             if (IsPathUnderAny(directoryPath, excludedRoots))
             {
@@ -601,15 +610,11 @@ internal static class Program
             }
 
             string relativePath = Path.GetRelativePath(sourceRoot, directoryPath);
-            if (relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(IsSkippedValidationDirectory))
-            {
-                continue;
-            }
-
             Directory.CreateDirectory(Path.Combine(destinationRoot, relativePath));
+            CopyDirectoryContentsForValidation(sourceRoot, directoryPath, destinationRoot, excludedRoots);
         }
 
-        foreach (string filePath in Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories))
+        foreach (string filePath in Directory.EnumerateFiles(currentRoot))
         {
             if (IsPathUnderAny(filePath, excludedRoots))
             {

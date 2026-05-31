@@ -459,7 +459,7 @@ public sealed class WorkflowEditService
                 record.StagedHash,
                 reviewedHash,
                 reviewedFileExists ? FileHash.ComputeNormalizedFile(reviewedFilePath) : null,
-                FileHash.ComputeNormalizedFile(record.StagedFilePath),
+                string.IsNullOrWhiteSpace(record.StagedNormalizedHash) ? null : record.StagedNormalizedHash,
                 record.IsNewFile,
                 reviewedFileExists));
 
