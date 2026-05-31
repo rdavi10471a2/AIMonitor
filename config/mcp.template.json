@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "ai-monitor": {
+      "command": ".\\src\\AIMonitor.Bridge\\bin\\Debug\\net10.0\\AIMonitor.Bridge.exe",
+      "args": [
+        "--server",
+        "monitor"
+      ],
+      "env": {}
+    }
+  }
+}

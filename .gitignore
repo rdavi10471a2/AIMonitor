@@ -1,0 +1,30 @@
+# Build output
+bin/
+obj/
+**/bin/
+**/obj/
+
+# IDE state
+.vs/
+*.user
+*.suo
+*.lscache
+
+# Local runtime/config state
+config/appsettings.json
+.claude-local/
+runtime/Working/
+runtime/Logs/
+runtime/Telemetry/
+
+# Local-only probes
+local/
+
+# Logs/temp
+*.log
+*.tmp
+*.bak
+
+# OS noise
+Thumbs.db
+Desktop.ini
