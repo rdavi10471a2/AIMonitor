@@ -16,6 +16,39 @@
       "problemMatcher": "$msCompile"
     },
     {
+      "label": "build cli",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/src/AIMonitor.Cli/AIMonitor.Cli.csproj"
+      ],
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "build bridge",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/src/AIMonitor.Bridge/AIMonitor.Bridge.csproj"
+      ],
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "build app",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/src/AIMonitor.App/AIMonitor.App.csproj"
+      ],
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
       "label": "test all",
       "type": "process",
       "command": "dotnet",
@@ -42,7 +75,7 @@
       ],
       "group": "test",
       "problemMatcher": "$msCompile",
-      "dependsOn": "build solution"
+      "dependsOn": "build cli"
     },
     {
       "label": "test integration",
@@ -55,7 +88,7 @@
       ],
       "group": "test",
       "problemMatcher": "$msCompile",
-      "dependsOn": "build solution"
+      "dependsOn": "build cli"
     },
     {
       "label": "run app",
@@ -66,6 +99,7 @@
         "--project",
         "${workspaceFolder}/src/AIMonitor.App/AIMonitor.App.csproj"
       ],
+      "dependsOn": "build app",
       "problemMatcher": "$msCompile"
     },
     {
@@ -83,6 +117,7 @@
         "--config",
         "${workspaceFolder}/config/appsettings.json"
       ],
+      "dependsOn": "build cli",
       "problemMatcher": "$msCompile"
     },
     {
@@ -101,6 +136,7 @@
         "--config",
         "${workspaceFolder}/config/appsettings.json"
       ],
+      "dependsOn": "build cli",
       "problemMatcher": "$msCompile"
     }
   ]

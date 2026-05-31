@@ -4,10 +4,8 @@ Samples are human-readable projects used to demonstrate AIMonitor behavior.
 
 Watched solution copies are local-only by default. Put large or real-world samples
 under this folder when you want a local smoke target, but do not commit those
-project copies.
-
-Configure local smoke sample roots in ignored `config/local-smoke-samples.json`.
-Create it from `config/local-smoke-samples.template.json` if needed.
+project copies. Until a smoke runner consumes sample-root config directly, point
+CLI commands or smoke tasks at the solution path you want to exercise.
 
 Example roots:
 

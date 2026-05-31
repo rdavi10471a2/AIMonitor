@@ -5,7 +5,7 @@
       "name": "AIMonitor App (WinForms)",
       "type": "coreclr",
       "request": "launch",
-      "preLaunchTask": "build solution",
+      "preLaunchTask": "build app",
       "program": "${workspaceFolder}/src/AIMonitor.App/bin/Debug/net10.0-windows/AIMonitor.App.dll",
       "args": [],
       "cwd": "${workspaceFolder}",
@@ -16,7 +16,7 @@
       "name": "AIMonitor CLI: status",
       "type": "coreclr",
       "request": "launch",
-      "preLaunchTask": "build solution",
+      "preLaunchTask": "build cli",
       "program": "${workspaceFolder}/src/AIMonitor.Cli/bin/Debug/net10.0/AIMonitor.Cli.dll",
       "args": [
         "status",
@@ -33,7 +33,7 @@
       "name": "AIMonitor CLI: index rebuild",
       "type": "coreclr",
       "request": "launch",
-      "preLaunchTask": "build solution",
+      "preLaunchTask": "build cli",
       "program": "${workspaceFolder}/src/AIMonitor.Cli/bin/Debug/net10.0/AIMonitor.Cli.dll",
       "args": [
         "index",
@@ -51,7 +51,7 @@
       "name": "AIMonitor CLI: edit status",
       "type": "coreclr",
       "request": "launch",
-      "preLaunchTask": "build solution",
+      "preLaunchTask": "build cli",
       "program": "${workspaceFolder}/src/AIMonitor.Cli/bin/Debug/net10.0/AIMonitor.Cli.dll",
       "args": [
         "edit",
@@ -68,12 +68,15 @@
       "stopAtEntry": false
     },
     {
-      "name": "AIMonitor MCP Server",
+      "name": "AIMonitor MCP Bridge",
       "type": "coreclr",
       "request": "launch",
-      "preLaunchTask": "build solution",
-      "program": "${workspaceFolder}/src/AIMonitor.McpServer/bin/Debug/net10.0/AIMonitor.McpServer.dll",
-      "args": [],
+      "preLaunchTask": "build bridge",
+      "program": "${workspaceFolder}/src/AIMonitor.Bridge/bin/Debug/net10.0/AIMonitor.Bridge.dll",
+      "args": [
+        "--server",
+        "monitor"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "stopAtEntry": false
