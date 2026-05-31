@@ -14,10 +14,11 @@ AIMonitor V2 starts from the lessons of MonitorBaseClaude:
 | Project | Responsibility |
 | --- | --- |
 | `AIMonitor.Core` | Shared settings, identities, and plain domain records. |
+| `AIMonitor.Data` | SQLite solution index built from the single watched solution path. |
 | `AIMonitor.Workflow` | Candidate staging, review classification, queues, ledgers, and recovery rules. |
 | `AIMonitor.MSBuild` | Solution/project loading, project graph, compile items, target frameworks, and diagnostics. |
 | `AIMonitor.Indexing` | Symbols, references, callers, relationships, and source maps from MSBuild-loaded projects. |
-| `AIMonitor.Storage` | SQLite schema and durable state. |
+| `AIMonitor.Storage` | Future durable workflow state that is not the source index. |
 | `AIMonitor.Runtime` | Build, test, process, diff, and external tool execution adapters. |
 | `AIMonitor.McpServer` | Claude-facing MCP adapter. |
 | `AIMonitor.Cli` | Codex-friendly command adapter. |
@@ -27,3 +28,5 @@ AIMonitor V2 starts from the lessons of MonitorBaseClaude:
 ## Initial MSBuild Goal
 
 The first real capability is loading SDK-style projects through `MSBuildWorkspace` and preserving project identity before indexing.
+
+The first persisted capability is rebuilding `runtime/data/solution-index.sqlite` from `Monitor:WatchedSolutionPath`.

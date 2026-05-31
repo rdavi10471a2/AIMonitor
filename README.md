@@ -10,6 +10,7 @@ The goal is to keep the proven Monitor workflow while starting from a cleaner ar
 - CLI as the Codex-friendly adapter.
 - Tests, samples, and docs as top-level peers of product source.
 - First-class watched-project support for Blazor/Razor, WinForms, and console apps.
+- A SQLite solution index under `runtime/data` built from one configured watched solution path.
 
 ## Initial Scope
 
@@ -38,6 +39,10 @@ config/    templates only; local config is ignored
 runtime/   generated monitor state; ignored
 ```
 
+## Configuration Rule
+
+`Monitor:WatchedSolutionPath` is the single authoritative path for the watched solution. MSBuild loading, indexing, MCP, CLI, and the app host should all flow through that setting.
+
 ## Build
 
 ```powershell
@@ -48,6 +53,14 @@ dotnet build .\AIMonitor.slnx
 
 ```powershell
 dotnet test .\AIMonitor.slnx
+```
+
+## Rebuild Index
+
+Create `config/appsettings.json` from `config/appsettings.template.json`, set `Monitor:WatchedSolutionPath`, then run:
+
+```powershell
+dotnet run --project .\src\AIMonitor.Cli -- index rebuild
 ```
 
 ## Architecture Rule

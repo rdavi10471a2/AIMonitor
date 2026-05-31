@@ -4,6 +4,7 @@
     <Project Path="src/AIMonitor.Bridge/AIMonitor.Bridge.csproj" />
     <Project Path="src/AIMonitor.Cli/AIMonitor.Cli.csproj" />
     <Project Path="src/AIMonitor.Core/AIMonitor.Core.csproj" />
+    <Project Path="src/AIMonitor.Data/AIMonitor.Data.csproj" />
     <Project Path="src/AIMonitor.Indexing/AIMonitor.Indexing.csproj" />
     <Project Path="src/AIMonitor.McpServer/AIMonitor.McpServer.csproj" />
     <Project Path="src/AIMonitor.MSBuild/AIMonitor.MSBuild.csproj" />
@@ -13,6 +14,7 @@
   </Folder>
   <Folder Name="/tests/unit/">
     <Project Path="tests/unit/AIMonitor.Core.Tests/AIMonitor.Core.Tests.csproj" />
+    <Project Path="tests/unit/AIMonitor.Data.Tests/AIMonitor.Data.Tests.csproj" />
     <Project Path="tests/unit/AIMonitor.Indexing.Tests/AIMonitor.Indexing.Tests.csproj" />
     <Project Path="tests/unit/AIMonitor.MSBuild.Tests/AIMonitor.MSBuild.Tests.csproj" />
     <Project Path="tests/unit/AIMonitor.Workflow.Tests/AIMonitor.Workflow.Tests.csproj" />
@@ -26,19 +28,32 @@
   <Folder Name="/tests/fixtures/">
     <File Path="tests/fixtures/README.md" />
   </Folder>
-  <Folder Name="/samples/">
+  <Folder Name="/samples/watched-solutions/">
     <File Path="samples/watched-solutions/README.md" />
   </Folder>
-  <Folder Name="/docs/">
+  <Folder Name="/docs/root/">
     <File Path="README.md" />
     <File Path="AGENTS.md" />
     <File Path="CLAUDE.md" />
+  </Folder>
+  <Folder Name="/docs/architecture/">
+    <File Path="docs/architecture/DataSubsystem.md" />
     <File Path="docs/architecture/MSBuildFirst.md" />
     <File Path="docs/architecture/V2Architecture.md" />
+  </Folder>
+  <Folder Name="/docs/decisions/">
     <File Path="docs/decisions/0001-name-and-scope.md" />
+  </Folder>
+  <Folder Name="/docs/feature-maps/">
     <File Path="docs/feature-maps/README.md" />
+  </Folder>
+  <Folder Name="/docs/findings/">
     <File Path="docs/findings/README.md" />
+  </Folder>
+  <Folder Name="/docs/setup/">
     <File Path="docs/setup/LocalSetup.md" />
+  </Folder>
+  <Folder Name="/docs/workflows/">
     <File Path="docs/workflows/SafeEditWorkflow.md" />
   </Folder>
   <Folder Name="/config/">

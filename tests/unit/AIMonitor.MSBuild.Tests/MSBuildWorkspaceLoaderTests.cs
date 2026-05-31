@@ -37,6 +37,6 @@ public sealed class MSBuildWorkspaceLoaderTests
 
         Assert.Single(snapshot.Projects);
         Assert.Equal("Fixture", snapshot.Projects[0].Name);
-        Assert.True(snapshot.Projects[0].RegularDocumentCount >= 1);
+        Assert.Contains(snapshot.Projects[0].Documents, document => document.Name == "Program.cs");
     }
 }

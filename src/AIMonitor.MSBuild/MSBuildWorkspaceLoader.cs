@@ -55,12 +55,24 @@ public sealed class MSBuildWorkspaceLoader
     {
         MSBuildProjectSnapshot[] projects = solution.Projects
             .OrderBy(project => project.FilePath, StringComparer.OrdinalIgnoreCase)
-            .Select(project => new MSBuildProjectSnapshot(
-                project.Name,
-                project.FilePath ?? string.Empty,
-                project.Language,
-                project.Documents.Count(document => document.SourceCodeKind == SourceCodeKind.Regular),
-                project.ParseOptions?.PreprocessorSymbolNames.Order(StringComparer.Ordinal).ToArray() ?? []))
+            .Select(project =>
+            {
+                MSBuildDocumentSnapshot[] documents = project.Documents
+                    .Where(document => document.SourceCodeKind == SourceCodeKind.Regular)
+                    .OrderBy(document => document.FilePath, StringComparer.OrdinalIgnoreCase)
+                    .Select(document => new MSBuildDocumentSnapshot(
+                        document.Name,
+                        document.FilePath ?? string.Empty,
+                        document.Folders.ToArray()))
+                    .ToArray();
+
+                return new MSBuildProjectSnapshot(
+                    project.Name,
+                    project.FilePath ?? string.Empty,
+                    project.Language,
+                    documents,
+                    project.ParseOptions?.PreprocessorSymbolNames.Order(StringComparer.Ordinal).ToArray() ?? []);
+            })
             .ToArray();
 
         string[] diagnosticMessages = diagnostics
@@ -84,5 +96,10 @@ public sealed record MSBuildProjectSnapshot(
     string Name,
     string ProjectPath,
     string Language,
-    int RegularDocumentCount,
+    IReadOnlyList<MSBuildDocumentSnapshot> Documents,
     IReadOnlyList<string> PreprocessorSymbols);
+
+public sealed record MSBuildDocumentSnapshot(
+    string Name,
+    string FilePath,
+    IReadOnlyList<string> Folders);
