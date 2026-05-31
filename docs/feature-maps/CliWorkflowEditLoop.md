@@ -48,9 +48,9 @@ Future watched source path
   -> edit stage
   -> immutable staged candidate + blank review baseline
   -> edit launch-diff
-  -> operator saves staged candidate into the runtime review target or leaves it unchanged
+  -> operator saves staged candidate into the future watched source path or leaves watched source absent
   -> edit record-decision --decision accepted|rejected
-  -> accepted decision creates the watched file from the reviewed runtime target
+  -> accepted decision classifies the human-created watched file by staged hash
 ```
 
 ## Commands
@@ -72,7 +72,7 @@ The `refresh` response includes `workingFilePath`. Codex should edit that monito
 
 `edit replace-text` operates only on the monitor-owned Working file. It does not mutate watched source. It counts exact matches, can enforce `--expected-matches`, can guard against stale candidates with `--expected-working-hash`, and normalizes replacement text to the Working file's dominant line ending. This is mainly the Codex-safe local command path; Claude can continue to use its MCP/editor edit surface when that remains stable. Agents may make multiple tool-driven edits to the Working file before staging. After `edit stage`, the staged candidate and recorded hashes are immutable review evidence; further candidate changes should be made in Working and staged again before `edit launch-diff` or accept. When agents edit Working files directly, they should preserve existing line endings. New files should follow `.editorconfig` or nearby project files.
 
-`edit launch-diff` runs the pre-merge validation gate by copying the watched solution root into monitor runtime validation storage, overlaying the staged candidate, and running `dotnet build` against that validation copy. Validation itself does not mutate the watched source tree, and runtime/validation storage is excluded from the validation copy. For new files, WinMerge reviews monitor-owned runtime files; the watched file is not created until `record-decision accepted --expected-staged-hash <hash>` verifies the reviewed runtime content. If validation fails on an interactive Windows desktop, AIMonitor shows a human OK/Cancel override dialog before WinMerge opens. If no interactive dialog is available, the command blocks launch and tells the agent to ask the user in chat. `--force-validation` is the non-interactive equivalent and should only be used after explicit human approval.
+`edit launch-diff` runs the pre-merge validation gate by copying the watched solution root into monitor runtime validation storage, overlaying the staged candidate, and running `dotnet build` against that validation copy. Validation itself does not mutate the watched source tree, and runtime/validation storage is excluded from the validation copy. For new files, WinMerge reviews the staged runtime candidate against a blank runtime baseline, but the operator must save/create the future watched source file before `record-decision accepted --expected-staged-hash <hash>` can classify the accept. `record-decision` does not copy runtime review content into watched source. If validation fails on an interactive Windows desktop, AIMonitor shows a human `Yes Launch`/`Cancel` override dialog before WinMerge opens, with `Yes`/`No` as a Win32 fallback if custom button text is unavailable. If no interactive dialog is available, the command blocks launch and tells the agent to ask the user in chat. `--force-validation` is the non-interactive equivalent and should only be used after explicit human approval.
 
 `accepted-normalized` is a successful accept where exact bytes differed but normalized content matched, usually because WinMerge or an editor normalized line endings. The next operation must still be `edit refresh` so future edits use the bytes and line endings actually saved in watched source.
 
@@ -83,8 +83,8 @@ The `refresh` response includes `workingFilePath`. Codex should edit that monito
 - Pre-merge validation runs before WinMerge launch. Failed validation blocks review unless the user approves the override dialog, or the agent asks in chat and the caller passes `--force-validation` after explicit human approval.
 - Existing files must enter through `edit refresh`; missing files must enter through explicit `edit new`.
 - `edit new` never creates the watched source file. It creates an empty monitor-owned Working candidate and stages against a blank review baseline.
-- `edit launch-diff` must not create watched-source placeholders for new files. New-file review stays in runtime until accepted.
-- `record-decision accepted` requires `--expected-staged-hash`; existing-file accepts require the watched file hash to match the staged candidate hash, while new-file accepts create the watched file from the reviewed runtime target only after that verification.
+- `edit launch-diff` must not create watched-source placeholders for new files. New-file review stays in runtime until the operator explicitly saves/creates the future watched source file and `record-decision` classifies that result.
+- `record-decision accepted` requires `--expected-staged-hash`; accepts require the reviewed watched file to match the staged candidate by exact hash or normalized hash. Exact matches return `accepted`; normalized-only matches return `accepted-normalized`.
 - `record-decision rejected` requires the watched file hash to match the original refresh hash.
 - Accepted decisions set `requiresRefresh=true`; `edit status` reports `refresh-required`, and further edit/stage/replace operations fail until `edit refresh` captures the saved watched-source bytes.
 - Accepted decisions trigger a post-accept solution index rebuild and return an `indexRefresh` object. The rebuild emits `index.refresh-after-accept.started` and completed/failed telemetry.
@@ -95,11 +95,11 @@ The `refresh` response includes `workingFilePath`. Codex should edit that monito
 
 ## Runtime Cleanup
 
-Workflow history, staged candidates, validation workspaces, logs, and index artifacts are runtime state. They should stay under `runtime/` and out of watched projects. Retention should be an explicit cleanup/prune action, preferably from the UI or a dedicated command, rather than automatic pruning on every workflow command. Agents should still clean obvious partial test artifacts deliberately by exact path, especially `.bak` files created during manual review.
+Workflow history, staged candidates, validation workspaces, logs, and index artifacts are runtime state. They should stay under `runtime/` and out of watched projects. Retention should be an explicit cleanup/prune action, preferably from the UI or a dedicated command, rather than automatic pruning on every workflow command. Agents may clean obvious partial runtime test artifacts by exact path. Watched-project artifacts such as `.bak` files should be investigated and handled deliberately with user intent, not swept up as routine workflow cleanup.
 
 ## Tests / Smokes
 
-- `tests/integration/AIMonitor.Integration.Tests/CliIndexQueryTests.cs` covers the CLI edit round trip:
-  refresh a watched file, edit the working candidate, read pending status, stage the candidate, simulate WinMerge save, record the accepted decision, and verify the watched file changed.
-- The same integration test file covers new-file accepted and rejected paths.
-- The same integration test file covers `edit replace-text`, CRLF preservation, and the refresh-required guard after accepted decisions.
+- Stacked tests PR #3 adds `tests/integration/AIMonitor.Integration.Tests/CliIndexQueryTests.cs` coverage for the CLI edit round trip:
+  refresh a watched file, edit the working candidate, read pending status, stage the candidate, launch the diff, simulate WinMerge save, record the accepted decision, and verify the watched file changed.
+- Stacked tests PR #3 also covers new-file accepted/rejected paths, staged-hash drift blocking `launch-diff`, `edit replace-text`, CRLF preservation, and the refresh-required guard after accepted decisions.
+- Until the tests PR lands in `main`, treat those items as required stacked coverage rather than coverage present in this docs-only branch.

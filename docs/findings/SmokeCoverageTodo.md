@@ -8,8 +8,8 @@ These tests apply to the shared monitor/index/workflow surface regardless of whe
 
 - [x] Extend `AIMonitor.LanguageCorpusSmokeTests` to assert `expectedCallerCount` from corpus `expected.json`.
 - [x] Extend `AIMonitor.LanguageCorpusSmokeTests` to assert `expectedRelationshipKinds` from corpus `expected.json`.
-- [x] Add a fixture index matrix smoke equivalent to MonitorBaseClaude `--fixture-index-matrix`, using a generated disposable C# fixture and an independent Roslyn comparator.
-- [x] Add a WebViewer file-by-file smoke equivalent to MonitorBaseClaude `--webviewer-file-by-file`, comparing selected real files against index and grep sanity counts.
+- [ ] Add a fixture index matrix smoke equivalent to MonitorBaseClaude `--fixture-index-matrix`, using a generated disposable C# fixture and an independent Roslyn comparator. Stacked tests PR #3 contains this implementation; leave unchecked here until that PR lands.
+- [ ] Add a WebViewer file-by-file smoke equivalent to MonitorBaseClaude `--webviewer-file-by-file`, comparing selected real files against index and grep sanity counts. Stacked tests PR #3 contains this implementation; leave unchecked here until that PR lands.
 - [ ] Keep current local watched-solution smoke coverage for Razor/code-behind indexing and representative real-project references.
 - [ ] Add or preserve smoke summaries under `runtime/smoke/...` so failures leave reviewable artifacts.
 
