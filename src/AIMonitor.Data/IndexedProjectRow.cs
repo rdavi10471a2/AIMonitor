@@ -1,6 +1,7 @@
 namespace AIMonitor.Data;
 
 public sealed record IndexedProjectRow(
+    string StableKey,
     string Name,
     string ProjectPath,
     string Language,

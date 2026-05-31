@@ -1,9 +1,21 @@
+using System.ComponentModel;
+using AIMonitor.App.Controls;
+
 namespace AIMonitor.App;
 
-public partial class Form1 : Form
+[DesignerCategory("Code")]
+public sealed class Form1 : Form
 {
     public Form1()
     {
-        InitializeComponent();
+        Text = "AIMonitor";
+        StartPosition = FormStartPosition.CenterScreen;
+        WindowState = FormWindowState.Maximized;
+        MinimumSize = new Size(1100, 720);
+
+        Controls.Add(new MonitorDashboardControl
+        {
+            Dock = DockStyle.Fill
+        });
     }
 }

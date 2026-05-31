@@ -26,6 +26,8 @@ public sealed class SolutionIndexStore
         {
             long projectId = InsertProject(connection, transaction, project);
             InsertDocuments(connection, transaction, projectId, project.Documents);
+            InsertSymbols(connection, transaction, projectId, project.Symbols);
+            InsertReferences(connection, transaction, projectId, project.References);
             InsertProjectReferences(connection, transaction, projectId, project.ProjectReferences);
             InsertPackageReferences(connection, transaction, projectId, project.PackageReferences);
             InsertFrameworkReferences(connection, transaction, projectId, project.FrameworkReferences);
@@ -76,7 +78,7 @@ public sealed class SolutionIndexStore
         using SqliteConnection connection = database.OpenConnection();
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = """
-            select projects.project_path, documents.name, documents.file_path, documents.folders
+            select projects.project_path, documents.stable_key, documents.name, documents.file_path, documents.folders
             from documents
             inner join projects on projects.id = documents.project_id
             order by documents.file_path;
@@ -90,7 +92,87 @@ public sealed class SolutionIndexStore
                 reader.GetString(0),
                 reader.GetString(1),
                 reader.GetString(2),
-                reader.GetString(3)));
+                reader.GetString(3),
+                reader.GetString(4)));
+        }
+
+        return rows;
+    }
+
+    public IReadOnlyList<IndexedSymbolRow> ListSymbols()
+    {
+        database.EnsureCreated();
+        using SqliteConnection connection = database.OpenConnection();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            select projects.project_path, symbols.stable_key, symbols.name, symbols.kind,
+                   symbols.namespace, symbols.containing_type, symbols.file_path,
+                   symbols.start_line, symbols.end_line, symbols.signature
+            from symbols
+            inner join projects on projects.id = symbols.project_id
+            order by symbols.file_path, symbols.start_line, symbols.name;
+            """;
+
+        List<IndexedSymbolRow> rows = [];
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new IndexedSymbolRow(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.GetInt32(7),
+                reader.GetInt32(8),
+                reader.GetString(9)));
+        }
+
+        return rows;
+    }
+
+    public IReadOnlyList<IndexedReferenceRow> ListReferences(string? stableKey = null)
+    {
+        database.EnsureCreated();
+        using SqliteConnection connection = database.OpenConnection();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = string.IsNullOrWhiteSpace(stableKey)
+            ? """
+              select projects.project_path, symbol_references.target_stable_key,
+                     symbol_references.file_path, symbol_references.line, symbol_references.column,
+                     symbol_references.reference_kind, symbol_references.snippet
+              from symbol_references
+              inner join projects on projects.id = symbol_references.project_id
+              order by symbol_references.file_path, symbol_references.line, symbol_references.column;
+              """
+            : """
+              select projects.project_path, symbol_references.target_stable_key,
+                     symbol_references.file_path, symbol_references.line, symbol_references.column,
+                     symbol_references.reference_kind, symbol_references.snippet
+              from symbol_references
+              inner join projects on projects.id = symbol_references.project_id
+              where symbol_references.target_stable_key = $stableKey
+              order by symbol_references.file_path, symbol_references.line, symbol_references.column;
+              """;
+        if (!string.IsNullOrWhiteSpace(stableKey))
+        {
+            command.Parameters.AddWithValue("$stableKey", stableKey);
+        }
+
+        List<IndexedReferenceRow> rows = [];
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new IndexedReferenceRow(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetInt32(3),
+                reader.GetInt32(4),
+                reader.GetString(5),
+                reader.GetString(6)));
         }
 
         return rows;
@@ -102,7 +184,7 @@ public sealed class SolutionIndexStore
         using SqliteConnection connection = database.OpenConnection();
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = """
-            select name, project_path, language, target_framework, target_frameworks, output_type,
+            select stable_key, name, project_path, language, target_framework, target_frameworks, output_type,
                    sdk, assembly_name, root_namespace, nullable, implicit_usings, lang_version,
                    preprocessor_symbols
             from projects
@@ -126,7 +208,8 @@ public sealed class SolutionIndexStore
                 reader.GetString(9),
                 reader.GetString(10),
                 reader.GetString(11),
-                reader.GetString(12)));
+                reader.GetString(12),
+                reader.GetString(13)));
         }
 
         return rows;
@@ -164,6 +247,8 @@ public sealed class SolutionIndexStore
         Execute(connection, transaction, "delete from framework_references;");
         Execute(connection, transaction, "delete from package_references;");
         Execute(connection, transaction, "delete from project_references;");
+        Execute(connection, transaction, "delete from symbol_references;");
+        Execute(connection, transaction, "delete from symbols;");
         Execute(connection, transaction, "delete from documents;");
         Execute(connection, transaction, "delete from projects;");
         Execute(connection, transaction, "delete from solution_state;");
@@ -193,15 +278,16 @@ public sealed class SolutionIndexStore
         using SqliteCommand command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            insert into projects(name, project_path, language, target_framework, target_frameworks,
+            insert into projects(stable_key, name, project_path, language, target_framework, target_frameworks,
                                  output_type, sdk, assembly_name, root_namespace, nullable,
                                  implicit_usings, lang_version, preprocessor_symbols)
-            values ($name, $projectPath, $language, $targetFramework, $targetFrameworks,
+            values ($stableKey, $name, $projectPath, $language, $targetFramework, $targetFrameworks,
                     $outputType, $sdk, $assemblyName, $rootNamespace, $nullable,
                     $implicitUsings, $langVersion, $preprocessorSymbols);
 
             select last_insert_rowid();
             """;
+        command.Parameters.AddWithValue("$stableKey", project.StableProjectKey);
         command.Parameters.AddWithValue("$name", project.Name);
         command.Parameters.AddWithValue("$projectPath", project.ProjectPath);
         command.Parameters.AddWithValue("$language", project.Language);
@@ -229,13 +315,63 @@ public sealed class SolutionIndexStore
         foreach (MSBuildDocumentSnapshot document in documents)
         {
             Execute(connection, transaction, """
-                insert into documents(project_id, name, file_path, folders)
-                values ($projectId, $name, $filePath, $folders);
+                insert into documents(project_id, stable_key, name, file_path, folders)
+                values ($projectId, $stableKey, $name, $filePath, $folders);
                 """,
                 ("$projectId", projectId),
+                ("$stableKey", document.StableDocumentKey),
                 ("$name", document.Name),
                 ("$filePath", document.FilePath),
                 ("$folders", string.Join("/", document.Folders)));
+        }
+    }
+
+    private static void InsertSymbols(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long projectId,
+        IReadOnlyList<MSBuildSymbolSnapshot> symbols)
+    {
+        foreach (MSBuildSymbolSnapshot symbol in symbols)
+        {
+            Execute(connection, transaction, """
+                insert into symbols(project_id, stable_key, name, kind, namespace, containing_type,
+                                    file_path, start_line, end_line, signature)
+                values ($projectId, $stableKey, $name, $kind, $namespace, $containingType,
+                        $filePath, $startLine, $endLine, $signature);
+                """,
+                ("$projectId", projectId),
+                ("$stableKey", symbol.StableKey),
+                ("$name", symbol.Name),
+                ("$kind", symbol.Kind),
+                ("$namespace", symbol.Namespace),
+                ("$containingType", symbol.ContainingType),
+                ("$filePath", symbol.FilePath),
+                ("$startLine", symbol.StartLine),
+                ("$endLine", symbol.EndLine),
+                ("$signature", symbol.Signature));
+        }
+    }
+
+    private static void InsertReferences(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long projectId,
+        IReadOnlyList<MSBuildReferenceSnapshot> references)
+    {
+        foreach (MSBuildReferenceSnapshot reference in references)
+        {
+            Execute(connection, transaction, """
+                insert into symbol_references(project_id, target_stable_key, file_path, line, column, reference_kind, snippet)
+                values ($projectId, $targetStableKey, $filePath, $line, $column, $referenceKind, $snippet);
+                """,
+                ("$projectId", projectId),
+                ("$targetStableKey", reference.TargetStableKey),
+                ("$filePath", reference.FilePath),
+                ("$line", reference.Line),
+                ("$column", reference.Column),
+                ("$referenceKind", reference.ReferenceKind),
+                ("$snippet", reference.Snippet));
         }
     }
 

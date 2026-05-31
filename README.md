@@ -60,6 +60,16 @@ dotnet build .\AIMonitor.slnx
 dotnet test .\AIMonitor.slnx
 ```
 
+## Language Corpus Smoke
+
+The old MonitorBaseClaude external corpus now lives under `tests/smoke/AIMonitor.LanguageCorpusSmokeTests`. It runs in report mode by default while V2 grows the C# semantic provider:
+
+```powershell
+dotnet run --project .\tests\smoke\AIMonitor.LanguageCorpusSmokeTests
+```
+
+Use `--assert` when the corpus is ready to become a hard gate.
+
 ## Rebuild Index
 
 Create `config/appsettings.json` from `config/appsettings.template.json`, set `Monitor:WatchedSolutionPath`, then run:

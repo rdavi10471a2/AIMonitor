@@ -15,6 +15,7 @@ public sealed class SolutionIndexStoreTests
             @"C:\Example\Example.sln",
             [
                 new MSBuildProjectSnapshot(
+                    "project:test",
                     "Example",
                     @"C:\Example\Example.csproj",
                     "C#",
@@ -28,7 +29,28 @@ public sealed class SolutionIndexStoreTests
                     "enable",
                     "latest",
                     [
-                        new MSBuildDocumentSnapshot("Program.cs", @"C:\Example\Program.cs", [])
+                        new MSBuildDocumentSnapshot("document:test", "Program.cs", @"C:\Example\Program.cs", [])
+                    ],
+                    [
+                        new MSBuildSymbolSnapshot(
+                            @"C:/Example/Program.cs::NamedType::Example.Program::3",
+                            "Program",
+                            "NamedType",
+                            "Example",
+                            "",
+                            @"C:\Example\Program.cs",
+                            3,
+                            8,
+                            "Example.Program")
+                    ],
+                    [
+                        new MSBuildReferenceSnapshot(
+                            @"C:/Example/Program.cs::NamedType::Example.Program::3",
+                            @"C:\Example\Program.cs",
+                            5,
+                            13,
+                            "IdentifierName",
+                            "Program")
                     ],
                     [],
                     [new MSBuildProjectReferenceSnapshot(@"..\Lib\Lib.csproj", @"C:\Lib\Lib.csproj")],
@@ -42,6 +64,8 @@ public sealed class SolutionIndexStoreTests
         SolutionIndexSummary summary = store.SaveSnapshot(snapshot);
         IReadOnlyList<IndexedDocumentRow> documents = store.ListDocuments();
         IReadOnlyList<IndexedProjectRow> projects = store.ListProjects();
+        IReadOnlyList<IndexedSymbolRow> symbols = store.ListSymbols();
+        IReadOnlyList<IndexedReferenceRow> references = store.ListReferences(symbols[0].StableKey);
         IReadOnlyList<IndexedPackageReferenceRow> packages = store.ListPackageReferences();
 
         Assert.Equal(1, summary.ProjectCount);
@@ -50,7 +74,10 @@ public sealed class SolutionIndexStoreTests
         Assert.Single(documents);
         Assert.Equal("Program.cs", documents[0].Name);
         Assert.Single(projects);
+        Assert.Equal("project:test", projects[0].StableKey);
         Assert.Equal("net10.0", projects[0].TargetFramework);
+        Assert.Single(symbols);
+        Assert.Single(references);
         Assert.Single(packages);
         Assert.Equal("Microsoft.Data.Sqlite", packages[0].Include);
         Assert.False(TableExists(databasePath, "index_runs"));

@@ -25,6 +25,7 @@
     <Project Path="tests/integration/AIMonitor.Integration.Tests/AIMonitor.Integration.Tests.csproj" />
   </Folder>
   <Folder Name="/tests/smoke/">
+    <Project Path="tests/smoke/AIMonitor.LanguageCorpusSmokeTests/AIMonitor.LanguageCorpusSmokeTests.csproj" />
     <Project Path="tests/smoke/AIMonitor.SmokeTests/AIMonitor.SmokeTests.csproj" />
   </Folder>
   <Folder Name="/tests/fixtures/">

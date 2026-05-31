@@ -13,9 +13,7 @@ obj/
 # Local runtime/config state
 config/appsettings.json
 .claude-local/
-runtime/Working/
-runtime/Logs/
-runtime/Telemetry/
+runtime/
 
 # Local-only probes
 local/
