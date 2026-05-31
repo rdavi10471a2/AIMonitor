@@ -60,7 +60,7 @@ internal static class Program
                 expectedReference.SymbolName,
                 expectedReference.SymbolKind,
                 expectedReference.SignaturePrefix);
-            ExpectReference(references, target, expectedReference.ReferenceFileName);
+            ExpectReference(references, target, expectedReference.ReferenceAnchor);
         }
 
         Console.WriteLine($"Projects: {snapshot.Projects.Count}");
@@ -183,12 +183,14 @@ internal static class Program
     private static void ExpectReference(
         IReadOnlyList<MSBuildReferenceSnapshot> references,
         MSBuildSymbolSnapshot target,
-        string expectedFileName)
+        ExpectedGrepAnchor referenceAnchor)
     {
+        string expectedFileName = Path.GetFileName(referenceAnchor.RelativePath);
         bool found = references.Any(reference =>
             reference.TargetStableKey.Equals(target.StableKey, StringComparison.Ordinal)
-            && Path.GetFileName(reference.FilePath).Equals(expectedFileName, StringComparison.OrdinalIgnoreCase));
-        Expect(found, $"Reference to {target.Signature} was not found in {expectedFileName}.");
+            && Path.GetFileName(reference.FilePath).Equals(expectedFileName, StringComparison.OrdinalIgnoreCase)
+            && reference.Snippet.Contains(referenceAnchor.ExpectedText, StringComparison.Ordinal));
+        Expect(found, $"Reference to {target.Signature} was not found at grep anchor {referenceAnchor.RelativePath}: {referenceAnchor.ExpectedText}");
     }
 
     private static bool PathHasSegment(string filePath, string segment)

@@ -135,6 +135,7 @@ public sealed class CliIndexQueryTests
             ?? throw new InvalidOperationException("Missing staged file path.");
         Assert.Equal(stagedHash, stageDocument.RootElement.GetProperty("stagedHash").GetString());
 
+        await LaunchDiffAsync(fixture, stagedRecordId);
         File.Copy(stagedFilePath, fixture.ProgramFilePath, overwrite: true);
 
         CliResult decision = await RunCliAsync(
@@ -552,6 +553,66 @@ public sealed class CliIndexQueryTests
     }
 
     [Fact]
+    public async Task Edit_launch_diff_blocks_when_staged_candidate_changes_after_stage()
+    {
+        CliFixture fixture = CreateFixture();
+
+        CliResult refresh = await RunCliAsync(
+            "edit",
+            "refresh",
+            "--file",
+            fixture.ProgramFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, refresh.ExitCode);
+        using JsonDocument refreshDocument = JsonDocument.Parse(refresh.StdOut);
+        string workingFilePath = refreshDocument.RootElement.GetProperty("workingFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing working file path.");
+        await File.WriteAllTextAsync(workingFilePath, "namespace Example { internal static class Program { public static string Value => \"candidate\"; } }");
+
+        CliResult stage = await RunCliAsync(
+            "edit",
+            "stage",
+            "--file",
+            fixture.ProgramFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, stage.ExitCode);
+        using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
+        string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
+            ?? throw new InvalidOperationException("Missing staged record id.");
+        string stagedFilePath = stageDocument.RootElement.GetProperty("stagedFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing staged file path.");
+        await File.WriteAllTextAsync(stagedFilePath, "namespace Example { internal static class Program { public static string Value => \"tampered\"; } }");
+
+        CliResult launch = await RunCliAsync(
+            "edit",
+            "launch-diff",
+            "--staged-record-id",
+            stagedRecordId,
+            "--diff-tool",
+            GetFakeDiffToolPath(),
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, launch.ExitCode);
+        using JsonDocument launchDocument = JsonDocument.Parse(launch.StdOut);
+        JsonElement validation = launchDocument.RootElement.GetProperty("preMergeValidation");
+        Assert.Equal("staged-hash-mismatch", validation.GetProperty("status").GetString());
+        Assert.True(validation.GetProperty("isError").GetBoolean());
+        Assert.False(launchDocument.RootElement.GetProperty("diffLaunch").GetProperty("launched").GetBoolean());
+        Assert.Equal("blocked-premerge-validation", launchDocument.RootElement.GetProperty("diffLaunch").GetProperty("status").GetString());
+    }
+
+    [Fact]
     public async Task Edit_new_file_accepts_when_watched_file_matches_staged_candidate()
     {
         CliFixture fixture = CreateFixture();
@@ -599,8 +660,10 @@ public sealed class CliIndexQueryTests
         Assert.True(File.Exists(reviewBaselineFilePath));
         Assert.False(File.Exists(newFilePath));
 
-        File.Copy(stagedFilePath, reviewBaselineFilePath, overwrite: true);
-        Assert.False(File.Exists(newFilePath));
+        await LaunchDiffAsync(fixture, stagedRecordId);
+        Directory.CreateDirectory(Path.GetDirectoryName(newFilePath)!);
+        File.Copy(stagedFilePath, newFilePath, overwrite: true);
+        Assert.True(File.Exists(newFilePath));
 
         CliResult decision = await RunCliAsync(
             "edit",
@@ -782,6 +845,7 @@ public sealed class CliIndexQueryTests
             RedirectStandardOutput = true,
             UseShellExecute = false
         };
+        process.StartInfo.Environment["AIMONITOR_DISABLE_VALIDATION_DIALOG"] = "1";
 
         process.Start();
         Task<string> stdout = process.StandardOutput.ReadToEndAsync();
@@ -789,6 +853,37 @@ public sealed class CliIndexQueryTests
         using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(60));
         await process.WaitForExitAsync(timeout.Token);
         return new CliResult(process.ExitCode, await stdout, await stderr);
+    }
+
+    private static async Task LaunchDiffAsync(CliFixture fixture, string stagedRecordId)
+    {
+        CliResult launch = await RunCliAsync(
+            "edit",
+            "launch-diff",
+            "--staged-record-id",
+            stagedRecordId,
+            "--diff-tool",
+            GetFakeDiffToolPath(),
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, launch.ExitCode);
+        using JsonDocument launchDocument = JsonDocument.Parse(launch.StdOut);
+        Assert.Equal("passed", launchDocument.RootElement.GetProperty("preMergeValidation").GetProperty("status").GetString());
+        Assert.True(launchDocument.RootElement.GetProperty("diffLaunch").GetProperty("launched").GetBoolean());
+    }
+
+    private static string GetFakeDiffToolPath()
+    {
+        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "where.exe");
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException("Unable to find a harmless executable for diff-launch tests.", path);
+        }
+
+        return path;
     }
 
     private static string GetBuildConfiguration()

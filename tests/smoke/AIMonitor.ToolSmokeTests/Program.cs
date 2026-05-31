@@ -97,8 +97,7 @@ internal static class Program
         [
             Path.Combine("Components", "Pages", "DomainObjectModeler", "DomainObjectModeler.Selection.cs"),
             Path.Combine("SchemaStudio.Data", "Repositories", "DatabaseRepository.cs"),
-            Path.Combine("SchemaStudio.Data", "Repositories", "DatabaseRelationshipRepository.cs"),
-            Path.Combine("Components", "Pages", "ParserLab.razor")
+            Path.Combine("SchemaStudio.Data", "Repositories", "DatabaseRelationshipRepository.cs")
         ];
 
         IndexSnapshot index = await BuildIndexAsync(repositoryRoot, solutionPath, Path.Combine(runRoot, "runtime"));
@@ -132,7 +131,7 @@ internal static class Program
             int grepAnchors = File.Exists(fullPath)
                 ? CountGrepOccurrences(grepCorpus, Path.GetFileNameWithoutExtension(relativePath).Split('.').First())
                 : 0;
-            passed &= File.Exists(fullPath) && (fileSymbols.Count > 0 || fileReferences.Count > 0 || relativePath.EndsWith(".razor", StringComparison.OrdinalIgnoreCase));
+            passed &= File.Exists(fullPath) && (fileSymbols.Count > 0 || fileReferences.Count > 0);
             summary.AppendLine($"| `{relativePath}` | `{fileSymbols.Count}` | `{fileReferences.Count}` | `{grepAnchors}` |");
         }
 
@@ -183,7 +182,7 @@ internal static class Program
                 SyntaxNode root = tree.GetRoot();
                 foreach (SyntaxNode node in root.DescendantNodes().Where(IsReferenceCandidate))
                 {
-                    ISymbol? symbol = GetBestSymbol(model.GetSymbolInfo(node));
+                    ISymbol? symbol = NormalizeSymbol(GetBestSymbol(model.GetSymbolInfo(node)));
                     if (symbol is not null && SymbolEqualityComparer.Default.Equals(symbol.OriginalDefinition, target.OriginalDefinition))
                     {
                         references++;
@@ -208,17 +207,19 @@ internal static class Program
 
     private static bool IsReferenceCandidate(SyntaxNode node)
     {
-        return node is InvocationExpressionSyntax
-            or ObjectCreationExpressionSyntax
-            or IdentifierNameSyntax
-            or MemberAccessExpressionSyntax
-            or TypeOfExpressionSyntax
-            or BinaryExpressionSyntax;
+        return node is IdentifierNameSyntax;
     }
 
     private static ISymbol? GetBestSymbol(SymbolInfo info)
     {
         return info.Symbol ?? info.CandidateSymbols.FirstOrDefault();
+    }
+
+    private static ISymbol? NormalizeSymbol(ISymbol? symbol)
+    {
+        return symbol is IMethodSymbol { ReducedFrom: not null } method
+            ? method.ReducedFrom
+            : symbol;
     }
 
     private static IndexedSymbolRow? FindIndexedSymbol(IReadOnlyList<IndexedSymbolRow> symbols, MatrixCheck check)
@@ -238,14 +239,15 @@ internal static class Program
             new("property", "Value", "Property", "Property", "Value", 3),
             new("field", "Counter", "Field", "Field", "Counter", 3),
             new("event", "Changed", "Event", "Event", "Changed", 2),
-            new("base type", "FixtureBase", "NamedType", "NamedType", "FixtureBase", 1)
+            new("base type", "FixtureBase", "NamedType", "NamedType", "FixtureBase", 1),
+            new("extension method", "Doubled", "Method", "Method", "Doubled", 1)
         ];
     }
 
     private static string BuildFixtureSummary(SolutionIndexSummary summary, IReadOnlyList<MatrixResult> results, bool passed)
     {
         string rows = string.Join(Environment.NewLine, results.Select(result =>
-            $"- `{result.Check.Name}` target `{result.IndexTarget?.StableKey}` Roslyn target resolved `{result.Roslyn?.TargetResolved}` AIMonitor refs `{result.IndexReferences.Count}/{result.Check.ExpectedReferences}` passed `{result.Passed}`"));
+            $"- `{result.Check.Name}` target `{result.IndexTarget?.StableKey}` Roslyn target resolved `{result.Roslyn?.TargetResolved}` Roslyn refs `{result.Roslyn?.ReferenceCount}` AIMonitor refs `{result.IndexReferences.Count}/{result.Check.ExpectedReferences}` passed `{result.Passed}`"));
         return $"""
             # Fixture Index Matrix Smoke
 
@@ -422,6 +424,8 @@ internal static class Program
         public bool Passed =>
             IndexTarget is not null
             && Roslyn?.TargetResolved == true
-            && IndexReferences.Count == Check.ExpectedReferences;
+            && Roslyn.ReferenceCount == Check.ExpectedReferences
+            && IndexReferences.Count == Check.ExpectedReferences
+            && IndexReferences.Count == Roslyn.ReferenceCount;
     }
 }
