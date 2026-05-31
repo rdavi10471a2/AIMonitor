@@ -70,9 +70,11 @@ public sealed class SolutionIndexDatabase
                 name text not null,
                 file_path text not null,
                 folders text not null,
+                content_hash text not null default '',
                 unique(project_id, file_path)
             );
             """);
+        AddColumnIfMissing(connection, transaction, "documents", "content_hash", "text not null default ''");
 
         Execute(connection, transaction, """
             create table if not exists symbols (
@@ -168,5 +170,27 @@ public sealed class SolutionIndexDatabase
         command.Transaction = transaction;
         command.CommandText = commandText;
         command.ExecuteNonQuery();
+    }
+
+    private static void AddColumnIfMissing(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string tableName,
+        string columnName,
+        string definition)
+    {
+        using SqliteCommand check = connection.CreateCommand();
+        check.Transaction = transaction;
+        check.CommandText = $"pragma table_info({tableName});";
+        using SqliteDataReader reader = check.ExecuteReader();
+        while (reader.Read())
+        {
+            if (reader.GetString(1).Equals(columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        Execute(connection, transaction, $"alter table {tableName} add column {columnName} {definition};");
     }
 }

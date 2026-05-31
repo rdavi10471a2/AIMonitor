@@ -5,4 +5,5 @@ public sealed record IndexedDocumentRow(
     string StableKey,
     string Name,
     string FilePath,
-    string Folders);
+    string Folders,
+    string ContentHash = "");
