@@ -6,8 +6,9 @@
     <ProjectReference Include="..\AIMonitor.Workflow\AIMonitor.Workflow.csproj" />
     <ProjectReference Include="..\AIMonitor.MSBuild\AIMonitor.MSBuild.csproj" />
     <ProjectReference Include="..\AIMonitor.Indexing\AIMonitor.Indexing.csproj" />
-    <ProjectReference Include="..\AIMonitor.Storage\AIMonitor.Storage.csproj" />
+    <ProjectReference Include="..\AIMonitor.Logging\AIMonitor.Logging.csproj" />
     <ProjectReference Include="..\AIMonitor.Runtime\AIMonitor.Runtime.csproj" />
+    <ProjectReference Include="..\AIMonitor.Storage\AIMonitor.Storage.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

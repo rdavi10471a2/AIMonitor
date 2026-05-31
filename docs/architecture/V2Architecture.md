@@ -15,6 +15,7 @@ AIMonitor V2 starts from the lessons of MonitorBaseClaude:
 | --- | --- |
 | `AIMonitor.Core` | Shared settings, identities, and plain domain records. |
 | `AIMonitor.Data` | SQLite solution index built from the single watched solution path. |
+| `AIMonitor.Logging` | Unified structured log paths and JSON-lines event logging. |
 | `AIMonitor.Workflow` | Candidate staging, review classification, queues, ledgers, and recovery rules. |
 | `AIMonitor.MSBuild` | Solution/project loading, project graph, compile items, target frameworks, and diagnostics. |
 | `AIMonitor.Indexing` | Symbols, references, callers, relationships, and source maps from MSBuild-loaded projects. |

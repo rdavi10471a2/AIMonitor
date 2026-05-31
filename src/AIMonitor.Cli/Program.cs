@@ -1,5 +1,6 @@
 using AIMonitor.Core;
 using AIMonitor.Data;
+using AIMonitor.Logging;
 using AIMonitor.MSBuild;
 
 namespace AIMonitor.Cli;
@@ -40,13 +41,39 @@ internal static class Program
             string? settingsPath = GetOption(args, "--config");
             MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot, settingsPath);
             string databasePath = MonitorDataPaths.GetDefaultIndexDatabasePath(settings);
+            JsonLinesMonitorLogger logger = new(MonitorLogPaths.GetDefaultLogPath(settings));
+
+            logger.Write(
+                MonitorLogLevel.Information,
+                "AIMonitor.Cli",
+                "index.rebuild.started",
+                "Solution index rebuild started.",
+                new Dictionary<string, string>
+                {
+                    ["watchedSolutionPath"] = settings.WatchedSolutionPath,
+                    ["databasePath"] = databasePath
+                });
 
             SolutionIndexStore store = new(new SolutionIndexDatabase(databasePath));
             SolutionIndexBuilder builder = new(new MSBuildWorkspaceLoader(), store);
             SolutionIndexRunSummary summary = await builder.RebuildAsync(settings);
 
+            logger.Write(
+                MonitorLogLevel.Information,
+                "AIMonitor.Cli",
+                "index.rebuild.completed",
+                "Solution index rebuild completed.",
+                new Dictionary<string, string>
+                {
+                    ["runId"] = summary.RunId.ToString(),
+                    ["projectCount"] = summary.ProjectCount.ToString(),
+                    ["documentCount"] = summary.DocumentCount.ToString(),
+                    ["diagnosticCount"] = summary.DiagnosticCount.ToString()
+                });
+
             Console.WriteLine($"Indexed solution: {settings.WatchedSolutionPath}");
             Console.WriteLine($"Database: {databasePath}");
+            Console.WriteLine($"Log: {logger.LogPath}");
             Console.WriteLine($"Run: {summary.RunId}");
             Console.WriteLine($"Projects: {summary.ProjectCount}");
             Console.WriteLine($"Documents: {summary.DocumentCount}");
