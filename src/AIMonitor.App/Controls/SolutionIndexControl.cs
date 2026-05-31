@@ -438,6 +438,11 @@ public sealed class SolutionIndexControl : UserControl
         string[] segments = relativePath.Split(
             [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
             StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Any(IsHiddenBuildFolder))
+        {
+            return;
+        }
+
         TreeNode parent = projectNode;
         for (int index = 0; index < segments.Length - 1; index++)
         {
@@ -808,6 +813,12 @@ public sealed class SolutionIndexControl : UserControl
     private static bool PathEquals(string first, string second)
     {
         return first.Equals(second, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsHiddenBuildFolder(string segment)
+    {
+        return segment.Equals("bin", StringComparison.OrdinalIgnoreCase)
+            || segment.Equals("obj", StringComparison.OrdinalIgnoreCase);
     }
 
     private static DataGridView CreateGrid()
