@@ -144,6 +144,8 @@ public sealed class CliIndexQueryTests
             stagedRecordId,
             "--decision",
             "accepted",
+            "--expected-staged-hash",
+            stagedHash,
             "--repo-root",
             fixture.RepositoryRoot,
             "--config",
@@ -185,6 +187,61 @@ public sealed class CliIndexQueryTests
 
         Assert.Equal(1, staleReplace.ExitCode);
         Assert.Contains("Run edit refresh", staleReplace.StdErr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Edit_record_decision_accept_requires_expected_staged_hash()
+    {
+        CliFixture fixture = CreateFixture();
+
+        CliResult refresh = await RunCliAsync(
+            "edit",
+            "refresh",
+            "--file",
+            fixture.ProgramFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, refresh.ExitCode);
+        using JsonDocument refreshDocument = JsonDocument.Parse(refresh.StdOut);
+        string workingFilePath = refreshDocument.RootElement.GetProperty("workingFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing working file path.");
+        await File.WriteAllTextAsync(workingFilePath, "namespace Example { internal static class Program { public static string Value => \"changed\"; } }");
+
+        CliResult stage = await RunCliAsync(
+            "edit",
+            "stage",
+            "--file",
+            fixture.ProgramFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, stage.ExitCode);
+        using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
+        string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
+            ?? throw new InvalidOperationException("Missing staged record id.");
+        string stagedFilePath = stageDocument.RootElement.GetProperty("stagedFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing staged file path.");
+        File.Copy(stagedFilePath, fixture.ProgramFilePath, overwrite: true);
+
+        CliResult decision = await RunCliAsync(
+            "edit",
+            "record-decision",
+            "--staged-record-id",
+            stagedRecordId,
+            "--decision",
+            "accepted",
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(1, decision.ExitCode);
+        Assert.Contains("--expected-staged-hash is required", decision.StdErr, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -434,6 +491,67 @@ public sealed class CliIndexQueryTests
     }
 
     [Fact]
+    public async Task Edit_launch_diff_validation_excludes_runtime_when_runtime_is_under_watched_root()
+    {
+        CliFixture fixture = CreateFixture(runtimeUnderWatchedRoot: true);
+        string runtimeMarkerPath = Path.Combine(Path.GetDirectoryName(fixture.WatchedSolutionPath)!, "runtime", "marker.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(runtimeMarkerPath)!);
+        await File.WriteAllTextAsync(runtimeMarkerPath, "runtime state must not be copied into validation");
+
+        CliResult refresh = await RunCliAsync(
+            "edit",
+            "refresh",
+            "--file",
+            fixture.ProgramFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, refresh.ExitCode);
+        using JsonDocument refreshDocument = JsonDocument.Parse(refresh.StdOut);
+        string workingFilePath = refreshDocument.RootElement.GetProperty("workingFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing working file path.");
+        await File.WriteAllTextAsync(workingFilePath, "namespace Example { internal static class Program { public static string Value => \"validation\"; } }");
+
+        CliResult stage = await RunCliAsync(
+            "edit",
+            "stage",
+            "--file",
+            fixture.ProgramFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, stage.ExitCode);
+        using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
+        string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
+            ?? throw new InvalidOperationException("Missing staged record id.");
+
+        CliResult launch = await RunCliAsync(
+            "edit",
+            "launch-diff",
+            "--staged-record-id",
+            stagedRecordId,
+            "--diff-tool",
+            Path.Combine(fixture.RepositoryRoot, "missing-winmerge.exe"),
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, launch.ExitCode);
+        using JsonDocument launchDocument = JsonDocument.Parse(launch.StdOut);
+        string validationWorkspacePath = launchDocument.RootElement
+            .GetProperty("preMergeValidation")
+            .GetProperty("validationWorkspacePath")
+            .GetString()
+            ?? throw new InvalidOperationException("Missing validation workspace path.");
+        Assert.False(File.Exists(Path.Combine(validationWorkspacePath, "runtime", "marker.txt")));
+    }
+
+    [Fact]
     public async Task Edit_new_file_accepts_when_watched_file_matches_staged_candidate()
     {
         CliFixture fixture = CreateFixture();
@@ -473,11 +591,16 @@ public sealed class CliIndexQueryTests
             ?? throw new InvalidOperationException("Missing staged record id.");
         string stagedFilePath = stageDocument.RootElement.GetProperty("stagedFilePath").GetString()
             ?? throw new InvalidOperationException("Missing staged file path.");
+        string stagedHash = stageDocument.RootElement.GetProperty("stagedHash").GetString()
+            ?? throw new InvalidOperationException("Missing staged hash.");
+        string reviewBaselineFilePath = stageDocument.RootElement.GetProperty("reviewBaselineFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing review baseline path.");
         Assert.True(stageDocument.RootElement.GetProperty("isNewFile").GetBoolean());
-        Assert.True(File.Exists(stageDocument.RootElement.GetProperty("reviewBaselineFilePath").GetString()));
+        Assert.True(File.Exists(reviewBaselineFilePath));
+        Assert.False(File.Exists(newFilePath));
 
-        Directory.CreateDirectory(Path.GetDirectoryName(newFilePath)!);
-        File.Copy(stagedFilePath, newFilePath, overwrite: false);
+        File.Copy(stagedFilePath, reviewBaselineFilePath, overwrite: true);
+        Assert.False(File.Exists(newFilePath));
 
         CliResult decision = await RunCliAsync(
             "edit",
@@ -486,6 +609,8 @@ public sealed class CliIndexQueryTests
             stagedRecordId,
             "--decision",
             "accepted",
+            "--expected-staged-hash",
+            stagedHash,
             "--repo-root",
             fixture.RepositoryRoot,
             "--config",
@@ -494,6 +619,7 @@ public sealed class CliIndexQueryTests
         Assert.Equal(0, decision.ExitCode);
         using JsonDocument decisionDocument = JsonDocument.Parse(decision.StdOut);
         Assert.Equal("accepted", decisionDocument.RootElement.GetProperty("classification").GetString());
+        Assert.True(File.Exists(newFilePath));
     }
 
     [Fact]
@@ -551,7 +677,7 @@ public sealed class CliIndexQueryTests
         Assert.False(File.Exists(newFilePath));
     }
 
-    private static CliFixture CreateFixture()
+    private static CliFixture CreateFixture(bool runtimeUnderWatchedRoot = false)
     {
         string repositoryRoot = FindRepositoryRoot();
         string tempRoot = Path.Combine(Path.GetTempPath(), "AIMonitorCliTests", Guid.NewGuid().ToString("N"));
@@ -579,7 +705,9 @@ public sealed class CliIndexQueryTests
         MonitorSettingsLoader.SaveLocal(
             repositoryRoot,
             watchedSolutionPath,
-            Path.Combine(tempRoot, "runtime"),
+            runtimeUnderWatchedRoot
+                ? Path.Combine(tempRoot, "Watched", "runtime")
+                : Path.Combine(tempRoot, "runtime"),
             settingsPath);
         MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot, settingsPath);
         SolutionIndexStore store = new(new SolutionIndexDatabase(MonitorDataPaths.GetDefaultIndexDatabasePath(settings)));
