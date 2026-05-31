@@ -1,0 +1,107 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build solution",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/AIMonitor.slnx"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "test all",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "test",
+        "${workspaceFolder}/AIMonitor.slnx",
+        "--no-restore"
+      ],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": "$msCompile",
+      "dependsOn": "build solution"
+    },
+    {
+      "label": "test workflow",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "test",
+        "${workspaceFolder}/tests/unit/AIMonitor.Workflow.Tests/AIMonitor.Workflow.Tests.csproj",
+        "--no-restore"
+      ],
+      "group": "test",
+      "problemMatcher": "$msCompile",
+      "dependsOn": "build solution"
+    },
+    {
+      "label": "test integration",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "test",
+        "${workspaceFolder}/tests/integration/AIMonitor.Integration.Tests/AIMonitor.Integration.Tests.csproj",
+        "--no-restore"
+      ],
+      "group": "test",
+      "problemMatcher": "$msCompile",
+      "dependsOn": "build solution"
+    },
+    {
+      "label": "run app",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "${workspaceFolder}/src/AIMonitor.App/AIMonitor.App.csproj"
+      ],
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "cli status",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "${workspaceFolder}/src/AIMonitor.Cli/AIMonitor.Cli.csproj",
+        "--",
+        "status",
+        "--repo-root",
+        "${workspaceFolder}",
+        "--config",
+        "${workspaceFolder}/config/appsettings.json"
+      ],
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "cli index rebuild",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "${workspaceFolder}/src/AIMonitor.Cli/AIMonitor.Cli.csproj",
+        "--",
+        "index",
+        "rebuild",
+        "--repo-root",
+        "${workspaceFolder}",
+        "--config",
+        "${workspaceFolder}/config/appsettings.json"
+      ],
+      "problemMatcher": "$msCompile"
+    }
+  ]
+}
