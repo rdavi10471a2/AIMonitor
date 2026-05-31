@@ -1,19 +1,17 @@
 using System.ComponentModel;
 using AIMonitor.Core;
+using AIMonitor.Logging;
 
 namespace AIMonitor.App.Controls;
 
 [DesignerCategory("Code")]
 public sealed class MonitorDashboardControl : UserControl
 {
-    private const int FriendlySplitterWidth = 12;
-
-    private readonly SplitContainer verticalSplit;
     private readonly TabControl mainTabs;
     private readonly SolutionIndexControl solutionIndexControl;
-    private readonly TextBox logBox;
+    private readonly SharedLogControl sharedLogControl;
     private readonly Label statusLabel;
-    private bool splitterLayoutSized;
+    private MonitorLogService? logService;
 
     public MonitorDashboardControl()
     {
@@ -29,71 +27,49 @@ public sealed class MonitorDashboardControl : UserControl
         {
             Dock = DockStyle.Fill
         };
-        verticalSplit = new SplitContainer
-        {
-            Dock = DockStyle.Fill,
-            Orientation = Orientation.Horizontal,
-            FixedPanel = FixedPanel.Panel2,
-            SplitterWidth = FriendlySplitterWidth,
-            BackColor = SystemColors.ControlDark,
-            Panel2MinSize = 120
-        };
-        verticalSplit.Panel1.BackColor = SystemColors.Control;
-        verticalSplit.Panel2.BackColor = SystemColors.Control;
-
         solutionIndexControl = new SolutionIndexControl
         {
             Dock = DockStyle.Fill,
             MinimumSize = new Size(850, 360)
         };
         solutionIndexControl.StatusChanged += status => statusLabel.Text = status;
-
-        logBox = new TextBox
+        sharedLogControl = new SharedLogControl
         {
-            Dock = DockStyle.Fill,
-            Multiline = true,
-            ReadOnly = true,
-            ScrollBars = ScrollBars.Both,
-            WordWrap = false,
-            Font = new Font(FontFamily.GenericMonospace, 9)
+            Dock = DockStyle.Fill
         };
 
         mainTabs.TabPages.Add(BuildTab("Solution Index", solutionIndexControl));
-        mainTabs.TabPages.Add(BuildTab("Logs", logBox));
+        mainTabs.TabPages.Add(BuildTab("Shared Log", sharedLogControl));
 
-        verticalSplit.Panel1.Controls.Add(mainTabs);
-        verticalSplit.Panel2.Controls.Add(BuildStatusPanel());
-        Controls.Add(verticalSplit);
+        Controls.Add(BuildLayout());
 
         Load += (_, _) =>
         {
-            BeginInvoke(ApplyInitialSplitterLayout);
-            RefreshLogPreview();
+            ConfigureLogViewer();
         };
     }
 
-    private Control BuildStatusPanel()
+    private Control BuildLayout()
     {
-        TableLayoutPanel panel = new()
+        TableLayoutPanel root = new()
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 1,
-            Padding = new Padding(8)
+            ColumnCount = 1,
+            RowCount = 2
         };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        Button refreshLogsButton = new()
-        {
-            Text = "Refresh Logs",
-            AutoSize = true,
-            Anchor = AnchorStyles.Right
-        };
-        refreshLogsButton.Click += (_, _) => RefreshLogPreview();
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
 
-        panel.Controls.Add(statusLabel, 0, 0);
-        panel.Controls.Add(refreshLogsButton, 1, 0);
-        return panel;
+        Panel statusPanel = new()
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(8, 2, 8, 2)
+        };
+        statusPanel.Controls.Add(statusLabel);
+
+        root.Controls.Add(mainTabs, 0, 0);
+        root.Controls.Add(statusPanel, 0, 1);
+        return root;
     }
 
     private static TabPage BuildTab(string title, Control control)
@@ -103,38 +79,20 @@ public sealed class MonitorDashboardControl : UserControl
         return page;
     }
 
-    private void ApplyInitialSplitterLayout()
-    {
-        if (splitterLayoutSized)
-        {
-            return;
-        }
-
-        if (verticalSplit.Height < 500)
-        {
-            BeginInvoke(ApplyInitialSplitterLayout);
-            return;
-        }
-
-        splitterLayoutSized = true;
-        int maxDistance = Math.Max(25, verticalSplit.Height - verticalSplit.Panel2MinSize - verticalSplit.SplitterWidth);
-        verticalSplit.SplitterDistance = Math.Clamp(verticalSplit.Height - 160, verticalSplit.Panel1MinSize, maxDistance);
-    }
-
-    private void RefreshLogPreview()
+    private void ConfigureLogViewer()
     {
         try
         {
             string repositoryRoot = AppPathResolver.FindRepositoryRoot();
             MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot);
-            string logPath = Logging.MonitorLogPaths.GetDefaultLogPath(settings);
-            logBox.Text = File.Exists(logPath)
-                ? string.Join(Environment.NewLine, File.ReadLines(logPath).TakeLast(500))
-                : $"No log file yet: {logPath}";
+            logService = new MonitorLogService(MonitorLogPaths.GetDefaultLogPath(settings));
+            solutionIndexControl.SetLogger(logService);
+            sharedLogControl.Connect(logService.LogPath, logService);
+            logService.Write(MonitorLogLevel.Information, "AIMonitor.App", "app.started", "AIMonitor UI logging service connected.");
         }
         catch (Exception ex)
         {
-            logBox.Text = ex.Message;
+            statusLabel.Text = ex.Message;
         }
     }
 }

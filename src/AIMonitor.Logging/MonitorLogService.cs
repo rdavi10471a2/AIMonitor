@@ -3,25 +3,27 @@ using System.Text.Json.Serialization;
 
 namespace AIMonitor.Logging;
 
-public sealed class JsonLinesMonitorLogger : IMonitorLogger
+public sealed class MonitorLogService : IMonitorLogger, IMonitorLogEventSource
 {
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = false
     };
 
-    static JsonLinesMonitorLogger()
+    private readonly object gate = new();
+    private readonly string logPath;
+
+    static MonitorLogService()
     {
         SerializerOptions.Converters.Add(new JsonStringEnumConverter());
     }
 
-    private readonly object gate = new();
-    private readonly string logPath;
-
-    public JsonLinesMonitorLogger(string logPath)
+    public MonitorLogService(string logPath)
     {
         this.logPath = Path.GetFullPath(logPath);
     }
+
+    public event Action<MonitorLogEntry>? EntryWritten;
 
     public string LogPath => logPath;
 
@@ -53,5 +55,7 @@ public sealed class JsonLinesMonitorLogger : IMonitorLogger
             using StreamWriter writer = new(stream);
             writer.WriteLine(line);
         }
+
+        EntryWritten?.Invoke(entry);
     }
 }

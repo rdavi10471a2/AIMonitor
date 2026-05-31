@@ -27,6 +27,7 @@ public sealed class SolutionIndexControl : UserControl
     private readonly SplitContainer detailSplit;
     private MonitorSettings? settings;
     private SolutionIndexStore? store;
+    private IMonitorLogger? logger;
     private bool splitterLayoutSized;
 
     public SolutionIndexControl()
@@ -93,6 +94,11 @@ public sealed class SolutionIndexControl : UserControl
 
     public event Action<string>? StatusChanged;
 
+    public void SetLogger(IMonitorLogger monitorLogger)
+    {
+        logger = monitorLogger;
+    }
+
     private Control BuildLayout()
     {
         TableLayoutPanel root = new()
@@ -121,7 +127,7 @@ public sealed class SolutionIndexControl : UserControl
 
         GroupBox treeGroup = new()
         {
-            Text = "MSBuild Projects",
+            Text = "Solution Explorer",
             Dock = DockStyle.Fill
         };
         treeGroup.Controls.Add(indexTree);
@@ -223,11 +229,10 @@ public sealed class SolutionIndexControl : UserControl
         SetBusy(true);
         try
         {
-            JsonLinesMonitorLogger logger = new(MonitorLogPaths.GetDefaultLogPath(settings));
-            logger.Write(MonitorLogLevel.Information, "AIMonitor.App", "index.rebuild.started", "WinForms index rebuild started.");
+            logger?.Write(MonitorLogLevel.Information, "AIMonitor.App", "index.rebuild.started", "WinForms index rebuild started.");
             SolutionIndexBuilder builder = new(new MSBuildWorkspaceLoader(), store);
             SolutionIndexSummary summary = await builder.RebuildAsync(settings);
-            logger.Write(MonitorLogLevel.Information, "AIMonitor.App", "index.rebuild.completed", "WinForms index rebuild completed.");
+            logger?.Write(MonitorLogLevel.Information, "AIMonitor.App", "index.rebuild.completed", "WinForms index rebuild completed.");
             RefreshFromStore();
             SetStatus($"Indexed {summary.ProjectCount} projects, {summary.DocumentCount} documents, {summary.DiagnosticCount} diagnostics.");
         }
@@ -261,40 +266,113 @@ public sealed class SolutionIndexControl : UserControl
         referencesGrid.DataSource = references.ToList();
         packagesGrid.DataSource = packages.ToList();
         rawBox.Text = $"Projects: {projects.Count}{Environment.NewLine}Documents: {documents.Count}{Environment.NewLine}Symbols: {symbols.Count}{Environment.NewLine}References: {references.Count}";
-        LoadTree(projects, documents);
+        LoadTree(projects, documents, packages);
         SetStatus($"Current index | Projects: {summary.ProjectCount} | Documents: {summary.DocumentCount} | Symbols: {symbols.Count} | References: {references.Count} | C# symbols only for now.");
     }
 
     private void LoadTree(
         IReadOnlyList<IndexedProjectRow> projects,
-        IReadOnlyList<IndexedDocumentRow> documents)
+        IReadOnlyList<IndexedDocumentRow> documents,
+        IReadOnlyList<IndexedPackageReferenceRow> packages)
     {
         indexTree.BeginUpdate();
         try
         {
             indexTree.Nodes.Clear();
+            string solutionName = settings is null
+                ? "Solution"
+                : Path.GetFileNameWithoutExtension(settings.WatchedSolutionPath);
+            TreeNode solutionNode = new(solutionName)
+            {
+                Tag = settings?.WatchedSolutionPath
+            };
+
             foreach (IndexedProjectRow project in projects)
             {
                 TreeNode projectNode = new($"{project.Name} ({project.TargetFramework})")
                 {
                     Tag = project.ProjectPath
                 };
-                foreach (IndexedDocumentRow document in documents.Where(document => string.Equals(document.ProjectPath, project.ProjectPath, StringComparison.OrdinalIgnoreCase)))
+                TreeNode dependenciesNode = new("Dependencies")
                 {
-                    projectNode.Nodes.Add(new TreeNode(Path.GetFileName(document.FilePath))
+                    Tag = $"{project.ProjectPath}|dependencies"
+                };
+                foreach (IndexedPackageReferenceRow package in packages.Where(package => string.Equals(package.ProjectPath, project.ProjectPath, StringComparison.OrdinalIgnoreCase)))
+                {
+                    dependenciesNode.Nodes.Add(new TreeNode($"{package.Include} ({package.Version})")
                     {
-                        Tag = document.FilePath
+                        Tag = $"{project.ProjectPath}|package|{package.Include}"
                     });
                 }
 
-                indexTree.Nodes.Add(projectNode);
+                projectNode.Nodes.Add(dependenciesNode);
+
+                foreach (IndexedDocumentRow document in documents.Where(document => string.Equals(document.ProjectPath, project.ProjectPath, StringComparison.OrdinalIgnoreCase)))
+                {
+                    AddDocumentNode(projectNode, project.ProjectPath, document);
+                }
+
+                solutionNode.Nodes.Add(projectNode);
+                projectNode.Expand();
             }
+
+            indexTree.Nodes.Add(solutionNode);
+            solutionNode.Expand();
         }
         finally
         {
             indexTree.EndUpdate();
         }
     }
+
+    private static void AddDocumentNode(TreeNode projectNode, string projectPath, IndexedDocumentRow document)
+    {
+        string projectDirectory = Path.GetDirectoryName(projectPath) ?? string.Empty;
+        string relativePath = Path.GetRelativePath(projectDirectory, document.FilePath);
+        string[] segments = relativePath.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+        TreeNode parent = projectNode;
+        for (int index = 0; index < segments.Length - 1; index++)
+        {
+            parent = GetOrAddFolderNode(parent, segments[index]);
+        }
+
+        parent.Nodes.Add(new TreeNode(segments.LastOrDefault() ?? Path.GetFileName(document.FilePath))
+        {
+            Tag = document.FilePath
+        });
+    }
+
+    private static TreeNode GetOrAddFolderNode(TreeNode parent, string folderName)
+    {
+        foreach (TreeNode child in parent.Nodes)
+        {
+            if (child.Tag is SolutionExplorerFolderTag tag
+                && tag.Name.Equals(folderName, StringComparison.OrdinalIgnoreCase))
+            {
+                return child;
+            }
+        }
+
+        TreeNode folder = new(folderName)
+        {
+            Tag = new SolutionExplorerFolderTag(folderName)
+        };
+
+        int insertIndex = 0;
+        while (insertIndex < parent.Nodes.Count
+            && parent.Nodes[insertIndex].Tag is string existing
+            && existing.EndsWith("|dependencies", StringComparison.OrdinalIgnoreCase))
+        {
+            insertIndex++;
+        }
+
+        parent.Nodes.Insert(insertIndex, folder);
+        return folder;
+    }
+
+    private sealed record SolutionExplorerFolderTag(string Name);
 
     private void SelectTreeNode(TreeNode? node)
     {

@@ -46,6 +46,8 @@ runtime/   generated monitor state; ignored
 
 Generated monitor logs go under `runtime/logs/aimonitor.ndjson`. Adapters may print human status to their console/UI, but durable operational events should use the shared logger.
 
+The operator app owns the shared logging service. Child controls and subsystems receive an `IMonitorLogger` and send log messages to it; they should not create their own UI log panes or long-lived file handles. The app log view listens to in-process log events while the service writes JSON-lines entries with shared file access.
+
 Generated solution-specific state goes under `runtime/watched-solutions/<solution-name>-<path-hash>/`.
 
 ## Build

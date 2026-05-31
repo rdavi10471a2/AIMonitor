@@ -31,3 +31,7 @@ AIMonitor V2 starts from the lessons of MonitorBaseClaude:
 The first real capability is loading SDK-style projects through `MSBuildWorkspace` and preserving project identity before indexing.
 
 The first persisted capability is rebuilding `runtime/data/solution-index.sqlite` from `Monitor:WatchedSolutionPath`.
+
+## Logging Boundary
+
+The host process owns log serialization. UI controls, workflow components, MCP, CLI, and future runtime adapters should emit events through `IMonitorLogger` instead of opening their own durable log writers. WinForms can expose a live log view by subscribing to the host-owned `IMonitorLogEventSource`; file reads and writes must allow shared access so diagnostics tools, the UI, and background work do not fight over the JSON-lines file.
