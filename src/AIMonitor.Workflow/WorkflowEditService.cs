@@ -434,6 +434,7 @@ public sealed class WorkflowEditService
             throw new FileNotFoundException("Staged candidate file was not found.", record.StagedFilePath);
         }
 
+        RemoveEmptyNewFilePlaceholderOnReject(record, decision);
         bool watchedFileExists = File.Exists(record.WatchedFilePath);
         string watchedHash = watchedFileExists ? FileHash.Compute(record.WatchedFilePath) : string.Empty;
         ReviewDecisionResult result = new ReviewDecisionClassifier().Classify(
@@ -464,6 +465,22 @@ public sealed class WorkflowEditService
         }
 
         return record;
+    }
+
+    private static void RemoveEmptyNewFilePlaceholderOnReject(StagedEditRecord record, string decision)
+    {
+        if (!record.IsNewFile
+            || !decision.Trim().Equals("rejected", StringComparison.OrdinalIgnoreCase)
+            || !File.Exists(record.WatchedFilePath))
+        {
+            return;
+        }
+
+        FileInfo watchedFile = new(record.WatchedFilePath);
+        if (watchedFile.Length == 0)
+        {
+            File.Delete(record.WatchedFilePath);
+        }
     }
 
     public EditSessionStatus Accept(string watchedFilePath, string expectedStagedHash)

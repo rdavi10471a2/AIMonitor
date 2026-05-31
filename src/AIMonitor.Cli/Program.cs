@@ -258,6 +258,7 @@ internal static class Program
             };
         }
 
+        EnsureNewFileReviewTarget(record);
         DiffLaunchResult result = new WinMergeDiffToolLauncher().Launch(new DiffLaunchRequest
         {
             OriginalFilePath = GetDiffOriginalFilePath(record),
@@ -272,6 +273,22 @@ internal static class Program
             diffLaunch = result,
             nextStep = "After WinMerge review, save the staged candidate into the watched source for accept, or leave watched source unchanged for reject. Then run edit record-decision."
         };
+    }
+
+    private static void EnsureNewFileReviewTarget(StagedEditRecord record)
+    {
+        if (!record.IsNewFile || File.Exists(record.WatchedFilePath))
+        {
+            return;
+        }
+
+        string? watchedDirectory = Path.GetDirectoryName(record.WatchedFilePath);
+        if (!string.IsNullOrWhiteSpace(watchedDirectory))
+        {
+            Directory.CreateDirectory(watchedDirectory);
+        }
+
+        File.WriteAllText(record.WatchedFilePath, string.Empty);
     }
 
     private static string GetDiffOriginalFilePath(StagedEditRecord record)
