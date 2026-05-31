@@ -48,9 +48,9 @@ Future watched source path
   -> edit stage
   -> immutable staged candidate + blank review baseline
   -> edit launch-diff
-  -> empty watched-source placeholder is created for WinMerge if needed
-  -> operator saves staged candidate into the future watched path or leaves it absent
+  -> operator saves staged candidate into the runtime review target or leaves it unchanged
   -> edit record-decision --decision accepted|rejected
+  -> accepted decision creates the watched file from the reviewed runtime target
 ```
 
 ## Commands
@@ -64,7 +64,7 @@ aimonitor edit status --file <watched-file>
 aimonitor edit stage --file <watched-file> --ledger-summary "<short summary>"
 aimonitor edit launch-diff --staged-record-id <id>
 aimonitor edit launch-diff --staged-record-id <id> --force-validation
-aimonitor edit record-decision --staged-record-id <id> --decision accepted
+aimonitor edit record-decision --staged-record-id <id> --decision accepted --expected-staged-hash <hash>
 aimonitor edit record-decision --staged-record-id <id> --decision rejected
 ```
 
@@ -72,7 +72,7 @@ The `refresh` response includes `workingFilePath`. Codex should edit that monito
 
 `edit replace-text` operates only on the monitor-owned Working file. It does not mutate watched source. It counts exact matches, can enforce `--expected-matches`, can guard against stale candidates with `--expected-working-hash`, and normalizes replacement text to the Working file's dominant line ending. This is mainly the Codex-safe local command path; Claude can continue to use its MCP/editor edit surface when that remains stable. When agents edit Working files directly, they should preserve existing line endings. New files should follow `.editorconfig` or nearby project files.
 
-`edit launch-diff` runs the pre-merge validation gate by copying the watched solution root into monitor runtime validation storage, overlaying the staged candidate, and running `dotnet build` against that validation copy. Validation itself does not mutate the watched source tree. After validation passes or the user approves the override, new-file review may create a zero-byte watched-source placeholder so WinMerge has a real save target at the future watched path. If validation fails on an interactive Windows desktop, AIMonitor shows a human OK/Cancel override dialog before WinMerge opens. If no interactive dialog is available, the command blocks launch and tells the agent to ask the user in chat. `--force-validation` is the non-interactive equivalent and should only be used after explicit human approval.
+`edit launch-diff` runs the pre-merge validation gate by copying the watched solution root into monitor runtime validation storage, overlaying the staged candidate, and running `dotnet build` against that validation copy. Validation itself does not mutate the watched source tree, and runtime/validation storage is excluded from the validation copy. For new files, WinMerge reviews monitor-owned runtime files; the watched file is not created until `record-decision accepted --expected-staged-hash <hash>` verifies the reviewed runtime content. If validation fails on an interactive Windows desktop, AIMonitor shows a human OK/Cancel override dialog before WinMerge opens. If no interactive dialog is available, the command blocks launch and tells the agent to ask the user in chat. `--force-validation` is the non-interactive equivalent and should only be used after explicit human approval.
 
 `accepted-normalized` is a successful accept where exact bytes differed but normalized content matched, usually because WinMerge or an editor normalized line endings. The next operation must still be `edit refresh` so future edits use the bytes and line endings actually saved in watched source.
 
@@ -83,19 +83,19 @@ The `refresh` response includes `workingFilePath`. Codex should edit that monito
 - Pre-merge validation runs before WinMerge launch. Failed validation blocks review unless the user approves the override dialog, or the agent asks in chat and the caller passes `--force-validation` after explicit human approval.
 - Existing files must enter through `edit refresh`; missing files must enter through explicit `edit new`.
 - `edit new` never creates the watched source file. It creates an empty monitor-owned Working candidate and stages against a blank review baseline.
-- `edit launch-diff` may create a zero-byte watched-source placeholder for new files after validation so WinMerge can save into a real watched path.
-- `record-decision accepted` requires the watched file hash to match the staged candidate hash.
+- `edit launch-diff` must not create watched-source placeholders for new files. New-file review stays in runtime until accepted.
+- `record-decision accepted` requires `--expected-staged-hash`; existing-file accepts require the watched file hash to match the staged candidate hash, while new-file accepts create the watched file from the reviewed runtime target only after that verification.
 - `record-decision rejected` requires the watched file hash to match the original refresh hash.
 - Accepted decisions set `requiresRefresh=true`; `edit status` reports `refresh-required`, and further edit/stage/replace operations fail until `edit refresh` captures the saved watched-source bytes.
 - Accepted decisions trigger a post-accept solution index rebuild and return an `indexRefresh` object. The rebuild emits `index.refresh-after-accept.started` and completed/failed telemetry.
-- For new files, `record-decision rejected` removes an empty placeholder and requires the watched source file to remain absent.
+- For new files, `record-decision rejected` requires the watched source file to remain absent.
 - Mismatched vote and file state becomes `dirty-unexpected`.
 - Status classifies unchanged and pending edit state before review; staged records classify accepted, rejected, accepted-normalized, and dirty-unexpected after review.
 - Future MCP tools should call the same workflow service rather than implement a second edit path.
 
 ## Runtime Cleanup
 
-Workflow history, staged candidates, validation workspaces, logs, and index artifacts are runtime state. They should stay under `runtime/` and out of watched projects. Retention should be an explicit cleanup/prune action, preferably from the UI or a dedicated command, rather than automatic pruning on every workflow command. Agents should still clean obvious partial test artifacts deliberately by exact path, especially empty new-file placeholders and `.bak` files created during manual review.
+Workflow history, staged candidates, validation workspaces, logs, and index artifacts are runtime state. They should stay under `runtime/` and out of watched projects. Retention should be an explicit cleanup/prune action, preferably from the UI or a dedicated command, rather than automatic pruning on every workflow command. Agents should still clean obvious partial test artifacts deliberately by exact path, especially `.bak` files created during manual review.
 
 ## Tests / Smokes
 
