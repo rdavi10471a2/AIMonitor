@@ -70,8 +70,7 @@
       "command": "dotnet",
       "args": [
         "test",
-        "${workspaceFolder}/tests/unit/AIMonitor.Workflow.Tests/AIMonitor.Workflow.Tests.csproj",
-        "--no-restore"
+        "${workspaceFolder}/tests/unit/AIMonitor.Workflow.Tests/AIMonitor.Workflow.Tests.csproj"
       ],
       "group": "test",
       "problemMatcher": "$msCompile",
@@ -83,8 +82,7 @@
       "command": "dotnet",
       "args": [
         "test",
-        "${workspaceFolder}/tests/integration/AIMonitor.Integration.Tests/AIMonitor.Integration.Tests.csproj",
-        "--no-restore"
+        "${workspaceFolder}/tests/integration/AIMonitor.Integration.Tests/AIMonitor.Integration.Tests.csproj"
       ],
       "group": "test",
       "problemMatcher": "$msCompile",
