@@ -18,12 +18,15 @@
       "Bash(git check-ignore *)",
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
-      "Bash(git rebase *)"
+      "Bash(git rebase *)",
+      "WebSearch",
+      "PowerShell($p = Get-Process -Name \"AIMonitor.App\" -ErrorAction SilentlyContinue; if \\($p\\) { \"RUNNING pid=$\\($p.Id\\)\" } else { $exe=\"C:\\\\VSCodeProjects\\\\AIMonitor\\\\src\\\\AIMonitor.App\\\\bin\\\\Debug\\\\net10.0-windows\\\\AIMonitor.App.exe\"; Start-Process -FilePath $exe -WorkingDirectory \\(Split-Path $exe\\); Start-Sleep -Seconds 4; $p2=Get-Process -Name \"AIMonitor.App\" -ErrorAction SilentlyContinue; \"STARTED pid=$\\($p2.Id\\)\" })"
     ],
     "deny": [
       "Edit(//c/Schema Studio - DBV2/**)",
       "Write(//c/Schema Studio - DBV2/**)",
       "NotebookEdit(//c/Schema Studio - DBV2/**)"
-    ]
+    ],
+    "defaultMode": "bypassPermissions"
   }
 }
