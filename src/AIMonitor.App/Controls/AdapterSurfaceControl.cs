@@ -454,7 +454,11 @@ public sealed class AdapterSurfaceControl : UserControl
                 ? toolName
                 : entry.Properties.TryGetValue("command", out string? command)
                     ? command
-                    : entry.Properties.TryGetValue("testName", out string? testName) ? testName : string.Empty;
+                    : entry.Properties.TryGetValue("testName", out string? testName)
+                        ? testName
+                        : entry.EventName.StartsWith("index.refresh-after-accept.", StringComparison.OrdinalIgnoreCase)
+                            ? "index refresh after accept"
+                            : string.Empty;
             IsError = entry.Properties.TryGetValue("isError", out string? isError) ? isError : string.Empty;
             DurationMs = entry.Properties.TryGetValue("durationMs", out string? durationMs) ? durationMs : string.Empty;
             ContentCount = entry.Properties.TryGetValue("contentCount", out string? contentCount) ? contentCount : string.Empty;
@@ -474,6 +478,9 @@ public sealed class AdapterSurfaceControl : UserControl
                 ?? string.Empty);
             Outcome = ExtractResponseString(responseDocument, "classification")
                 ?? ExtractResponseString(responseDocument, "status")
+                ?? ExtractResponseString(responseDocument, "indexRefresh.status")
+                ?? (entry.Properties.TryGetValue("validationStatus", out string? validationStatus) ? validationStatus : null)
+                ?? (entry.Properties.TryGetValue("projectCount", out _) ? "rebuilt" : null)
                 ?? (entry.Properties.TryGetValue("outcome", out string? testOutcome) ? testOutcome : null)
                 ?? string.Empty;
             Review = ExtractResponseString(responseDocument, "launchStatus")
@@ -482,11 +489,13 @@ public sealed class AdapterSurfaceControl : UserControl
             File = ShortPath(
                 ExtractResponseString(responseDocument, "watchedFilePath")
                 ?? ExtractResponseString(responseDocument, "stagedRecord.watchedFilePath")
+                ?? (entry.Properties.TryGetValue("watchedFilePath", out string? watchedFilePath) ? watchedFilePath : null)
                 ?? string.Empty);
             Record = ShortId(
                 ExtractResponseString(responseDocument, "stagedRecordId")
                 ?? ExtractResponseString(responseDocument, "stagedRecord.stagedRecordId")
                 ?? ExtractResponseString(responseDocument, "lastStagedRecordId")
+                ?? (entry.Properties.TryGetValue("stagedRecordId", out string? stagedRecordId) ? stagedRecordId : null)
                 ?? string.Empty);
             RawJson = rawJson;
             Detail = new AdapterEventDetail(entry);
