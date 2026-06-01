@@ -1,0 +1,40 @@
+name: AIMonitor CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-test:
+    name: Build and test
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore .\AIMonitor.slnx
+
+      - name: Build
+        run: dotnet build .\AIMonitor.slnx --no-restore
+
+      - name: Test integration MCP workflow
+        run: dotnet test .\tests\integration\AIMonitor.Integration.Tests\AIMonitor.Integration.Tests.csproj --no-build --filter McpServerSmokeTests --logger trx
+
+      - name: Test solution
+        run: dotnet test .\AIMonitor.slnx --no-build --logger trx
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: "**/TestResults/*.trx"

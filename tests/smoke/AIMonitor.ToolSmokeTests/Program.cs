@@ -1,11 +1,16 @@
 using AIMonitor.Core;
 using AIMonitor.Data;
+using AIMonitor.Logging;
 using AIMonitor.MSBuild;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
+using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 
 namespace AIMonitor.ToolSmokeTests;
 
@@ -23,12 +28,222 @@ internal static class Program
             return await RunWebViewerFileByFileAsync();
         }
 
+        if (args.Contains("--mcp-live-workflow", StringComparer.OrdinalIgnoreCase))
+        {
+            return await RunMcpLiveWorkflowAsync();
+        }
+
+        if (args.Contains("--visible-test-suite", StringComparer.OrdinalIgnoreCase))
+        {
+            return RunVisibleTestSuite();
+        }
+
         Console.WriteLine("AIMonitor tool smoke tests");
         Console.WriteLine();
         Console.WriteLine("Available modes:");
         Console.WriteLine("  --fixture-index-matrix    Build a generated fixture and compare AIMonitor index rows with an independent Roslyn pass.");
         Console.WriteLine("  --webviewer-file-by-file  Compare selected SchemaStudioWebViewer files against index and grep sanity counts.");
+        Console.WriteLine("  --mcp-live-workflow       Call the local MCP server against config/appsettings.json so WinForms can show adapter telemetry.");
+        Console.WriteLine("  --visible-test-suite      Run dotnet test and emit test run/case telemetry to the WinForms monitor log.");
         return 2;
+    }
+
+    private static int RunVisibleTestSuite()
+    {
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot);
+        IMonitorLogger logger = CreateMonitorLogger(settings);
+        string runId = $"tests-{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}"[..48];
+        string resultsRoot = Path.Combine(repositoryRoot, "runtime", "test-results", runId);
+        Directory.CreateDirectory(resultsRoot);
+
+        logger.Write(
+            MonitorLogLevel.Information,
+            "AIMonitor.ToolSmokeTests",
+            "test.run.started",
+            "Visible test suite started.",
+            new Dictionary<string, string>
+            {
+                ["runId"] = runId,
+                ["command"] = "dotnet test .\\AIMonitor.slnx --no-build",
+                ["resultsRoot"] = resultsRoot
+            });
+
+        ProcessResult result = RunProcess(
+            "dotnet",
+            [
+                "test",
+                ".\\AIMonitor.slnx",
+                "--no-build",
+                "--logger",
+                "trx",
+                "--results-directory",
+                resultsRoot
+            ],
+            repositoryRoot,
+            TimeSpan.FromMinutes(5));
+
+        int caseCount = EmitTrxCaseTelemetry(logger, runId, resultsRoot);
+        logger.Write(
+            result.ExitCode == 0 ? MonitorLogLevel.Information : MonitorLogLevel.Error,
+            "AIMonitor.ToolSmokeTests",
+            "test.run.completed",
+            result.ExitCode == 0 ? "Visible test suite completed." : "Visible test suite failed.",
+            new Dictionary<string, string>
+            {
+                ["runId"] = runId,
+                ["exitCode"] = result.ExitCode.ToString(),
+                ["timedOut"] = result.TimedOut.ToString().ToLowerInvariant(),
+                ["caseTelemetryCount"] = caseCount.ToString(),
+                ["resultsRoot"] = resultsRoot,
+                ["stdoutPreview"] = Preview(result.StandardOutput),
+                ["stderrPreview"] = Preview(result.StandardError)
+            });
+
+        Console.WriteLine($"Visible test telemetry run: {runId}");
+        Console.WriteLine($"TRX results: {resultsRoot}");
+        Console.WriteLine($"Case telemetry emitted: {caseCount}");
+        return result.ExitCode;
+    }
+
+    private static IMonitorLogger CreateMonitorLogger(MonitorSettings settings)
+    {
+        return new MonitorLogPipeClientLogger(
+            MonitorLogPipeNames.GetDefaultPipeName(settings),
+            new JsonLinesMonitorLogger(MonitorLogPaths.GetDefaultLogPath(settings)),
+            TimeSpan.FromSeconds(1));
+    }
+
+    private static int EmitTrxCaseTelemetry(IMonitorLogger logger, string runId, string resultsRoot)
+    {
+        int count = 0;
+        foreach (string trxPath in Directory.EnumerateFiles(resultsRoot, "*.trx", SearchOption.AllDirectories))
+        {
+            XDocument document = XDocument.Load(trxPath);
+            XNamespace ns = document.Root?.Name.Namespace ?? XNamespace.None;
+            foreach (XElement result in document.Descendants(ns + "UnitTestResult"))
+            {
+                string testName = result.Attribute("testName")?.Value ?? string.Empty;
+                string outcome = result.Attribute("outcome")?.Value ?? string.Empty;
+                string duration = result.Attribute("duration")?.Value ?? string.Empty;
+                string testId = result.Attribute("testId")?.Value ?? string.Empty;
+                logger.Write(
+                    outcome.Equals("Passed", StringComparison.OrdinalIgnoreCase) ? MonitorLogLevel.Information : MonitorLogLevel.Error,
+                    "AIMonitor.ToolSmokeTests",
+                    "test.case.completed",
+                    $"{testName} {outcome}.",
+                    new Dictionary<string, string>
+                    {
+                        ["runId"] = runId,
+                        ["testName"] = testName,
+                        ["testId"] = testId,
+                        ["outcome"] = outcome,
+                        ["duration"] = duration,
+                        ["trxPath"] = trxPath
+                    });
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static string Preview(string value)
+    {
+        string singleLine = string.Join(" ", value.Split([' ', '\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries));
+        return singleLine.Length <= 600 ? singleLine : singleLine[..600] + "...";
+    }
+
+    private static ProcessResult RunProcess(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
+        TimeSpan timeout)
+    {
+        using Process process = new();
+        process.StartInfo = new ProcessStartInfo(fileName)
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false
+        };
+        foreach (string argument in arguments)
+        {
+            process.StartInfo.ArgumentList.Add(argument);
+        }
+
+        process.Start();
+        Task<string> standardOutput = process.StandardOutput.ReadToEndAsync();
+        Task<string> standardError = process.StandardError.ReadToEndAsync();
+        bool exited = process.WaitForExit(timeout);
+        if (!exited)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        return new ProcessResult(
+            exited ? process.ExitCode : -1,
+            !exited,
+            standardOutput.GetAwaiter().GetResult(),
+            standardError.GetAwaiter().GetResult());
+    }
+
+    private sealed record ProcessResult(
+        int ExitCode,
+        bool TimedOut,
+        string StandardOutput,
+        string StandardError);
+
+    private static async Task<int> RunMcpLiveWorkflowAsync()
+    {
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        string serverDll = Path.Combine(repositoryRoot, "src", "AIMonitor.McpServer", "bin", "Debug", "net10.0", "AIMonitor.McpServer.dll");
+        if (!File.Exists(serverDll))
+        {
+            Console.Error.WriteLine($"MCP server build output not found: {serverDll}");
+            return 1;
+        }
+
+        StdioClientTransportOptions options = new()
+        {
+            Name = "ai-monitor-live-smoke",
+            Command = "dotnet",
+            Arguments = [serverDll, "--repo-root", repositoryRoot, "--config", settingsPath],
+            WorkingDirectory = repositoryRoot
+        };
+
+        await using McpClient client = await McpClient.CreateAsync(new StdioClientTransport(options));
+        await CallAndPrintAsync(client, "get_monitor_status");
+        await CallAndPrintAsync(client, "get_workflow_status");
+        await CallAndPrintAsync(
+            client,
+            "find_file",
+            new Dictionary<string, object?>
+            {
+                ["fileNameOrPattern"] = "AppConfig.cs",
+                ["maxResults"] = 5
+            });
+        await CallAndPrintAsync(
+            client,
+            "get_solution_index_status");
+        return 0;
+    }
+
+    private static async Task CallAndPrintAsync(
+        McpClient client,
+        string toolName,
+        Dictionary<string, object?>? arguments = null)
+    {
+        CallToolResult result = await client.CallToolAsync(toolName, arguments);
+        Console.WriteLine($"{toolName}: error={result.IsError == true}");
     }
 
     private static async Task<int> RunFixtureIndexMatrixAsync()

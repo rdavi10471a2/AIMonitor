@@ -68,14 +68,16 @@
       "stopAtEntry": false
     },
     {
-      "name": "AIMonitor MCP Bridge",
+      "name": "AIMonitor MCP Server",
       "type": "coreclr",
       "request": "launch",
-      "preLaunchTask": "build bridge",
-      "program": "${workspaceFolder}/src/AIMonitor.Bridge/bin/Debug/net10.0/AIMonitor.Bridge.dll",
+      "preLaunchTask": "build mcp",
+      "program": "${workspaceFolder}/src/AIMonitor.McpServer/bin/Debug/net10.0/AIMonitor.McpServer.dll",
       "args": [
-        "--server",
-        "monitor"
+        "--repo-root",
+        "${workspaceFolder}",
+        "--config",
+        "${workspaceFolder}/config/appsettings.json"
       ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",

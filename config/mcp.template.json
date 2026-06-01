@@ -1,10 +1,12 @@
 {
   "mcpServers": {
     "ai-monitor": {
-      "command": ".\\src\\AIMonitor.Bridge\\bin\\Debug\\net10.0\\AIMonitor.Bridge.exe",
+      "command": ".\\src\\AIMonitor.McpServer\\bin\\Debug\\net10.0\\AIMonitor.McpServer.exe",
       "args": [
-        "--server",
-        "monitor"
+        "--repo-root",
+        ".",
+        "--config",
+        ".\\config\\appsettings.json"
       ],
       "env": {}
     }
