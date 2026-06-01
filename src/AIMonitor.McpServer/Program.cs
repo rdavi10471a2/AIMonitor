@@ -30,6 +30,7 @@ internal static class Program
             new JsonLinesMonitorLogger(MonitorLogPaths.GetDefaultLogPath(settings))));
         builder.Services.AddSingleton(SolutionIndexQueryService.Create(settings));
         builder.Services.AddSingleton(new WorkflowEditService(settings));
+        builder.Services.AddSingleton(new RoslynEditService(settings));
         builder.Services.AddSingleton(new WorkflowEditPaths(settings));
         builder.Services.AddSingleton<AIMonitorMcpRuntimeState>();
         builder.Services
@@ -72,6 +73,7 @@ public sealed class AIMonitorTools
     private readonly MonitorSettings settings;
     private readonly SolutionIndexQueryService queryService;
     private readonly WorkflowEditService workflowService;
+    private readonly RoslynEditService roslynEditService;
     private readonly WorkflowEditPaths workflowPaths;
     private readonly AIMonitorMcpRuntimeState runtimeState;
     private readonly IHostApplicationLifetime applicationLifetime;
@@ -80,6 +82,7 @@ public sealed class AIMonitorTools
         MonitorSettings settings,
         SolutionIndexQueryService queryService,
         WorkflowEditService workflowService,
+        RoslynEditService roslynEditService,
         WorkflowEditPaths workflowPaths,
         AIMonitorMcpRuntimeState runtimeState,
         IHostApplicationLifetime applicationLifetime)
@@ -87,6 +90,7 @@ public sealed class AIMonitorTools
         this.settings = settings;
         this.queryService = queryService;
         this.workflowService = workflowService;
+        this.roslynEditService = roslynEditService;
         this.workflowPaths = workflowPaths;
         this.runtimeState = runtimeState;
         this.applicationLifetime = applicationLifetime;
@@ -414,10 +418,17 @@ public sealed class AIMonitorTools
     [McpServerTool]
     [Description("Create a new-file edit session with an empty monitor-owned Working candidate. Watched source is not created.")]
     public EditSessionStatus NewFile(
-        [Description("Future watched source path, absolute or relative to the watched solution folder.")] string sourceFilePath)
+        [Description("Future watched source path, absolute or relative to the watched solution folder.")] string sourceFilePath,
+        [Description("Optional durable session handle for ownership/telemetry.")] string? sessionId = null)
     {
         runtimeState.Touch();
-        return workflowService.NewFile(ResolveWatchedPath(sourceFilePath));
+        EditSessionStatus status = workflowService.NewFile(ResolveWatchedPath(sourceFilePath));
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            RecordMonitorSessionEvent(sessionId, "new-file", status.WatchedFilePath, JsonSerializer.Serialize(status, JsonOptions));
+        }
+
+        return status;
     }
 
     [McpServerTool]
@@ -501,52 +512,59 @@ public sealed class AIMonitorTools
     }
 
     [McpServerTool]
-    [Description("Return AIMonitor's current source-map compatibility response. Full Roslyn source maps are not yet implemented in this repo; use get_solution_index and get_file_outline.")]
-    public AIMonitorCompatibilityResult GetSourceMap(
+    [Description("Return a Roslyn-derived source map for a C# file, folder, namespace, or watched project. Use selector mode before C# symbol edits.")]
+    public RoslynSourceMapResult GetSourceMap(
         [Description("Optional source file/folder path, or namespace text when scope is namespace.")] string? path = null,
         [Description("Source map scope: auto, file, folder, namespace, or project.")] string scope = "auto",
         [Description("Source map density: auto, navigation, selector, detail, or full.")] string mode = "auto",
-        [Description("Optional namespace text when scope is namespace.")] string? namespaceName = null)
+        [Description("Optional namespace text when scope is namespace.")] string? namespaceName = null,
+        [Description("Optional durable session handle for ownership/telemetry.")] string? sessionId = null)
     {
         runtimeState.Touch();
-        return new AIMonitorCompatibilityResult(
-            "not-implemented",
-            "AIMonitor has indexed-symbol queries and line-oriented outlines, but has not ported MonitorBaseClaude Roslyn source maps yet.",
-            new Dictionary<string, string?>
-            {
-                ["path"] = path,
-                ["scope"] = scope,
-                ["mode"] = mode,
-                ["namespaceName"] = namespaceName
-            });
+        RoslynSourceMapResult result = roslynEditService.GetSourceMap(path, scope, mode, namespaceName);
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            RecordMonitorSessionEvent(sessionId, "get-source-map", path ?? settings.WatchedProjectFolder, JsonSerializer.Serialize(result, JsonOptions));
+        }
+
+        return result;
     }
 
     [McpServerTool]
-    [Description("Return AIMonitor's current symbol-read compatibility response. Use get_file or indexed symbol line spans until semantic symbol body extraction is ported.")]
-    public AIMonitorCompatibilityResult GetSymbol(
+    [Description("Read one C# symbol body from the monitor-owned Working candidate using a Roslyn selector.")]
+    public RoslynSymbolReadResult GetSymbol(
         [Description("Source file path, absolute or relative to the watched solution folder.")] string path,
         [Description("Compatibility shortcut symbol name.")] string? symbolName = null,
-        [Description("Structured selector JSON from get_source_map when available.")] string? symbolSelectorJson = null)
+        [Description("Structured selector JSON from get_source_map when available.")] string? symbolSelectorJson = null,
+        [Description("Optional durable session handle for ownership/telemetry.")] string? sessionId = null)
     {
         runtimeState.Touch();
-        return new AIMonitorCompatibilityResult(
-            "not-implemented",
-            "AIMonitor has not ported MonitorBaseClaude semantic get_symbol yet. Use get_file_outline plus get_file for now.",
-            new Dictionary<string, string?>
-            {
-                ["path"] = path,
-                ["symbolName"] = symbolName,
-                ["symbolSelectorJson"] = symbolSelectorJson
-            });
+        string selector = !string.IsNullOrWhiteSpace(symbolSelectorJson)
+            ? symbolSelectorJson
+            : JsonSerializer.Serialize(new RoslynSymbolSelector(Name: symbolName), JsonOptions);
+        RoslynSymbolReadResult result = roslynEditService.GetSymbol(ResolveWatchedPath(path), selector);
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            RecordMonitorSessionEvent(sessionId, "get-symbol", result.WatchedFilePath, JsonSerializer.Serialize(result, JsonOptions));
+        }
+
+        return result;
     }
 
     [McpServerTool]
     [Description("Return edit workflow status for one watched source file.")]
     public EditSessionStatus GetEditStatus(
-        [Description("Source file path, absolute or relative to the watched solution folder.")] string sourceFilePath)
+        [Description("Source file path, absolute or relative to the watched solution folder.")] string sourceFilePath,
+        [Description("Optional durable session handle for ownership/telemetry.")] string? sessionId = null)
     {
         runtimeState.Touch();
-        return workflowService.GetStatus(ResolveWatchedPath(sourceFilePath));
+        EditSessionStatus status = workflowService.GetStatus(ResolveWatchedPath(sourceFilePath));
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            RecordMonitorSessionEvent(sessionId, "get-edit-status", status.WatchedFilePath, JsonSerializer.Serialize(status, JsonOptions));
+        }
+
+        return status;
     }
 
     [McpServerTool]
@@ -695,115 +713,124 @@ public sealed class AIMonitorTools
     }
 
     [McpServerTool]
-    [Description("Return AIMonitor's current semantic edit compatibility response. Use submit_file, replace_text_in_file, or replace_span_in_file until symbol replacement is ported.")]
-    public AIMonitorCompatibilityResult SubmitSymbol(string path, string symbolSelectorJson, string code, string? sessionId = null, string? manifestJson = null)
+    [Description("Replace one C# symbol in the monitor-owned Working candidate using a Roslyn selector.")]
+    public RoslynEditResult SubmitSymbol(string path, string symbolSelectorJson, string code, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        return SemanticEditNotImplemented(nameof(SubmitSymbol), path, sessionId, manifestJson);
+        _ = manifestJson;
+        RoslynEditResult result = roslynEditService.SubmitSymbol(ResolveWatchedPath(path), symbolSelectorJson, code);
+        RecordRoslynSessionEvent(sessionId, "submit-symbol", result);
+        return result;
     }
 
     [McpServerTool]
-    [Description("Return AIMonitor's current using-edit compatibility response. Use replace_text_in_file or submit_file until using directive edits are ported.")]
-    public AIMonitorCompatibilityResult AddUsing(string path, string @namespace, string? sessionId = null, string? manifestJson = null)
+    [Description("Add a using directive to the monitor-owned Working candidate.")]
+    public RoslynEditResult AddUsing(string path, string @namespace, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = @namespace;
-        return SemanticEditNotImplemented(nameof(AddUsing), path, sessionId, manifestJson);
+        _ = manifestJson;
+        RoslynEditResult result = roslynEditService.AddUsing(ResolveWatchedPath(path), @namespace);
+        RecordRoslynSessionEvent(sessionId, "add-using", result);
+        return result;
     }
 
     [McpServerTool]
-    [Description("Return AIMonitor's current using-edit compatibility response. Use replace_text_in_file or submit_file until using directive edits are ported.")]
-    public AIMonitorCompatibilityResult RemoveUsing(string path, string @namespace, string? sessionId = null, string? manifestJson = null)
+    [Description("Remove a using directive from the monitor-owned Working candidate.")]
+    public RoslynEditResult RemoveUsing(string path, string @namespace, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = @namespace;
-        return SemanticEditNotImplemented(nameof(RemoveUsing), path, sessionId, manifestJson);
+        _ = manifestJson;
+        RoslynEditResult result = roslynEditService.RemoveUsing(ResolveWatchedPath(path), @namespace);
+        RecordRoslynSessionEvent(sessionId, "remove-using", result);
+        return result;
     }
 
     [McpServerTool]
-    [Description("Return AIMonitor's current type-modifier compatibility response. Use submit_file until semantic type edits are ported.")]
-    public AIMonitorCompatibilityResult SetTypePartial(string path, string containingType, bool isPartial, string? sessionId = null, string? manifestJson = null)
+    [Description("Add or remove the partial modifier on a C# type in the monitor-owned Working candidate.")]
+    public RoslynEditResult SetTypePartial(string path, string containingType, bool isPartial, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = containingType;
-        _ = isPartial;
-        return SemanticEditNotImplemented(nameof(SetTypePartial), path, sessionId, manifestJson);
+        _ = manifestJson;
+        RoslynEditResult result = roslynEditService.SetTypePartial(ResolveWatchedPath(path), containingType, isPartial);
+        RecordRoslynSessionEvent(sessionId, "set-type-partial", result);
+        return result;
     }
 
     [McpServerTool]
-    [Description("Return AIMonitor's current member-add compatibility response. Use submit_file until semantic member insertion is ported.")]
-    public AIMonitorCompatibilityResult AddSymbol(string path, string containingType, string symbolType, string code, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
+    [Description("Add a C# member or nested type to a containing type in the monitor-owned Working candidate.")]
+    public RoslynEditResult AddSymbol(string path, string containingType, string symbolType, string code, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = containingType;
-        _ = symbolType;
-        _ = code;
-        _ = afterSymbol;
-        return SemanticEditNotImplemented(nameof(AddSymbol), path, sessionId, manifestJson);
+        _ = manifestJson;
+        RoslynEditResult result = roslynEditService.AddSymbol(ResolveWatchedPath(path), containingType, symbolType, code, afterSymbol);
+        RecordRoslynSessionEvent(sessionId, "add-symbol", result);
+        return result;
     }
 
     [McpServerTool]
-    [Description("Return AIMonitor's current member-add compatibility response. Use submit_file until semantic field insertion is ported.")]
-    public AIMonitorCompatibilityResult AddField(string path, string containingType, string declaration, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
+    [Description("Add a C# field to a containing type in the monitor-owned Working candidate.")]
+    public RoslynEditResult AddField(string path, string containingType, string declaration, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = containingType;
-        _ = declaration;
-        _ = afterSymbol;
-        return SemanticEditNotImplemented(nameof(AddField), path, sessionId, manifestJson);
+        _ = manifestJson;
+        RoslynEditResult result = roslynEditService.AddField(ResolveWatchedPath(path), containingType, declaration, afterSymbol);
+        RecordRoslynSessionEvent(sessionId, "add-field", result);
+        return result;
     }
 
     [McpServerTool]
-    [Description("Return AIMonitor's current member-add compatibility response. Use submit_file until semantic property insertion is ported.")]
-    public AIMonitorCompatibilityResult AddProperty(string path, string containingType, string declaration, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
+    [Description("Add a C# property to a containing type in the monitor-owned Working candidate.")]
+    public RoslynEditResult AddProperty(string path, string containingType, string declaration, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = containingType;
-        _ = declaration;
-        _ = afterSymbol;
-        return SemanticEditNotImplemented(nameof(AddProperty), path, sessionId, manifestJson);
+        _ = manifestJson;
+        RoslynEditResult result = roslynEditService.AddProperty(ResolveWatchedPath(path), containingType, declaration, afterSymbol);
+        RecordRoslynSessionEvent(sessionId, "add-property", result);
+        return result;
     }
 
     [McpServerTool]
-    [Description("Return AIMonitor's current member-add compatibility response. Use submit_file until semantic method insertion is ported.")]
-    public AIMonitorCompatibilityResult AddMethod(string path, string containingType, string declaration, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
+    [Description("Add a C# method to a containing type in the monitor-owned Working candidate.")]
+    public RoslynEditResult AddMethod(string path, string containingType, string declaration, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = containingType;
-        _ = declaration;
-        _ = afterSymbol;
-        return SemanticEditNotImplemented(nameof(AddMethod), path, sessionId, manifestJson);
+        _ = manifestJson;
+        RoslynEditResult result = roslynEditService.AddMethod(ResolveWatchedPath(path), containingType, declaration, afterSymbol);
+        RecordRoslynSessionEvent(sessionId, "add-method", result);
+        return result;
     }
 
     [McpServerTool]
-    [Description("Return AIMonitor's current member-add compatibility response. Use submit_file until semantic constructor insertion is ported.")]
-    public AIMonitorCompatibilityResult AddConstructor(string path, string containingType, string declaration, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
+    [Description("Add a C# constructor to a containing type in the monitor-owned Working candidate.")]
+    public RoslynEditResult AddConstructor(string path, string containingType, string declaration, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = containingType;
-        _ = declaration;
-        _ = afterSymbol;
-        return SemanticEditNotImplemented(nameof(AddConstructor), path, sessionId, manifestJson);
+        _ = manifestJson;
+        RoslynEditResult result = roslynEditService.AddConstructor(ResolveWatchedPath(path), containingType, declaration, afterSymbol);
+        RecordRoslynSessionEvent(sessionId, "add-constructor", result);
+        return result;
     }
 
     [McpServerTool]
-    [Description("Return AIMonitor's current nested-type compatibility response. Use submit_file until semantic nested-type insertion is ported.")]
-    public AIMonitorCompatibilityResult AddNestedType(string path, string containingType, string declaration, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
+    [Description("Add a C# nested type to a containing type in the monitor-owned Working candidate.")]
+    public RoslynEditResult AddNestedType(string path, string containingType, string declaration, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = containingType;
-        _ = declaration;
-        _ = afterSymbol;
-        return SemanticEditNotImplemented(nameof(AddNestedType), path, sessionId, manifestJson);
+        _ = manifestJson;
+        RoslynEditResult result = roslynEditService.AddNestedType(ResolveWatchedPath(path), containingType, declaration, afterSymbol);
+        RecordRoslynSessionEvent(sessionId, "add-nested-type", result);
+        return result;
     }
 
     [McpServerTool]
-    [Description("Return AIMonitor's current symbol-remove compatibility response. Use submit_file until semantic symbol removal is ported.")]
-    public AIMonitorCompatibilityResult RemoveSymbol(string path, string symbolSelectorJson, string? sessionId = null, string? manifestJson = null)
+    [Description("Remove one C# symbol from the monitor-owned Working candidate using a Roslyn selector.")]
+    public RoslynEditResult RemoveSymbol(string path, string symbolSelectorJson, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = symbolSelectorJson;
-        return SemanticEditNotImplemented(nameof(RemoveSymbol), path, sessionId, manifestJson);
+        _ = manifestJson;
+        RoslynEditResult result = roslynEditService.RemoveSymbol(ResolveWatchedPath(path), symbolSelectorJson);
+        RecordRoslynSessionEvent(sessionId, "remove-symbol", result);
+        return result;
     }
 
     [McpServerTool]
@@ -824,7 +851,7 @@ public sealed class AIMonitorTools
         [Description("Explicit diff tool executable path.")] string? diffToolPath = null)
     {
         runtimeState.Touch();
-        StagedEditRecord record = workflowService.GetStagedRecord(stagedRecordId);
+        StagedEditRecord record = workflowService.PrepareReviewFileForLaunch(stagedRecordId);
         DiffLaunchResult launch = new WinMergeDiffToolLauncher().Launch(new DiffLaunchRequest
         {
             OriginalFilePath = string.IsNullOrWhiteSpace(record.ReviewBaselineFilePath)
@@ -843,7 +870,8 @@ public sealed class AIMonitorTools
     public CompareSnapshotResult CompareFile(
         [Description("Source file path, absolute or relative to the watched solution folder.")] string sourceFilePath,
         [Description("Optional compact ledger summary to append to the monitor-owned ledger.")] string? ledgerSummary = null,
-        [Description("Refresh from source first if the Working copy is missing.")] bool refreshIfMissing = true)
+        [Description("Refresh from source first if the Working copy is missing.")] bool refreshIfMissing = true,
+        [Description("Optional durable session handle for ownership/telemetry.")] string? sessionId = null)
     {
         runtimeState.Touch();
         string path = ResolveWatchedPath(sourceFilePath);
@@ -852,7 +880,13 @@ public sealed class AIMonitorTools
             workflowService.Refresh(path);
         }
 
-        return workflowService.Compare(path, ledgerSummary);
+        CompareSnapshotResult result = workflowService.Compare(path, ledgerSummary);
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            RecordMonitorSessionEvent(sessionId, "compare-file", result.WorkingFilePath, JsonSerializer.Serialize(result, JsonOptions));
+        }
+
+        return result;
     }
 
     [McpServerTool]
@@ -1071,6 +1105,14 @@ public sealed class AIMonitorTools
                 ["sessionId"] = sessionId,
                 ["manifestJson"] = manifestJson
             });
+    }
+
+    private void RecordRoslynSessionEvent(string? sessionId, string eventType, RoslynEditResult result)
+    {
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            RecordMonitorSessionEvent(sessionId, eventType, result.WatchedFilePath, JsonSerializer.Serialize(result, JsonOptions));
+        }
     }
 
     private static AIMonitorFileHashInfo GetFileHashInfo(string path)

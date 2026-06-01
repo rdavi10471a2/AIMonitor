@@ -18,14 +18,12 @@ public sealed class AdapterSurfaceControl : UserControl
     private readonly SplitContainer mainSplit;
     private readonly SplitContainer detailSplit;
     private readonly BindingList<AdapterEventView> eventRows = [];
-    private readonly SynchronizationContext uiContext;
     private IMonitorLogEventSource? eventSource;
     private string? logPath;
 
     public AdapterSurfaceControl()
     {
         Dock = DockStyle.Fill;
-        uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
 
         pathLabel = new Label
         {
@@ -162,13 +160,26 @@ public sealed class AdapterSurfaceControl : UserControl
         }
 
         string rawJson = JsonSerializer.Serialize(entry, JsonOptions);
-        uiContext.Post(_ =>
+        if (InvokeRequired)
         {
-            if (!IsDisposed)
+            try
             {
-                AddEntry(entry, rawJson);
+                BeginInvoke(new Action(() =>
+                {
+                    if (!IsDisposed)
+                    {
+                        AddEntry(entry, rawJson);
+                    }
+                }));
             }
-        }, null);
+            catch (InvalidOperationException)
+            {
+            }
+
+            return;
+        }
+
+        AddEntry(entry, rawJson);
     }
 
     private void ClearEvents()
@@ -182,6 +193,7 @@ public sealed class AdapterSurfaceControl : UserControl
     private void AddEntry(MonitorLogEntry entry, string rawJson, bool selectNewRow = true)
     {
         AdapterEventView row = new(entry, rawJson);
+        bool shouldSelectRow = selectNewRow && ShouldAutoSelect(row);
         if (!string.IsNullOrWhiteSpace(row.FullRequestId))
         {
             for (int index = 0; index < eventRows.Count; index++)
@@ -191,7 +203,7 @@ public sealed class AdapterSurfaceControl : UserControl
                     && row.EventName.Equals("adapter.query.completed", StringComparison.OrdinalIgnoreCase))
                 {
                     eventRows[index] = row;
-                    if (selectNewRow)
+                    if (shouldSelectRow)
                     {
                         SelectRow(index);
                     }
@@ -207,10 +219,12 @@ public sealed class AdapterSurfaceControl : UserControl
             eventRows.RemoveAt(0);
         }
 
-        if (selectNewRow)
+        if (shouldSelectRow)
         {
             SelectRow(eventRows.Count - 1);
         }
+
+        SetStatus($"Adapter observer | Live events: {eventRows.Count}");
     }
 
     private void SelectNewestRow()
@@ -234,6 +248,20 @@ public sealed class AdapterSurfaceControl : UserControl
         }
     }
 
+    private static bool ShouldAutoSelect(AdapterEventView row)
+    {
+        if (row.Phase.Equals("Response", StringComparison.OrdinalIgnoreCase)
+            && (!string.IsNullOrWhiteSpace(row.PrettyResponseJson)
+                || !string.IsNullOrWhiteSpace(row.ContentTextPreview)))
+        {
+            return true;
+        }
+
+        return row.Phase.Equals("Warning", StringComparison.OrdinalIgnoreCase)
+            || row.Level.Equals("Warning", StringComparison.OrdinalIgnoreCase)
+            || row.Level.Equals("Error", StringComparison.OrdinalIgnoreCase);
+    }
+
     private void ConfigureGridColumns()
     {
         SetColumnWidth(nameof(AdapterEventView.Time), 120);
@@ -243,6 +271,8 @@ public sealed class AdapterSurfaceControl : UserControl
         SetColumnWidth(nameof(AdapterEventView.Outcome), 150);
         SetColumnWidth(nameof(AdapterEventView.Review), 120);
         SetColumnWidth(nameof(AdapterEventView.RequestId), 120);
+        SetColumnWidth(nameof(AdapterEventView.WorkflowSessionId), 140);
+        SetColumnWidth(nameof(AdapterEventView.TransportSessionId), 140);
         SetColumnWidth(nameof(AdapterEventView.Command), 160);
         SetColumnWidth(nameof(AdapterEventView.File), 260);
         SetColumnWidth(nameof(AdapterEventView.Record), 140);
@@ -259,6 +289,8 @@ public sealed class AdapterSurfaceControl : UserControl
         SetColumnHeader(nameof(AdapterEventView.Outcome), "Outcome");
         SetColumnHeader(nameof(AdapterEventView.Review), "Review");
         SetColumnHeader(nameof(AdapterEventView.RequestId), "Request ID");
+        SetColumnHeader(nameof(AdapterEventView.WorkflowSessionId), "Workflow Session");
+        SetColumnHeader(nameof(AdapterEventView.TransportSessionId), "Transport Session");
         SetColumnHeader(nameof(AdapterEventView.Command), "Tool / Command");
         SetColumnHeader(nameof(AdapterEventView.File), "File");
         SetColumnHeader(nameof(AdapterEventView.Record), "Record");
@@ -414,9 +446,15 @@ public sealed class AdapterSurfaceControl : UserControl
             Message = entry.Message;
             FullRequestId = entry.Properties.TryGetValue("requestId", out string? requestId) ? requestId : string.Empty;
             RequestId = FullRequestId[..Math.Min(12, FullRequestId.Length)];
+            string bridgeSessionId = entry.Properties.TryGetValue("sessionId", out string? transportSessionId)
+                ? transportSessionId
+                : string.Empty;
+            TransportSessionId = ShortId(bridgeSessionId);
             Command = entry.Properties.TryGetValue("toolName", out string? toolName)
                 ? toolName
-                : entry.Properties.TryGetValue("command", out string? command) ? command : string.Empty;
+                : entry.Properties.TryGetValue("command", out string? command)
+                    ? command
+                    : entry.Properties.TryGetValue("testName", out string? testName) ? testName : string.Empty;
             IsError = entry.Properties.TryGetValue("isError", out string? isError) ? isError : string.Empty;
             DurationMs = entry.Properties.TryGetValue("durationMs", out string? durationMs) ? durationMs : string.Empty;
             ContentCount = entry.Properties.TryGetValue("contentCount", out string? contentCount) ? contentCount : string.Empty;
@@ -424,10 +462,19 @@ public sealed class AdapterSurfaceControl : UserControl
             string responseText = entry.Properties.TryGetValue("contentText", out string? contentText)
                 ? contentText
                 : ContentTextPreview;
+            string argumentText = entry.Properties.TryGetValue("arguments", out string? arguments)
+                ? arguments
+                : string.Empty;
             PrettyResponseJson = PrettyJsonOrText(responseText);
             using JsonDocument? responseDocument = TryParseJson(responseText);
+            using JsonDocument? argumentDocument = TryParseJson(argumentText);
+            WorkflowSessionId = ShortId(
+                ExtractResponseString(responseDocument, "sessionId")
+                ?? ExtractResponseString(argumentDocument, "sessionId")
+                ?? string.Empty);
             Outcome = ExtractResponseString(responseDocument, "classification")
                 ?? ExtractResponseString(responseDocument, "status")
+                ?? (entry.Properties.TryGetValue("outcome", out string? testOutcome) ? testOutcome : null)
                 ?? string.Empty;
             Review = ExtractResponseString(responseDocument, "launchStatus")
                 ?? ExtractResponseString(responseDocument, "stagedRecord.launchStatus")
@@ -460,6 +507,10 @@ public sealed class AdapterSurfaceControl : UserControl
         public string Review { get; }
 
         public string RequestId { get; }
+
+        public string WorkflowSessionId { get; }
+
+        public string TransportSessionId { get; }
 
         [Browsable(false)]
         public string FullRequestId { get; }

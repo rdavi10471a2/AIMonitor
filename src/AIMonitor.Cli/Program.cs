@@ -259,6 +259,7 @@ internal static class Program
             };
         }
 
+        record = service.PrepareReviewFileForLaunch(record.StagedRecordId);
         DiffLaunchResult result = new WinMergeDiffToolLauncher().Launch(new DiffLaunchRequest
         {
             OriginalFilePath = GetDiffOriginalFilePath(record),

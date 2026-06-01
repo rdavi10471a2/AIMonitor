@@ -13,6 +13,10 @@ The core design rule:
 
 > MCP is not the workflow. MCP is the Claude adapter over the shared workflow engine.
 
+Claude Code MCP bindings should launch `AIMonitor.McpStdioBridge`, not `AIMonitor.McpServer` directly. The stdio bridge is intentionally thin: it connects Claude's MCP stdio stream to the WinForms-owned MCP proxy hub. WinForms receives live MCP traffic first, records request/response telemetry, and relays to the combined MCP server behind it.
+
+Until the Claude Code launcher working directory is verified live, prefer the `dotnet <absolute-path-to-AIMonitor.McpStdioBridge.dll>` binding shape in local MCP config. The repo template uses relative paths for portability, but an installed user binding should use absolute paths for the bridge DLL, `--repo-root`, and `--config`.
+
 Prefer MSBuild project truth over directory enumeration. When adding behavior, add tests beside it.
 
 Do not hide data row/result classes inside repository classes. Schema-shaped POCOs get their own files so persisted/query data stays visible in reviews.

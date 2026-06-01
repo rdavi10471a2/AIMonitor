@@ -1055,10 +1055,7 @@ internal sealed class ProjectSymbolIndex
 
     private static ISymbol? GetConstructionTarget(SymbolInfo symbolInfo)
     {
-        ISymbol? symbol = symbolInfo.Symbol ?? symbolInfo.CandidateSymbols.FirstOrDefault();
-        return symbol is IMethodSymbol { MethodKind: MethodKind.Constructor } constructor
-            ? constructor.ContainingType
-            : symbol;
+        return symbolInfo.Symbol ?? symbolInfo.CandidateSymbols.FirstOrDefault();
     }
 
     private static bool IsNestedDuplicateReferenceCandidate(SyntaxNode node)

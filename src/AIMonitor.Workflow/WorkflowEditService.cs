@@ -439,6 +439,33 @@ public sealed class WorkflowEditService
         return record;
     }
 
+    public StagedEditRecord PrepareReviewFileForLaunch(string stagedRecordId)
+    {
+        StagedEditRecord record = GetStagedRecord(stagedRecordId);
+        if (!record.IsNewFile)
+        {
+            return record;
+        }
+
+        if (File.Exists(record.WatchedFilePath))
+        {
+            FileInfo existing = new(record.WatchedFilePath);
+            if (existing.Length > 0)
+            {
+                throw new InvalidOperationException("New-file review target already exists in watched source and is not blank. Refresh or choose another path before launching review.");
+            }
+        }
+        else
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(record.WatchedFilePath) ?? ".");
+            File.WriteAllText(record.WatchedFilePath, string.Empty);
+        }
+
+        record.ReviewBaselineFilePath = record.WatchedFilePath;
+        SaveStagedRecord(record);
+        return record;
+    }
+
     public StagedEditRecord RecordDecision(string stagedRecordId, string decision, string? expectedStagedHash = null)
     {
         StagedEditRecord record = GetStagedRecord(stagedRecordId);
@@ -476,6 +503,14 @@ public sealed class WorkflowEditService
             {
                 throw new InvalidOperationException("Cannot accept a staged record before a successful diff review launch.");
             }
+        }
+
+        if (normalizedDecision == "rejected"
+            && record.IsNewFile
+            && File.Exists(record.WatchedFilePath)
+            && new FileInfo(record.WatchedFilePath).Length == 0)
+        {
+            File.Delete(record.WatchedFilePath);
         }
 
         string reviewedFilePath = GetReviewedFilePath(record);

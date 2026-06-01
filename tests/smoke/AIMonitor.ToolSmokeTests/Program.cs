@@ -9,6 +9,7 @@ using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
@@ -33,9 +34,34 @@ internal static class Program
             return await RunMcpLiveWorkflowAsync();
         }
 
+        if (args.Contains("--mcp-live-edit-workflow", StringComparer.OrdinalIgnoreCase))
+        {
+            return await RunMcpLiveEditWorkflowAsync();
+        }
+
+        if (args.Contains("--mcp-live-all-edit-tools", StringComparer.OrdinalIgnoreCase))
+        {
+            return await RunMcpLiveAllEditToolsAsync();
+        }
+
+        if (args.Contains("--mcp-live-multi-file-session", StringComparer.OrdinalIgnoreCase))
+        {
+            return await RunMcpLiveMultiFileSessionAsync();
+        }
+
+        if (args.Contains("--mcp-live-human-winmerge", StringComparer.OrdinalIgnoreCase))
+        {
+            return await RunMcpLiveHumanWinMergeAsync();
+        }
+
+        if (args.Contains("--mcp-live-record-decision", StringComparer.OrdinalIgnoreCase))
+        {
+            return await RunMcpLiveRecordDecisionAsync(args);
+        }
+
         if (args.Contains("--visible-test-suite", StringComparer.OrdinalIgnoreCase))
         {
-            return RunVisibleTestSuite();
+            return await RunVisibleTestSuiteAsync();
         }
 
         Console.WriteLine("AIMonitor tool smoke tests");
@@ -43,12 +69,17 @@ internal static class Program
         Console.WriteLine("Available modes:");
         Console.WriteLine("  --fixture-index-matrix    Build a generated fixture and compare AIMonitor index rows with an independent Roslyn pass.");
         Console.WriteLine("  --webviewer-file-by-file  Compare selected SchemaStudioWebViewer files against index and grep sanity counts.");
-        Console.WriteLine("  --mcp-live-workflow       Call the local MCP server against config/appsettings.json so WinForms can show adapter telemetry.");
-        Console.WriteLine("  --visible-test-suite      Run dotnet test and emit test run/case telemetry to the WinForms monitor log.");
+        Console.WriteLine("  --mcp-live-workflow       Call the local MCP server through the WinForms-owned stdio bridge so the UI shows adapter telemetry.");
+        Console.WriteLine("  --mcp-live-edit-workflow  Run file-level MCP edit calls through the stdio bridge against the monitor-owned Working copy, then reject.");
+        Console.WriteLine("  --mcp-live-all-edit-tools Run non-human file and Roslyn edit tools through the stdio bridge against a monitor-owned new-file candidate, then reject.");
+        Console.WriteLine("  --mcp-live-multi-file-session Run a two-file staged session through the stdio bridge, then reject both files.");
+        Console.WriteLine("  --mcp-live-human-winmerge Launch real WinMerge through the live MCP bridge and stop for human save/reject.");
+        Console.WriteLine("  --mcp-live-record-decision --staged-record-id <id> --decision accepted|rejected [--expected-staged-hash <hash>] Record the human WinMerge decision.");
+        Console.WriteLine("  --visible-test-suite      Run live MCP calls, then dotnet test, and emit test result telemetry to the WinForms monitor log.");
         return 2;
     }
 
-    private static int RunVisibleTestSuite()
+    private static async Task<int> RunVisibleTestSuiteAsync()
     {
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
         MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot);
@@ -69,6 +100,12 @@ internal static class Program
                 ["resultsRoot"] = resultsRoot
             });
 
+        int liveExitCode = await RunMcpLiveWorkflowAsync();
+        if (liveExitCode == 0)
+        {
+            liveExitCode = await RunMcpLiveAllEditToolsAsync();
+        }
+
         ProcessResult result = RunProcess(
             "dotnet",
             [
@@ -84,15 +121,18 @@ internal static class Program
             TimeSpan.FromMinutes(5));
 
         int caseCount = EmitTrxCaseTelemetry(logger, runId, resultsRoot);
+        int exitCode = liveExitCode == 0 ? result.ExitCode : liveExitCode;
         logger.Write(
-            result.ExitCode == 0 ? MonitorLogLevel.Information : MonitorLogLevel.Error,
+            exitCode == 0 ? MonitorLogLevel.Information : MonitorLogLevel.Error,
             "AIMonitor.ToolSmokeTests",
             "test.run.completed",
-            result.ExitCode == 0 ? "Visible test suite completed." : "Visible test suite failed.",
+            exitCode == 0 ? "Visible test suite completed." : "Visible test suite failed.",
             new Dictionary<string, string>
             {
                 ["runId"] = runId,
-                ["exitCode"] = result.ExitCode.ToString(),
+                ["exitCode"] = exitCode.ToString(),
+                ["liveMcpExitCode"] = liveExitCode.ToString(),
+                ["dotnetTestExitCode"] = result.ExitCode.ToString(),
                 ["timedOut"] = result.TimedOut.ToString().ToLowerInvariant(),
                 ["caseTelemetryCount"] = caseCount.ToString(),
                 ["resultsRoot"] = resultsRoot,
@@ -101,9 +141,10 @@ internal static class Program
             });
 
         Console.WriteLine($"Visible test telemetry run: {runId}");
+        Console.WriteLine($"Live MCP workflow exit code: {liveExitCode}");
         Console.WriteLine($"TRX results: {resultsRoot}");
         Console.WriteLine($"Case telemetry emitted: {caseCount}");
-        return result.ExitCode;
+        return exitCode;
     }
 
     private static IMonitorLogger CreateMonitorLogger(MonitorSettings settings)
@@ -205,22 +246,8 @@ internal static class Program
     {
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
         string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
-        string serverDll = Path.Combine(repositoryRoot, "src", "AIMonitor.McpServer", "bin", "Debug", "net10.0", "AIMonitor.McpServer.dll");
-        if (!File.Exists(serverDll))
-        {
-            Console.Error.WriteLine($"MCP server build output not found: {serverDll}");
-            return 1;
-        }
 
-        StdioClientTransportOptions options = new()
-        {
-            Name = "ai-monitor-live-smoke",
-            Command = "dotnet",
-            Arguments = [serverDll, "--repo-root", repositoryRoot, "--config", settingsPath],
-            WorkingDirectory = repositoryRoot
-        };
-
-        await using McpClient client = await McpClient.CreateAsync(new StdioClientTransport(options));
+        await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
         await CallAndPrintAsync(client, "get_monitor_status");
         await CallAndPrintAsync(client, "get_workflow_status");
         await CallAndPrintAsync(
@@ -237,13 +264,645 @@ internal static class Program
         return 0;
     }
 
-    private static async Task CallAndPrintAsync(
+    private static async Task<int> RunMcpLiveEditWorkflowAsync()
+    {
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        const string relativePath = "AppConfig/AppConfig.cs";
+        const string oldText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = true;";
+        const string newText = oldText + "\r\n\r\n        public bool BridgeFileLevelEditSmoke { get; set; } = true;";
+
+        await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
+        await CallAndPrintAsync(
+            client,
+            "refresh_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = relativePath
+            });
+        await CallAndPrintAsync(
+            client,
+            "replace_text_in_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["oldText"] = oldText,
+                ["newText"] = newText,
+                ["expectedMatches"] = 1
+            });
+        CallToolResult stage = await CallAndPrintAsync(
+            client,
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["ledgerSummary"] = "bridge live file-level edit smoke"
+            });
+
+        string stagedRecordId = ExtractJsonString(ExtractToolText(stage), "stagedRecordId");
+        await CallAndPrintAsync(
+            client,
+            "record_diff_decision",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = stagedRecordId,
+                ["decision"] = "rejected"
+            });
+        return 0;
+    }
+
+    private static async Task<int> RunMcpLiveAllEditToolsAsync()
+    {
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        const string existingRelativePath = "AppConfig/AppConfig.cs";
+        const string smokeRelativePath = "AppConfig/AIMonitorBridgeAllEditToolsSmoke.cs";
+        const string containingType = "AIMonitorBridgeAllEditToolsSmoke";
+
+        string initialContent = """
+            using System;
+
+            namespace SchemaStudioWebViewer.Configuration
+            {
+                public partial class AIMonitorBridgeAllEditToolsSmoke
+                {
+                    private int existingField;
+
+                    public string ExistingProperty { get; set; } = "initial";
+
+                    public AIMonitorBridgeAllEditToolsSmoke()
+                    {
+                    }
+
+                    public string ExistingMethod()
+                    {
+                        return ExistingProperty;
+                    }
+
+                    public string RemovedProperty_removed { get; set; } = "remove";
+
+                    public string RemovedMethod_removed()
+                    {
+                        return RemovedProperty_removed;
+                    }
+
+                    public class ExistingNested
+                    {
+                    }
+                }
+            }
+            """;
+
+        await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
+        CallToolResult session = await CallAndPrintAsync(
+            client,
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["title"] = "bridge all edit tools smoke"
+            });
+        string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
+
+        await CallAndPrintAsync(
+            client,
+            "get_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = existingRelativePath,
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "check_file_hash",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = existingRelativePath,
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "get_source_map",
+            new Dictionary<string, object?>
+            {
+                ["path"] = existingRelativePath,
+                ["scope"] = "file",
+                ["mode"] = "selector",
+                ["sessionId"] = sessionId
+            });
+
+        await CallAndPrintAsync(
+            client,
+            "new_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = smokeRelativePath,
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "submit_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["content"] = initialContent,
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "get_edit_status",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = smokeRelativePath,
+                ["sessionId"] = sessionId
+            });
+        CallToolResult span = await CallAndPrintAsync(
+            client,
+            "find_text_span",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["findText"] = "return ExistingProperty;",
+                ["sessionId"] = sessionId
+            });
+        string spanJson = ExtractToolText(span);
+        await CallAndPrintAsync(
+            client,
+            "replace_span_in_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["startLine"] = ExtractJsonInt(spanJson, "startLine"),
+                ["startColumn"] = ExtractJsonInt(spanJson, "startColumn"),
+                ["endLine"] = ExtractJsonInt(spanJson, "endLine"),
+                ["endColumn"] = ExtractJsonInt(spanJson, "endColumn"),
+                ["newText"] = "return $\"changed:{ExistingProperty}\";",
+                ["expectedOldText"] = "return ExistingProperty;",
+                ["sessionId"] = sessionId
+            });
+
+        string propertySelector = JsonSerializer.Serialize(new
+        {
+            containingType,
+            memberKind = "property",
+            name = "ExistingProperty"
+        });
+        await CallAndPrintAsync(
+            client,
+            "get_symbol",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["symbolSelectorJson"] = propertySelector,
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "submit_symbol",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["symbolSelectorJson"] = propertySelector,
+                ["code"] = "public string ExistingProperty { get; set; } = \"updated\";",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_using",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["namespace"] = "System.Linq",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "remove_using",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["namespace"] = "System.Linq",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "set_type_partial",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["containingType"] = containingType,
+                ["isPartial"] = false,
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "set_type_partial",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["containingType"] = containingType,
+                ["isPartial"] = true,
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_symbol",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["containingType"] = containingType,
+                ["symbolType"] = "field",
+                ["code"] = "private readonly string addedSymbolField = \"added\";",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_field",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["containingType"] = containingType,
+                ["declaration"] = "private int AddedField;",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_property",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["containingType"] = containingType,
+                ["declaration"] = "public bool AddedProperty { get; set; }",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_method",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["containingType"] = containingType,
+                ["declaration"] = "public string AddedMethod() => ExistingProperty;",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_constructor",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["containingType"] = containingType,
+                ["declaration"] = "public AIMonitorBridgeAllEditToolsSmoke(string existingProperty) { ExistingProperty = existingProperty; }",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_nested_type",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["containingType"] = containingType,
+                ["declaration"] = "public class AddedNested { }",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "remove_symbol",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["symbolSelectorJson"] = JsonSerializer.Serialize(new
+                {
+                    containingType,
+                    memberKind = "property",
+                    name = "RemovedProperty_removed"
+                }),
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "remove_symbol",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["symbolSelectorJson"] = JsonSerializer.Serialize(new
+                {
+                    containingType,
+                    memberKind = "method",
+                    name = "RemovedMethod_removed"
+                }),
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "compare_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = smokeRelativePath,
+                ["ledgerSummary"] = "bridge all edit tools smoke compare",
+                ["sessionId"] = sessionId
+            });
+        CallToolResult stage = await CallAndPrintAsync(
+            client,
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = smokeRelativePath,
+                ["ledgerSummary"] = "bridge all edit tools smoke stage",
+                ["sessionId"] = sessionId
+            });
+        string stagedRecordId = ExtractJsonString(ExtractToolText(stage), "stagedRecordId");
+        await CallAndPrintAsync(
+            client,
+            "record_diff_decision",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = stagedRecordId,
+                ["decision"] = "rejected"
+            });
+        return 0;
+    }
+
+    private static async Task<int> RunMcpLiveMultiFileSessionAsync()
+    {
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        string firstRelativePath = "AppConfig/AIMonitorBridgeMultiFileOne.cs";
+        string secondRelativePath = "AppConfig/AIMonitorBridgeMultiFileTwo.cs";
+
+        await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
+        CallToolResult session = await CallAndPrintAsync(
+            client,
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["title"] = "bridge multi-file session smoke"
+            });
+        string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
+
+        await CreateStageAndRejectNewFileAsync(
+            client,
+            sessionId,
+            firstRelativePath,
+            """
+            namespace SchemaStudioWebViewer.Configuration
+            {
+                public static class AIMonitorBridgeMultiFileOne
+                {
+                    public static string Value => "one";
+                }
+            }
+            """);
+        await CreateStageAndRejectNewFileAsync(
+            client,
+            sessionId,
+            secondRelativePath,
+            """
+            namespace SchemaStudioWebViewer.Configuration
+            {
+                public static class AIMonitorBridgeMultiFileTwo
+                {
+                    public static string Value => AIMonitorBridgeMultiFileOne.Value + ":two";
+                }
+            }
+            """);
+
+        await CallAndPrintAsync(
+            client,
+            "list_session_staged_records",
+            new Dictionary<string, object?>
+            {
+                ["sessionId"] = sessionId
+            });
+        return 0;
+    }
+
+    private static async Task<int> RunMcpLiveHumanWinMergeAsync()
+    {
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        const string relativePath = "AppConfig/AIMonitorHumanWinMergeSmoke.cs";
+        string marker = DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssfff");
+        string content = $$"""
+            namespace SchemaStudioWebViewer.Configuration
+            {
+                public static class AIMonitorHumanWinMergeSmoke
+                {
+                    public static string Marker => "{{marker}}";
+                }
+            }
+            """;
+
+        await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
+        CallToolResult session = await CallAndPrintAsync(
+            client,
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["title"] = "human WinMerge smoke"
+            });
+        string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
+
+        await CallAndPrintAsync(
+            client,
+            "new_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = relativePath,
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "submit_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["content"] = content,
+                ["sessionId"] = sessionId
+            });
+        CallToolResult stage = await CallAndPrintAsync(
+            client,
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["ledgerSummary"] = "human WinMerge smoke",
+                ["sessionId"] = sessionId
+            });
+        string stageJson = ExtractToolText(stage);
+        string stagedRecordId = ExtractJsonString(stageJson, "stagedRecordId");
+        string stagedHash = ExtractJsonString(stageJson, "stagedHash");
+
+        CallToolResult launch = await CallAndPrintAsync(
+            client,
+            "launch_staged_diff",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = stagedRecordId
+            });
+        string launchText = ExtractToolText(launch);
+
+        Console.WriteLine();
+        Console.WriteLine("Human WinMerge smoke launched.");
+        Console.WriteLine($"Session ID: {sessionId}");
+        Console.WriteLine($"Staged record ID: {stagedRecordId}");
+        Console.WriteLine($"Expected staged hash: {stagedHash}");
+        Console.WriteLine("After reviewing/saving in WinMerge, record the result with:");
+        Console.WriteLine($"dotnet .\\tests\\smoke\\AIMonitor.ToolSmokeTests\\bin\\Debug\\net10.0\\AIMonitor.ToolSmokeTests.dll --mcp-live-record-decision --staged-record-id {stagedRecordId} --decision accepted --expected-staged-hash {stagedHash}");
+        Console.WriteLine($"dotnet .\\tests\\smoke\\AIMonitor.ToolSmokeTests\\bin\\Debug\\net10.0\\AIMonitor.ToolSmokeTests.dll --mcp-live-record-decision --staged-record-id {stagedRecordId} --decision rejected");
+        Console.WriteLine();
+        Console.WriteLine(launchText);
+        return launch.IsError == true ? 1 : 0;
+    }
+
+    private static async Task<int> RunMcpLiveRecordDecisionAsync(string[] args)
+    {
+        string stagedRecordId = GetRequiredOption(args, "--staged-record-id");
+        string decision = GetRequiredOption(args, "--decision");
+        string? expectedStagedHash = GetOption(args, "--expected-staged-hash");
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+
+        await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
+        await CallAndPrintAsync(
+            client,
+            "record_diff_decision",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = stagedRecordId,
+                ["decision"] = decision,
+                ["expectedStagedHash"] = expectedStagedHash
+            });
+        return 0;
+    }
+
+    private static async Task CreateStageAndRejectNewFileAsync(
+        McpClient client,
+        string sessionId,
+        string relativePath,
+        string content)
+    {
+        await CallAndPrintAsync(
+            client,
+            "new_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = relativePath,
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "submit_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["content"] = content,
+                ["sessionId"] = sessionId
+            });
+        CallToolResult stage = await CallAndPrintAsync(
+            client,
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["ledgerSummary"] = "bridge multi-file session smoke",
+                ["sessionId"] = sessionId
+            });
+        string stagedRecordId = ExtractJsonString(ExtractToolText(stage), "stagedRecordId");
+        await CallAndPrintAsync(
+            client,
+            "record_diff_decision",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = stagedRecordId,
+                ["decision"] = "rejected"
+            });
+    }
+
+    private static async Task<McpClient> CreateBridgeClientAsync(string repositoryRoot, string settingsPath)
+    {
+        string bridgeDll = Path.Combine(repositoryRoot, "src", "AIMonitor.McpStdioBridge", "bin", "Debug", "net10.0", "AIMonitor.McpStdioBridge.dll");
+        if (!File.Exists(bridgeDll))
+        {
+            throw new FileNotFoundException("MCP stdio bridge build output not found.", bridgeDll);
+        }
+
+        StdioClientTransportOptions options = new()
+        {
+            Name = "ai-monitor-live-smoke",
+            Command = "dotnet",
+            Arguments = [bridgeDll, "--repo-root", repositoryRoot, "--config", settingsPath],
+            WorkingDirectory = repositoryRoot
+        };
+
+        return await McpClient.CreateAsync(new StdioClientTransport(options));
+    }
+
+    private static async Task<CallToolResult> CallAndPrintAsync(
         McpClient client,
         string toolName,
         Dictionary<string, object?>? arguments = null)
     {
         CallToolResult result = await client.CallToolAsync(toolName, arguments);
         Console.WriteLine($"{toolName}: error={result.IsError == true}");
+        return result;
+    }
+
+    private static string ExtractToolText(CallToolResult result)
+    {
+        string wrapperJson = JsonSerializer.Serialize(result);
+        using JsonDocument document = JsonDocument.Parse(wrapperJson);
+        foreach (JsonElement content in document.RootElement.GetProperty("content").EnumerateArray())
+        {
+            if (content.TryGetProperty("text", out JsonElement text)
+                && text.ValueKind == JsonValueKind.String)
+            {
+                return text.GetString() ?? string.Empty;
+            }
+        }
+
+        return wrapperJson;
+    }
+
+    private static string ExtractJsonString(string json, string propertyName)
+    {
+        using JsonDocument document = JsonDocument.Parse(json);
+        if (!document.RootElement.TryGetProperty(propertyName, out JsonElement value)
+            || value.ValueKind != JsonValueKind.String)
+        {
+            throw new InvalidOperationException($"Expected JSON string property '{propertyName}'.");
+        }
+
+        return value.GetString() ?? string.Empty;
+    }
+
+    private static string GetRequiredOption(string[] args, string name)
+    {
+        return GetOption(args, name) ?? throw new InvalidOperationException($"Missing required option {name}.");
+    }
+
+    private static string? GetOption(string[] args, string name)
+    {
+        for (int index = 0; index < args.Length - 1; index++)
+        {
+            if (args[index].Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                return args[index + 1];
+            }
+        }
+
+        return null;
+    }
+
+    private static int ExtractJsonInt(string json, string propertyName)
+    {
+        using JsonDocument document = JsonDocument.Parse(json);
+        if (!document.RootElement.TryGetProperty(propertyName, out JsonElement value)
+            || value.ValueKind != JsonValueKind.Number)
+        {
+            throw new InvalidOperationException($"Expected JSON number property '{propertyName}'.");
+        }
+
+        return value.GetInt32();
     }
 
     private static async Task<int> RunFixtureIndexMatrixAsync()

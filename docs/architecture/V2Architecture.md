@@ -20,10 +20,10 @@ AIMonitor V2 starts from the lessons of MonitorBaseClaude:
 | `AIMonitor.MSBuild` | Solution/project loading, project graph, compile items, target frameworks, and diagnostics. |
 | `AIMonitor.Indexing` | Symbols, references, callers, relationships, and source maps from MSBuild-loaded projects. |
 | `AIMonitor.Runtime` | Build, test, process, diff, and external tool execution adapters. |
-| `AIMonitor.McpServer` | Claude-facing MCP adapter. |
+| `AIMonitor.McpServer` | Combined MCP tool server hosted behind the WinForms-owned MCP proxy hub for interactive sessions, or launched directly by deterministic server tests. |
 | `AIMonitor.Cli` | Codex-friendly command adapter. |
-| `AIMonitor.App` | Operator host/UI. |
-| `AIMonitor.Bridge` | Stdio-to-host bridge when needed by MCP clients. |
+| `AIMonitor.App` | Operator host/UI and first recipient for interactive MCP traffic through its MCP proxy hub. |
+| `AIMonitor.McpStdioBridge` | Thin MCP stdio-to-WinForms-pipe adapter for Claude Code and live smoke tests. It owns no workflow logic and does not launch tools directly. |
 
 ## Initial MSBuild Goal
 
@@ -49,3 +49,11 @@ This boundary is intentional. The current monitor workflow is already useful wit
 ## Logging Boundary
 
 The host process owns log serialization. UI controls, workflow components, MCP, CLI, and future runtime adapters should emit events through `IMonitorLogger` instead of opening their own durable log writers. WinForms can expose a live log view by subscribing to the host-owned `IMonitorLogEventSource`; file reads and writes must allow shared access so diagnostics tools, the UI, and background work do not fight over the JSON-lines file.
+
+## MCP Hosting Boundary
+
+Interactive Claude Code MCP bindings should launch `AIMonitor.McpStdioBridge`, not `AIMonitor.McpServer` directly. The stdio bridge connects the MCP client session to the WinForms-owned MCP proxy hub. WinForms is therefore the first monitor recipient for live MCP traffic, records request/response telemetry, and then relays JSON-RPC to the combined `AIMonitor.McpServer`.
+
+Deterministic integration tests may still launch `AIMonitor.McpServer` directly when they are testing server/tool behavior without a live WinForms process. Live smoke tests that need operator-visible telemetry should launch `AIMonitor.McpStdioBridge`.
+
+The checked-in MCP template uses relative paths because it is a repo template. Real Claude Code bindings should use the safer `dotnet` command with absolute paths to `AIMonitor.McpStdioBridge.dll`, the repository root, and the appsettings file until Claude Code's launch working directory is verified.

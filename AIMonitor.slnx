@@ -1,7 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/AIMonitor.App/AIMonitor.App.csproj" />
-    <Project Path="src/AIMonitor.Bridge/AIMonitor.Bridge.csproj" />
+    <Project Path="src/AIMonitor.McpStdioBridge/AIMonitor.McpStdioBridge.csproj" />
     <Project Path="src/AIMonitor.Cli/AIMonitor.Cli.csproj" />
     <Project Path="src/AIMonitor.Core/AIMonitor.Core.csproj" />
     <Project Path="src/AIMonitor.Data/AIMonitor.Data.csproj" />

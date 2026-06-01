@@ -105,6 +105,27 @@ public sealed class McpServerSmokeTests
         Assert.Contains("find_indexed_symbols", logText, StringComparison.Ordinal);
     }
 
+    [Fact(Skip = "MCP stdio bridge connects to the WinForms-owned MCP proxy hub; cover it with ToolSmokeTests live workflows.")]
+    public async Task Mcp_bridge_forwards_stdio_to_server_and_records_request_response_telemetry()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateBridgeClientAsync(fixture);
+
+        CallToolResult status = await client.CallToolAsync("get_monitor_status");
+        Assert.False(status.IsError == true);
+        Assert.Contains("projectCount", ExtractToolText(status), StringComparison.Ordinal);
+
+        string logPath = Path.Combine(fixture.RuntimeRoot, "logs", "aimonitor.ndjson");
+        Assert.True(File.Exists(logPath));
+        string logText = await File.ReadAllTextAsync(logPath);
+        Assert.Contains("AIMonitor.McpProxyHub", logText, StringComparison.Ordinal);
+        Assert.Contains("adapter.mcp.request.started", logText, StringComparison.Ordinal);
+        Assert.Contains("adapter.mcp.request.completed", logText, StringComparison.Ordinal);
+        Assert.Contains("get_monitor_status", logText, StringComparison.Ordinal);
+        Assert.Contains("AIMonitor.McpServer", logText, StringComparison.Ordinal);
+        Assert.Contains("adapter.mcp.tool.called", logText, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Mcp_refresh_and_stage_use_monitor_working_copy()
     {
@@ -199,14 +220,14 @@ public sealed class McpServerSmokeTests
         Assert.False(span.IsError == true);
         Assert.Contains("textHash", ExtractToolText(span), StringComparison.Ordinal);
 
-        CallToolResult compatibility = await client.CallToolAsync(
+        CallToolResult sourceMap = await client.CallToolAsync(
             "get_source_map",
             new Dictionary<string, object?>
             {
                 ["path"] = fixture.ProgramFilePath
             });
-        Assert.False(compatibility.IsError == true);
-        Assert.Contains("not-implemented", ExtractToolText(compatibility), StringComparison.Ordinal);
+        Assert.False(sourceMap.IsError == true);
+        Assert.Contains("Program", ExtractToolText(sourceMap), StringComparison.Ordinal);
 
         CallToolResult records = await client.CallToolAsync(
             "list_session_staged_records",
@@ -215,6 +236,641 @@ public sealed class McpServerSmokeTests
                 ["sessionId"] = sessionId
             });
         Assert.False(records.IsError == true);
+    }
+
+    [Fact]
+    public async Task Mcp_replace_text_preserves_line_endings_and_rejects_stale_hashes()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+        string crlfContent = "namespace Example\r\n{\r\n    internal static class Program\r\n    {\r\n        public static string Value => \"old\";\r\n    }\r\n}\r\n";
+        await File.WriteAllTextAsync(fixture.ProgramFilePath, crlfContent);
+
+        CallToolResult refresh = await client.CallToolAsync(
+            "refresh_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = fixture.ProgramFilePath
+            });
+        Assert.False(refresh.IsError == true);
+        string workingFilePath = ExtractJsonString(ExtractToolText(refresh), "workingFilePath");
+
+        CallToolResult staleReplace = await client.CallToolAsync(
+            "replace_text_in_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["oldText"] = "old",
+                ["newText"] = "stale",
+                ["expectedMatches"] = 1,
+                ["expectedFileHash"] = new string('0', 64)
+            });
+        Assert.True(staleReplace.IsError == true);
+
+        CallToolResult replace = await client.CallToolAsync(
+            "replace_text_in_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["oldText"] = "public static string Value => \"old\";",
+                ["newText"] = "public static string Value => \"new\";\n        public static int Count => 1;",
+                ["expectedMatches"] = 1
+            });
+        Assert.False(replace.IsError == true);
+        string replaceJson = ExtractToolText(replace);
+        Assert.Equal("CRLF", ExtractJsonString(replaceJson, "lineEnding"));
+        Assert.Equal(1, ExtractJsonInt(replaceJson, "actualMatches"));
+
+        string workingText = await File.ReadAllTextAsync(workingFilePath);
+        Assert.Contains("public static int Count => 1;", workingText, StringComparison.Ordinal);
+        Assert.Equal(0, CountBareLf(workingText));
+        Assert.DoesNotContain("Count => 1", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Mcp_find_text_span_and_replace_span_edit_working_copy_only()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+
+        CallToolResult submit = await client.CallToolAsync(
+            "submit_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["content"] = "namespace Example\n{\n    internal static class Program\n    {\n        public static string Value => \"span-old\";\n    }\n}\n"
+            });
+        Assert.False(submit.IsError == true);
+        string workingFilePath = ExtractJsonString(ExtractToolText(submit), "workingFilePath");
+
+        CallToolResult span = await client.CallToolAsync(
+            "find_text_span",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["findText"] = "span-old"
+            });
+        Assert.False(span.IsError == true);
+        string spanJson = ExtractToolText(span);
+        string oldTextHash = ExtractJsonString(spanJson, "textHash");
+
+        CallToolResult replace = await client.CallToolAsync(
+            "replace_span_in_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["startLine"] = ExtractJsonInt(spanJson, "startLine"),
+                ["startColumn"] = ExtractJsonInt(spanJson, "startColumn"),
+                ["endLine"] = ExtractJsonInt(spanJson, "endLine"),
+                ["endColumn"] = ExtractJsonInt(spanJson, "endColumn"),
+                ["newText"] = "span-new",
+                ["expectedOldTextHash"] = oldTextHash,
+                ["expectedOldText"] = "span-old"
+            });
+        Assert.False(replace.IsError == true);
+        Assert.Contains("span-new", await File.ReadAllTextAsync(workingFilePath), StringComparison.Ordinal);
+        Assert.DoesNotContain("span-new", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Mcp_new_file_stage_and_reject_leaves_watched_source_absent()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+        string newFilePath = Path.Combine(Path.GetDirectoryName(fixture.ProgramFilePath)!, "Generated", "McpRejectedThing.cs");
+
+        CallToolResult create = await client.CallToolAsync(
+            "new_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = newFilePath
+            });
+        Assert.False(create.IsError == true);
+        string createJson = ExtractToolText(create);
+        Assert.True(ExtractJsonBool(createJson, "isNewFile"));
+        string workingFilePath = ExtractJsonString(createJson, "workingFilePath");
+        Assert.True(File.Exists(workingFilePath));
+        Assert.False(File.Exists(newFilePath));
+
+        await File.WriteAllTextAsync(workingFilePath, "namespace Example.Generated { internal sealed class McpRejectedThing { } }");
+
+        CallToolResult stage = await client.CallToolAsync(
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = newFilePath
+            });
+        Assert.False(stage.IsError == true);
+        string stageJson = ExtractToolText(stage);
+        Assert.True(ExtractJsonBool(stageJson, "isNewFile"));
+        string reviewBaselineFilePath = ExtractJsonString(stageJson, "reviewBaselineFilePath");
+        Assert.True(File.Exists(reviewBaselineFilePath));
+        Assert.Equal(string.Empty, await File.ReadAllTextAsync(reviewBaselineFilePath));
+
+        CallToolResult decision = await client.CallToolAsync(
+            "record_diff_decision",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = ExtractJsonString(stageJson, "stagedRecordId"),
+                ["decision"] = "rejected"
+            });
+        Assert.False(decision.IsError == true);
+        Assert.Equal("rejected", ExtractJsonString(ExtractToolText(decision), "classification"));
+        Assert.False(File.Exists(newFilePath));
+    }
+
+    [Fact]
+    public async Task Mcp_new_file_member_pair_edit_stress_removes_removed_members_before_review()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+        string newFilePath = Path.Combine(Path.GetDirectoryName(fixture.ProgramFilePath)!, "Generated", "McpMemberPairs.cs");
+
+        CallToolResult create = await client.CallToolAsync(
+            "new_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = newFilePath
+            });
+        Assert.False(create.IsError == true);
+        string workingFilePath = ExtractJsonString(ExtractToolText(create), "workingFilePath");
+        Assert.False(File.Exists(newFilePath));
+
+        string scaffold = "namespace Example.Generated\n{\n    internal sealed class McpMemberPairs\n    {\n    }\n}\n";
+        CallToolResult submit = await client.CallToolAsync(
+            "submit_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = newFilePath,
+                ["content"] = scaffold
+            });
+        Assert.False(submit.IsError == true);
+
+        for (int index = 1; index <= 3; index++)
+        {
+            CallToolResult keepProperty = await client.CallToolAsync(
+                "add_property",
+                new Dictionary<string, object?>
+                {
+                    ["path"] = newFilePath,
+                    ["containingType"] = "McpMemberPairs",
+                    ["declaration"] = $"public string KeepProperty{index} => \"keep-{index}\";"
+                });
+            Assert.False(keepProperty.IsError == true);
+
+            CallToolResult removedProperty = await client.CallToolAsync(
+                "add_property",
+                new Dictionary<string, object?>
+                {
+                    ["path"] = newFilePath,
+                    ["containingType"] = "McpMemberPairs",
+                    ["declaration"] = $"public string RemovedProperty{index}_removed => \"remove-{index}\";"
+                });
+            Assert.False(removedProperty.IsError == true);
+
+            CallToolResult keepMethod = await client.CallToolAsync(
+                "add_method",
+                new Dictionary<string, object?>
+                {
+                    ["path"] = newFilePath,
+                    ["containingType"] = "McpMemberPairs",
+                    ["declaration"] = $"public string KeepMethod{index}() => \"keep-method-{index}\";"
+                });
+            Assert.False(keepMethod.IsError == true);
+
+            CallToolResult removedMethod = await client.CallToolAsync(
+                "add_method",
+                new Dictionary<string, object?>
+                {
+                    ["path"] = newFilePath,
+                    ["containingType"] = "McpMemberPairs",
+                    ["declaration"] = $"public string RemovedMethod{index}_removed() => \"remove-method-{index}\";"
+                });
+            Assert.False(removedMethod.IsError == true);
+        }
+
+        for (int index = 1; index <= 3; index++)
+        {
+            CallToolResult removeProperty = await client.CallToolAsync(
+                "remove_symbol",
+                new Dictionary<string, object?>
+                {
+                    ["path"] = newFilePath,
+                    ["symbolSelectorJson"] = $$"""{"containingType":"McpMemberPairs","memberKind":"property","name":"RemovedProperty{{index}}_removed"}"""
+                });
+            Assert.False(removeProperty.IsError == true);
+
+            CallToolResult removeMethod = await client.CallToolAsync(
+                "remove_symbol",
+                new Dictionary<string, object?>
+                {
+                    ["path"] = newFilePath,
+                    ["symbolSelectorJson"] = $$"""{"containingType":"McpMemberPairs","memberKind":"method","name":"RemovedMethod{{index}}_removed"}"""
+                });
+            Assert.False(removeMethod.IsError == true);
+        }
+
+        string workingText = await File.ReadAllTextAsync(workingFilePath);
+        Assert.Contains("KeepProperty1", workingText, StringComparison.Ordinal);
+        Assert.Contains("KeepMethod3", workingText, StringComparison.Ordinal);
+        Assert.DoesNotContain("_removed", workingText, StringComparison.Ordinal);
+        Assert.False(File.Exists(newFilePath));
+
+        CallToolResult stage = await client.CallToolAsync(
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = newFilePath,
+                ["ledgerSummary"] = "mcp member pair stress"
+            });
+        Assert.False(stage.IsError == true);
+        string stageJson = ExtractToolText(stage);
+        string stagedFilePath = ExtractJsonString(stageJson, "stagedFilePath");
+        string stagedText = await File.ReadAllTextAsync(stagedFilePath);
+        Assert.Contains("KeepProperty2", stagedText, StringComparison.Ordinal);
+        Assert.DoesNotContain("_removed", stagedText, StringComparison.Ordinal);
+
+        CallToolResult decision = await client.CallToolAsync(
+            "record_diff_decision",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = ExtractJsonString(stageJson, "stagedRecordId"),
+                ["decision"] = "rejected"
+            });
+        Assert.False(decision.IsError == true);
+        Assert.Equal("rejected", ExtractJsonString(ExtractToolText(decision), "classification"));
+        Assert.False(File.Exists(newFilePath));
+    }
+
+    [Fact]
+    public async Task Mcp_session_multi_file_accept_flow_tracks_both_staged_records()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+        string helperFilePath = Path.Combine(Path.GetDirectoryName(fixture.ProgramFilePath)!, "Helper.cs");
+        await File.WriteAllTextAsync(
+            helperFilePath,
+            "namespace Example { internal static class Helper { public static string Value() => \"old\"; } }");
+
+        CallToolResult session = await client.CallToolAsync(
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["purpose"] = "multi-file accepted flow"
+            });
+        Assert.False(session.IsError == true);
+        string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
+
+        CallToolResult helperSubmit = await client.CallToolAsync(
+            "submit_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = helperFilePath,
+                ["content"] = "namespace Example { internal static class Helper { public static string Value() => \"accepted-helper\"; } }",
+                ["sessionId"] = sessionId
+            });
+        Assert.False(helperSubmit.IsError == true);
+
+        CallToolResult programSubmit = await client.CallToolAsync(
+            "submit_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["content"] = "namespace Example { internal static class Program { public static string Value => Helper.Value(); } }",
+                ["sessionId"] = sessionId
+            });
+        Assert.False(programSubmit.IsError == true);
+
+        Assert.Contains("old", await File.ReadAllTextAsync(helperFilePath), StringComparison.Ordinal);
+        Assert.DoesNotContain("Helper.Value", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
+
+        CallToolResult helperStage = await client.CallToolAsync(
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = helperFilePath,
+                ["ledgerSummary"] = "mcp session multi-file helper",
+                ["sessionId"] = sessionId
+            });
+        Assert.False(helperStage.IsError == true);
+        string helperStageJson = ExtractToolText(helperStage);
+        string helperStagedFilePath = ExtractJsonString(helperStageJson, "stagedFilePath");
+        string helperStagedHash = ExtractJsonString(helperStageJson, "stagedHash");
+        string helperStagedRecordId = ExtractJsonString(helperStageJson, "stagedRecordId");
+
+        CallToolResult programStage = await client.CallToolAsync(
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["ledgerSummary"] = "mcp session multi-file program",
+                ["sessionId"] = sessionId
+            });
+        Assert.False(programStage.IsError == true);
+        string programStageJson = ExtractToolText(programStage);
+        string programStagedFilePath = ExtractJsonString(programStageJson, "stagedFilePath");
+        string programStagedHash = ExtractJsonString(programStageJson, "stagedHash");
+        string programStagedRecordId = ExtractJsonString(programStageJson, "stagedRecordId");
+
+        CallToolResult sessionRecords = await client.CallToolAsync(
+            "list_session_staged_records",
+            new Dictionary<string, object?>
+            {
+                ["sessionId"] = sessionId
+            });
+        Assert.False(sessionRecords.IsError == true);
+        string sessionRecordsJson = ExtractToolText(sessionRecords);
+        Assert.Contains(helperStagedRecordId, sessionRecordsJson, StringComparison.Ordinal);
+        Assert.Contains(programStagedRecordId, sessionRecordsJson, StringComparison.Ordinal);
+
+        CallToolResult helperLaunch = await client.CallToolAsync(
+            "launch_staged_diff",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = helperStagedRecordId,
+                ["diffToolPath"] = GetFakeDiffToolPath()
+            });
+        Assert.False(helperLaunch.IsError == true);
+        Assert.Contains("launched", ExtractToolText(helperLaunch), StringComparison.Ordinal);
+
+        File.Copy(helperStagedFilePath, helperFilePath, overwrite: true);
+        CallToolResult helperDecision = await client.CallToolAsync(
+            "record_diff_decision",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = helperStagedRecordId,
+                ["decision"] = "accepted",
+                ["expectedStagedHash"] = helperStagedHash
+            });
+        Assert.False(helperDecision.IsError == true, ExtractToolText(helperDecision));
+        Assert.Equal("accepted", ExtractJsonString(ExtractToolText(helperDecision), "classification"));
+
+        CallToolResult programLaunch = await client.CallToolAsync(
+            "launch_staged_diff",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = programStagedRecordId,
+                ["diffToolPath"] = GetFakeDiffToolPath()
+            });
+        Assert.False(programLaunch.IsError == true);
+        Assert.Contains("launched", ExtractToolText(programLaunch), StringComparison.Ordinal);
+
+        File.Copy(programStagedFilePath, fixture.ProgramFilePath, overwrite: true);
+        CallToolResult programDecision = await client.CallToolAsync(
+            "record_diff_decision",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = programStagedRecordId,
+                ["decision"] = "accepted",
+                ["expectedStagedHash"] = programStagedHash
+            });
+        Assert.False(programDecision.IsError == true, ExtractToolText(programDecision));
+        Assert.Equal("accepted", ExtractJsonString(ExtractToolText(programDecision), "classification"));
+
+        Assert.Contains("accepted-helper", await File.ReadAllTextAsync(helperFilePath), StringComparison.Ordinal);
+        Assert.Contains("Helper.Value()", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Mcp_claude_skill_sequence_uses_source_map_symbol_read_and_roslyn_edits()
+    {
+        McpFixture fixture = CreateFixture();
+        await File.WriteAllTextAsync(
+            fixture.ProgramFilePath,
+            """
+            namespace Example
+            {
+                internal static class Program
+                {
+                    private static readonly string RemovedField_removed = "remove";
+
+                    public static string GetValue()
+                    {
+                        return "old";
+                    }
+                }
+            }
+            """);
+        await using McpClient client = await CreateClientAsync(fixture);
+
+        CallToolResult monitorStatus = await client.CallToolAsync("get_monitor_status");
+        Assert.False(monitorStatus.IsError == true);
+        CallToolResult workflowStatus = await client.CallToolAsync("get_workflow_status");
+        Assert.False(workflowStatus.IsError == true);
+
+        CallToolResult sourceMap = await client.CallToolAsync(
+            "get_source_map",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["scope"] = "file",
+                ["mode"] = "selector"
+            });
+        Assert.False(sourceMap.IsError == true);
+        string sourceMapJson = ExtractToolText(sourceMap);
+        Assert.Contains("GetValue", sourceMapJson, StringComparison.Ordinal);
+        Assert.Contains("RemovedField_removed", sourceMapJson, StringComparison.Ordinal);
+
+        const string getValueSelector = """{"containingType":"Program","memberKind":"method","name":"GetValue"}""";
+        CallToolResult symbol = await client.CallToolAsync(
+            "get_symbol",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["symbolSelectorJson"] = getValueSelector
+            });
+        Assert.False(symbol.IsError == true);
+        Assert.Contains("old", ExtractToolText(symbol), StringComparison.Ordinal);
+
+        CallToolResult replacement = await client.CallToolAsync(
+            "submit_symbol",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["symbolSelectorJson"] = getValueSelector,
+                ["code"] = "public static string GetValue() => \"new\";"
+            });
+        Assert.False(replacement.IsError == true);
+
+        CallToolResult addProperty = await client.CallToolAsync(
+            "add_property",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["containingType"] = "Program",
+                ["declaration"] = "public static string AddedProperty => GetValue();"
+            });
+        Assert.False(addProperty.IsError == true);
+
+        CallToolResult addMethod = await client.CallToolAsync(
+            "add_method",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["containingType"] = "Program",
+                ["declaration"] = "public static string AddedMethod() => AddedProperty;"
+            });
+        Assert.False(addMethod.IsError == true);
+
+        CallToolResult removeField = await client.CallToolAsync(
+            "remove_symbol",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["symbolSelectorJson"] = """{"containingType":"Program","memberKind":"field","name":"RemovedField_removed"}"""
+            });
+        Assert.False(removeField.IsError == true);
+
+        string workingFilePath = ExtractJsonString(ExtractToolText(removeField), "workingFilePath");
+        string workingText = await File.ReadAllTextAsync(workingFilePath);
+        Assert.Contains("AddedMethod", workingText, StringComparison.Ordinal);
+        Assert.Contains("=> \"new\";", workingText, StringComparison.Ordinal);
+        Assert.DoesNotContain("RemovedField_removed", workingText, StringComparison.Ordinal);
+        Assert.Contains("return \"old\";", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
+
+        CallToolResult stage = await client.CallToolAsync(
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["ledgerSummary"] = "claude skill sequence smoke"
+            });
+        Assert.False(stage.IsError == true);
+        string stageJson = ExtractToolText(stage);
+        Assert.Contains("stagedRecordId", stageJson, StringComparison.Ordinal);
+
+        CallToolResult decision = await client.CallToolAsync(
+            "record_diff_decision",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = ExtractJsonString(stageJson, "stagedRecordId"),
+                ["decision"] = "rejected"
+            });
+        Assert.False(decision.IsError == true);
+        Assert.Equal("rejected", ExtractJsonString(ExtractToolText(decision), "classification"));
+        Assert.Contains("return \"old\";", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Mcp_compare_and_stage_snapshot_without_mutating_watched_source()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+
+        CallToolResult submit = await client.CallToolAsync(
+            "submit_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["content"] = "namespace Example { internal static class Program { public static string Value => \"compare\"; } }"
+            });
+        Assert.False(submit.IsError == true);
+
+        CallToolResult compare = await client.CallToolAsync(
+            "compare_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = fixture.ProgramFilePath,
+                ["ledgerSummary"] = "mcp compare smoke"
+            });
+        Assert.False(compare.IsError == true);
+        string compareJson = ExtractToolText(compare);
+        Assert.Equal("compare-ready", ExtractJsonString(compareJson, "classification"));
+        Assert.True(File.Exists(ExtractJsonString(compareJson, "proposedSnapshotPath")));
+        Assert.True(File.Exists(ExtractJsonString(compareJson, "ledgerPath")));
+
+        CallToolResult stage = await client.CallToolAsync(
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath
+            });
+        Assert.False(stage.IsError == true);
+        Assert.Contains("stagedRecordId", ExtractToolText(stage), StringComparison.Ordinal);
+        Assert.DoesNotContain("compare", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Mcp_session_hash_check_detects_watched_source_changes()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+
+        CallToolResult session = await client.CallToolAsync(
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["purpose"] = "hash check smoke"
+            });
+        Assert.False(session.IsError == true);
+        string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
+
+        CallToolResult read = await client.CallToolAsync(
+            "get_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = fixture.ProgramFilePath,
+                ["sessionId"] = sessionId
+            });
+        Assert.False(read.IsError == true);
+
+        CallToolResult unchanged = await client.CallToolAsync(
+            "check_file_hash",
+            new Dictionary<string, object?>
+            {
+                ["sessionId"] = sessionId,
+                ["sourceFilePath"] = fixture.ProgramFilePath
+            });
+        Assert.False(unchanged.IsError == true);
+        Assert.True(ExtractJsonBool(ExtractToolText(unchanged), "knownInSession"));
+        Assert.False(ExtractJsonBool(ExtractToolText(unchanged), "changedSinceFetch"));
+
+        await File.WriteAllTextAsync(fixture.ProgramFilePath, "namespace Example { internal static class Program { public static string Value => \"external\"; } }");
+
+        CallToolResult changed = await client.CallToolAsync(
+            "check_file_hash",
+            new Dictionary<string, object?>
+            {
+                ["sessionId"] = sessionId,
+                ["sourceFilePath"] = fixture.ProgramFilePath
+            });
+        Assert.False(changed.IsError == true);
+        Assert.True(ExtractJsonBool(ExtractToolText(changed), "changedSinceFetch"));
+    }
+
+    [Fact]
+    public async Task Mcp_record_decision_accept_requires_expected_staged_hash()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+
+        CallToolResult submit = await client.CallToolAsync(
+            "submit_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["content"] = "namespace Example { internal static class Program { public static string Value => \"accepted\"; } }"
+            });
+        Assert.False(submit.IsError == true);
+
+        CallToolResult stage = await client.CallToolAsync(
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath
+            });
+        Assert.False(stage.IsError == true);
+        string stageJson = ExtractToolText(stage);
+        File.Copy(ExtractJsonString(stageJson, "stagedFilePath"), fixture.ProgramFilePath, overwrite: true);
+
+        CallToolResult decision = await client.CallToolAsync(
+            "record_diff_decision",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = ExtractJsonString(stageJson, "stagedRecordId"),
+                ["decision"] = "accepted"
+            });
+        Assert.True(decision.IsError == true);
     }
 
     private static async Task<McpClient> CreateClientAsync(McpFixture fixture)
@@ -233,6 +889,28 @@ public sealed class McpServerSmokeTests
             Name = "ai-monitor",
             Command = "dotnet",
             Arguments = [serverDll, "--repo-root", fixture.RepositoryRoot, "--config", fixture.SettingsPath],
+            WorkingDirectory = fixture.RepositoryRoot
+        };
+
+        return await McpClient.CreateAsync(new StdioClientTransport(options));
+    }
+
+    private static async Task<McpClient> CreateBridgeClientAsync(McpFixture fixture)
+    {
+        string bridgeDll = Path.Combine(
+            fixture.RepositoryRoot,
+            "src",
+            "AIMonitor.McpStdioBridge",
+            "bin",
+            GetBuildConfiguration(),
+            "net10.0",
+            "AIMonitor.McpStdioBridge.dll");
+
+        StdioClientTransportOptions options = new()
+        {
+            Name = "ai-monitor-bridge",
+            Command = "dotnet",
+            Arguments = [bridgeDll, "--repo-root", fixture.RepositoryRoot, "--config", fixture.SettingsPath],
             WorkingDirectory = fixture.RepositoryRoot
         };
 
@@ -347,6 +1025,20 @@ public sealed class McpServerSmokeTests
             ?? throw new InvalidOperationException($"Could not find JSON string property '{propertyName}'.");
     }
 
+    private static int ExtractJsonInt(string json, string propertyName)
+    {
+        using System.Text.Json.JsonDocument document = System.Text.Json.JsonDocument.Parse(json);
+        return FindNumber(document.RootElement, propertyName)
+            ?? throw new InvalidOperationException($"Could not find JSON number property '{propertyName}'.");
+    }
+
+    private static bool ExtractJsonBool(string json, string propertyName)
+    {
+        using System.Text.Json.JsonDocument document = System.Text.Json.JsonDocument.Parse(json);
+        return FindBool(document.RootElement, propertyName)
+            ?? throw new InvalidOperationException($"Could not find JSON bool property '{propertyName}'.");
+    }
+
     private static string? FindString(System.Text.Json.JsonElement element, string propertyName)
     {
         if (element.ValueKind == System.Text.Json.JsonValueKind.Object)
@@ -379,6 +1071,104 @@ public sealed class McpServerSmokeTests
         }
 
         return null;
+    }
+
+    private static int? FindNumber(System.Text.Json.JsonElement element, string propertyName)
+    {
+        if (element.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            foreach (System.Text.Json.JsonProperty property in element.EnumerateObject())
+            {
+                if (property.NameEquals(propertyName)
+                    && property.Value.ValueKind == System.Text.Json.JsonValueKind.Number
+                    && property.Value.TryGetInt32(out int value))
+                {
+                    return value;
+                }
+
+                int? nested = FindNumber(property.Value, propertyName);
+                if (nested.HasValue)
+                {
+                    return nested;
+                }
+            }
+        }
+        else if (element.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (System.Text.Json.JsonElement item in element.EnumerateArray())
+            {
+                int? nested = FindNumber(item, propertyName);
+                if (nested.HasValue)
+                {
+                    return nested;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static bool? FindBool(System.Text.Json.JsonElement element, string propertyName)
+    {
+        if (element.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            foreach (System.Text.Json.JsonProperty property in element.EnumerateObject())
+            {
+                if (property.NameEquals(propertyName)
+                    && (property.Value.ValueKind == System.Text.Json.JsonValueKind.True
+                        || property.Value.ValueKind == System.Text.Json.JsonValueKind.False))
+                {
+                    return property.Value.GetBoolean();
+                }
+
+                bool? nested = FindBool(property.Value, propertyName);
+                if (nested.HasValue)
+                {
+                    return nested;
+                }
+            }
+        }
+        else if (element.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (System.Text.Json.JsonElement item in element.EnumerateArray())
+            {
+                bool? nested = FindBool(item, propertyName);
+                if (nested.HasValue)
+                {
+                    return nested;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static int CountBareLf(string text)
+    {
+        string withoutCrLf = text.Replace("\r\n", string.Empty, StringComparison.Ordinal);
+        return withoutCrLf.Count(character => character == '\n');
+    }
+
+    private static string GetFakeDiffToolPath()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            string windowsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "where.exe");
+            if (File.Exists(windowsPath))
+            {
+                return windowsPath;
+            }
+        }
+
+        foreach (string candidate in new[] { "/usr/bin/true", "/bin/true" })
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        throw new FileNotFoundException("Unable to find a harmless executable for diff-launch tests.");
     }
 
     private static string GetBuildConfiguration()

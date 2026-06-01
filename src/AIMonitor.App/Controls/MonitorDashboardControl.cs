@@ -13,6 +13,7 @@ public sealed class MonitorDashboardControl : UserControl
     private readonly Label statusLabel;
     private MonitorLogService? logService;
     private MonitorLogPipeServer? logPipeServer;
+    private McpProxyHubService? mcpProxyHubService;
 
     public MonitorDashboardControl()
     {
@@ -42,6 +43,7 @@ public sealed class MonitorDashboardControl : UserControl
         adapterSurfaceControl.StatusChanged += status => statusLabel.Text = status;
         mainTabs.TabPages.Add(BuildTab("Solution Index", solutionIndexControl));
         mainTabs.TabPages.Add(BuildTab("Monitor Status", adapterSurfaceControl));
+        mainTabs.SelectedIndex = 1;
 
         Controls.Add(BuildLayout());
 
@@ -89,8 +91,10 @@ public sealed class MonitorDashboardControl : UserControl
             MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot);
             logService = new MonitorLogService(MonitorLogPaths.GetDefaultLogPath(settings));
             logPipeServer?.Dispose();
+            mcpProxyHubService?.Dispose();
             logPipeServer = new MonitorLogPipeServer(MonitorLogPipeNames.GetDefaultPipeName(settings), logService);
             logPipeServer.Start();
+            mcpProxyHubService = new McpProxyHubService(settings, logService);
             solutionIndexControl.SetLogger(logService);
             adapterSurfaceControl.Connect(logService.LogPath, logService);
             logService.Write(
@@ -100,7 +104,8 @@ public sealed class MonitorDashboardControl : UserControl
                 "AIMonitor hub log pipe started.",
                 new Dictionary<string, string>
                 {
-                    ["pipeName"] = logPipeServer.PipeName
+                    ["pipeName"] = logPipeServer.PipeName,
+                    ["mcpProxyPipeName"] = mcpProxyHubService.PipeName
                 });
         }
         catch (Exception ex)
@@ -113,6 +118,7 @@ public sealed class MonitorDashboardControl : UserControl
     {
         if (disposing)
         {
+            mcpProxyHubService?.Dispose();
             logPipeServer?.Dispose();
         }
 

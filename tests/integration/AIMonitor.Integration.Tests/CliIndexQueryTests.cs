@@ -664,6 +664,8 @@ public sealed class CliIndexQueryTests
         Assert.False(File.Exists(newFilePath));
 
         await LaunchDiffAsync(fixture, stagedRecordId);
+        Assert.True(File.Exists(newFilePath));
+        Assert.Equal(string.Empty, await File.ReadAllTextAsync(newFilePath));
         Directory.CreateDirectory(Path.GetDirectoryName(newFilePath)!);
         File.Copy(stagedFilePath, newFilePath, overwrite: true);
         Assert.True(File.Exists(newFilePath));
@@ -686,6 +688,66 @@ public sealed class CliIndexQueryTests
         using JsonDocument decisionDocument = JsonDocument.Parse(decision.StdOut);
         Assert.Equal("accepted", decisionDocument.RootElement.GetProperty("classification").GetString());
         Assert.True(File.Exists(newFilePath));
+    }
+
+    [Fact]
+    public async Task Edit_new_file_launch_creates_blank_watched_file_and_reject_cleans_it_up()
+    {
+        CliFixture fixture = CreateFixture();
+        string newFilePath = Path.Combine(Path.GetDirectoryName(fixture.ProgramFilePath)!, "Generated", "LaunchRejectedThing.cs");
+
+        CliResult create = await RunCliAsync(
+            "edit",
+            "new",
+            "--file",
+            newFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, create.ExitCode);
+        using JsonDocument createDocument = JsonDocument.Parse(create.StdOut);
+        string workingFilePath = createDocument.RootElement.GetProperty("workingFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing working file path.");
+        await File.WriteAllTextAsync(workingFilePath, "namespace Example.Generated { internal sealed class LaunchRejectedThing { } }");
+
+        CliResult stage = await RunCliAsync(
+            "edit",
+            "stage",
+            "--file",
+            newFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, stage.ExitCode);
+        using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
+        string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
+            ?? throw new InvalidOperationException("Missing staged record id.");
+        Assert.False(File.Exists(newFilePath));
+
+        await LaunchDiffAsync(fixture, stagedRecordId);
+        Assert.True(File.Exists(newFilePath));
+        Assert.Equal(string.Empty, await File.ReadAllTextAsync(newFilePath));
+
+        CliResult decision = await RunCliAsync(
+            "edit",
+            "record-decision",
+            "--staged-record-id",
+            stagedRecordId,
+            "--decision",
+            "rejected",
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, decision.ExitCode);
+        using JsonDocument decisionDocument = JsonDocument.Parse(decision.StdOut);
+        Assert.Equal("rejected", decisionDocument.RootElement.GetProperty("classification").GetString());
+        Assert.False(File.Exists(newFilePath));
     }
 
     [Fact]
