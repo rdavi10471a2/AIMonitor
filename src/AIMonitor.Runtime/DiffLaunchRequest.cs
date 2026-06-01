@@ -7,4 +7,6 @@ public sealed class DiffLaunchRequest
     public string ProposedFilePath { get; set; } = string.Empty;
 
     public string? ExplicitToolPath { get; set; }
+
+    public IReadOnlyList<string> CandidateToolPaths { get; set; } = [];
 }

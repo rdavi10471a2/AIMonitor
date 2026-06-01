@@ -17,7 +17,10 @@ public sealed class MonitorSettingsLoaderTests
             {
               "Monitor": {
                 "WatchedSolutionPath": "{{solutionPath.Replace("\\", "\\\\")}}",
-                "RuntimeRoot": "runtime"
+                "RuntimeRoot": "runtime",
+                "WinMergeCandidatePaths": [
+                  "tools/WinMergeU.exe"
+                ]
               }
             }
             """);
@@ -26,15 +29,30 @@ public sealed class MonitorSettingsLoaderTests
 
         Assert.Equal(Path.GetFullPath(solutionPath), settings.WatchedSolutionPath);
         Assert.Equal(Path.Combine(root, "runtime"), settings.RuntimeRoot);
+        Assert.Equal(Path.Combine(config, "tools", "WinMergeU.exe"), Assert.Single(settings.WinMergeCandidatePaths));
     }
 
     [Fact]
-    public void SaveLocal_writes_loadable_local_settings_file()
+    public void SaveLocal_writes_loadable_local_settings_file_and_preserves_diff_tool_paths()
     {
         string root = Path.Combine(Path.GetTempPath(), "AIMonitorTests", Guid.NewGuid().ToString("N"));
         string solutionPath = Path.Combine(root, "Watched", "Fixture.sln");
+        string config = Path.Combine(root, "config");
+        string settingsFile = Path.Combine(config, "appsettings.json");
         Directory.CreateDirectory(Path.GetDirectoryName(solutionPath)!);
+        Directory.CreateDirectory(config);
         File.WriteAllText(solutionPath, string.Empty);
+        File.WriteAllText(settingsFile, """
+            {
+              "Monitor": {
+                "WatchedSolutionPath": "old.sln",
+                "RuntimeRoot": "runtime",
+                "WinMergeCandidatePaths": [
+                  "C:\\Tools\\WinMerge\\WinMergeU.exe"
+                ]
+              }
+            }
+            """);
 
         string settingsPath = MonitorSettingsLoader.SaveLocal(root, solutionPath);
         MonitorSettings settings = MonitorSettingsLoader.Load(root, settingsPath);
@@ -42,5 +60,6 @@ public sealed class MonitorSettingsLoaderTests
         Assert.Equal(Path.Combine(root, "config", "appsettings.json"), settingsPath);
         Assert.Equal(Path.GetFullPath(solutionPath), settings.WatchedSolutionPath);
         Assert.Equal(Path.Combine(root, "runtime"), settings.RuntimeRoot);
+        Assert.Equal(@"C:\Tools\WinMerge\WinMergeU.exe", Assert.Single(settings.WinMergeCandidatePaths));
     }
 }

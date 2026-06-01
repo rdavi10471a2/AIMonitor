@@ -263,7 +263,8 @@ internal static class Program
         {
             OriginalFilePath = GetDiffOriginalFilePath(record),
             ProposedFilePath = record.StagedFilePath,
-            ExplicitToolPath = GetOption(args, "--diff-tool")
+            ExplicitToolPath = GetOption(args, "--diff-tool"),
+            CandidateToolPaths = settings.WinMergeCandidatePaths
         });
         StagedEditRecord updatedRecord = service.RecordDiffLaunch(record.StagedRecordId, result.Launched, result.Message);
         return new

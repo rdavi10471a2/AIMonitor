@@ -4,22 +4,16 @@ namespace AIMonitor.Runtime;
 
 public sealed class WinMergeDiffToolLauncher
 {
-    private static readonly string[] WinMergeCandidates =
-    [
-        @"C:\Program Files\WinMerge\WinMergeU.exe",
-        @"C:\Program Files (x86)\WinMerge\WinMergeU.exe"
-    ];
-
     public DiffLaunchResult Launch(DiffLaunchRequest request)
     {
-        string? toolPath = ResolveToolPath(request.ExplicitToolPath);
+        string? toolPath = ResolveToolPath(request.ExplicitToolPath, request.CandidateToolPaths);
         if (string.IsNullOrWhiteSpace(toolPath))
         {
             return new DiffLaunchResult
             {
                 Launched = false,
                 Tool = "WinMerge",
-                Message = "WinMerge was not found. Install WinMerge or pass --diff-tool <path>."
+                Message = "WinMerge was not found. Configure Monitor:WinMergeCandidatePaths or pass --diff-tool <path>."
             };
         }
 
@@ -52,14 +46,14 @@ public sealed class WinMergeDiffToolLauncher
         };
     }
 
-    private static string? ResolveToolPath(string? explicitToolPath)
+    private static string? ResolveToolPath(string? explicitToolPath, IReadOnlyList<string> candidateToolPaths)
     {
         if (!string.IsNullOrWhiteSpace(explicitToolPath))
         {
             return File.Exists(explicitToolPath) ? explicitToolPath : null;
         }
 
-        return WinMergeCandidates.FirstOrDefault(File.Exists);
+        return candidateToolPaths.FirstOrDefault(File.Exists);
     }
 
     private static string GetDisplayName(string originalFilePath)

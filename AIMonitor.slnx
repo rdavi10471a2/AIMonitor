@@ -10,7 +10,6 @@
     <Project Path="src/AIMonitor.McpServer/AIMonitor.McpServer.csproj" />
     <Project Path="src/AIMonitor.MSBuild/AIMonitor.MSBuild.csproj" />
     <Project Path="src/AIMonitor.Runtime/AIMonitor.Runtime.csproj" />
-    <Project Path="src/AIMonitor.Storage/AIMonitor.Storage.csproj" />
     <Project Path="src/AIMonitor.Workflow/AIMonitor.Workflow.csproj" />
   </Folder>
   <Folder Name="/tests/unit/">
