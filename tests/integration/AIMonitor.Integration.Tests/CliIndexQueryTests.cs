@@ -348,6 +348,9 @@ public sealed class CliIndexQueryTests
         using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
         string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
             ?? throw new InvalidOperationException("Missing staged record id.");
+        string stagedFilePath = stageDocument.RootElement.GetProperty("stagedFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing staged file path.");
+        File.Delete(stagedFilePath);
 
         CliResult decision = await RunCliAsync(
             "edit",
@@ -877,13 +880,24 @@ public sealed class CliIndexQueryTests
 
     private static string GetFakeDiffToolPath()
     {
-        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "where.exe");
-        if (!File.Exists(path))
+        if (OperatingSystem.IsWindows())
         {
-            throw new FileNotFoundException("Unable to find a harmless executable for diff-launch tests.", path);
+            string windowsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "where.exe");
+            if (File.Exists(windowsPath))
+            {
+                return windowsPath;
+            }
         }
 
-        return path;
+        foreach (string candidate in new[] { "/usr/bin/true", "/bin/true" })
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        throw new FileNotFoundException("Unable to find a harmless executable for diff-launch tests.");
     }
 
     private static string GetBuildConfiguration()
