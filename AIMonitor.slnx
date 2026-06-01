@@ -59,6 +59,20 @@
   <Folder Name="/docs/workflows/">
     <File Path="docs/workflows/SafeEditWorkflow.md" />
   </Folder>
+  <Folder Name="/docs/claude-skills/">
+    <File Path="docs/claude-skills/AIMonitorWorkflowQuickStart.md" />
+    <File Path="docs/claude-skills/AsyncPropagation.md" />
+    <File Path="docs/claude-skills/FormattingOracle.md" />
+    <File Path="docs/claude-skills/AIMonitorSkillPack.md" />
+    <File Path="docs/claude-skills/PartialClassRefactor.md" />
+    <File Path="docs/claude-skills/README.md" />
+    <File Path="docs/claude-skills/ReviewQueueAndGates.md" />
+    <File Path="docs/claude-skills/RoslynFirstNavigation.md" />
+    <File Path="docs/claude-skills/SessionOverlayValidation.md" />
+    <File Path="docs/claude-skills/SkillRouter.md" />
+    <File Path="docs/claude-skills/SystemMonitorStaging.md" />
+    <File Path="docs/claude-skills/TroubleshootingDashboard.md" />
+  </Folder>
   <Folder Name="/config/">
     <File Path="config/appsettings.template.json" />
     <File Path="config/mcp.template.json" />

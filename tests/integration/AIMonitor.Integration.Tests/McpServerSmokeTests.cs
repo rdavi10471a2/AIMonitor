@@ -8,6 +8,11 @@ namespace AIMonitor.Integration.Tests;
 
 public sealed class McpServerSmokeTests
 {
+    static McpServerSmokeTests()
+    {
+        Environment.SetEnvironmentVariable("AIMONITOR_DISABLE_VALIDATION_DIALOG", "1");
+    }
+
     [Fact]
     public async Task Mcp_server_lists_monitor_tools_and_serves_index_queries()
     {
@@ -415,6 +420,8 @@ public sealed class McpServerSmokeTests
         Assert.False(launch.IsError == true, ExtractToolText(launch));
         string launchJson = ExtractToolText(launch);
         Assert.Contains("\"launched\":false", launchJson, StringComparison.Ordinal);
+        Assert.Contains("\"preMergeValidation\"", launchJson, StringComparison.Ordinal);
+        Assert.Contains("\"status\":\"failed\"", launchJson, StringComparison.Ordinal);
         Assert.Contains("Pre-merge validation failed", launchJson, StringComparison.Ordinal);
     }
 

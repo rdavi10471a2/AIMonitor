@@ -883,6 +883,13 @@ public sealed class AIMonitorTools
         runtimeState.Touch();
         StagedEditRecord record = workflowService.GetStagedRecord(stagedRecordId);
         PreMergeValidationResult validation = new PreMergeValidationService().Validate(settings, record);
+        string validationPrompt = "";
+        if (validation.IsError && !forceValidation && PreMergeValidationOverridePrompt.CanShow())
+        {
+            forceValidation = PreMergeValidationOverridePrompt.Prompt(validation.Diagnostics);
+            validationPrompt = forceValidation ? "approved" : "cancelled";
+        }
+
         logger.Write(
             validation.IsError ? MonitorLogLevel.Warning : MonitorLogLevel.Information,
             "AIMonitor.McpServer",
@@ -897,6 +904,7 @@ public sealed class AIMonitorTools
                 ["diagnosticCount"] = validation.DiagnosticCount.ToString(),
                 ["validationWorkspacePath"] = validation.ValidationWorkspacePath,
                 ["forceValidation"] = forceValidation.ToString().ToLowerInvariant(),
+                ["validationPrompt"] = validationPrompt,
                 ["isError"] = validation.IsError.ToString().ToLowerInvariant()
             });
 
@@ -908,6 +916,7 @@ public sealed class AIMonitorTools
                 "Pre-merge validation failed. WinMerge launch is blocked unless forceValidation is used after human approval.");
             return new AIMonitorStagedDiffLaunchResult(
                 blocked,
+                validation,
                 new DiffLaunchResult
                 {
                     Launched = false,
@@ -929,7 +938,7 @@ public sealed class AIMonitorTools
             CandidateToolPaths = settings.WinMergeCandidatePaths
         });
         StagedEditRecord updated = workflowService.RecordDiffLaunch(record.StagedRecordId, launch.Launched, launch.Message);
-        return new AIMonitorStagedDiffLaunchResult(updated, launch);
+        return new AIMonitorStagedDiffLaunchResult(updated, validation, launch);
     }
 
     [McpServerTool]
@@ -1358,6 +1367,7 @@ public sealed record AIMonitorNamespaceTree(
 
 public sealed record AIMonitorStagedDiffLaunchResult(
     StagedEditRecord StagedRecord,
+    PreMergeValidationResult PreMergeValidation,
     DiffLaunchResult DiffLaunch);
 
 public sealed record AIMonitorSelfCheckResult(

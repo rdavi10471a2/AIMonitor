@@ -35,6 +35,23 @@ Accepted decisions rebuild the monitor-owned solution index and emit telemetry. 
 
 Runtime workflow history, staged records, validation copies, logs, and index artifacts belong under `runtime/`. Prefer explicit cleanup/prune commands or UI buttons over automatic pruning on every run; clean partial test artifacts deliberately by exact path.
 
+## Claude Skill Cards
+
+Claude should read the focused AIMonitor skill cards from `docs/claude-skills/` when operating this repo or an AIMonitor watched project. These are not Markdown includes; they are required context files to open before editing. Start with:
+
+- `docs/claude-skills/AIMonitorWorkflowQuickStart.md`
+- `docs/claude-skills/SkillRouter.md`
+
+For C# edits, treat the source-map tools as first-class precision tools, not optional fallback:
+
+- use the solution index for broad discovery;
+- use `get_source_map`, `get_symbol`, and `submit_symbol` for precise symbol replacement;
+- use the typed Roslyn edit tools for additions/removals when they fit;
+- use text/span tools for exact non-symbol edits;
+- use `submit_file` for new files, generated files, or deliberate whole-file replacement.
+
+Do not load every skill card by default. Route to the smallest card needed for the current task, then use live MCP tool descriptions for exact argument names.
+
 ## Razor Guidance
 
 For Blazor/Razor projects, AIMonitor V2 indexes the parts it can defend:
