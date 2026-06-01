@@ -21,7 +21,8 @@ public sealed class WinMergeDiffToolLauncher
         {
             FileName = toolPath,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = false,
+            WindowStyle = ProcessWindowStyle.Normal
         };
         string displayName = GetDisplayName(request.OriginalFilePath);
         AddArguments(

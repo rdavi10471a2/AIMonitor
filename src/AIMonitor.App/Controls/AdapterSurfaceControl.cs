@@ -456,12 +456,18 @@ public sealed class AdapterSurfaceControl : UserControl
                     ? command
                     : entry.Properties.TryGetValue("testName", out string? testName)
                         ? testName
+                        : entry.EventName.StartsWith("premerge.validation.", StringComparison.OrdinalIgnoreCase)
+                            ? "premerge validation"
                         : entry.EventName.StartsWith("index.refresh-after-accept.", StringComparison.OrdinalIgnoreCase)
                             ? "index refresh after accept"
                             : string.Empty;
             IsError = entry.Properties.TryGetValue("isError", out string? isError) ? isError : string.Empty;
             DurationMs = entry.Properties.TryGetValue("durationMs", out string? durationMs) ? durationMs : string.Empty;
-            ContentCount = entry.Properties.TryGetValue("contentCount", out string? contentCount) ? contentCount : string.Empty;
+            ContentCount = entry.Properties.TryGetValue("contentCount", out string? contentCount)
+                ? contentCount
+                : entry.Properties.TryGetValue("diagnosticCount", out string? diagnosticCount)
+                    ? diagnosticCount
+                    : string.Empty;
             ContentTextPreview = entry.Properties.TryGetValue("contentTextPreview", out string? contentTextPreview) ? contentTextPreview : string.Empty;
             string responseText = entry.Properties.TryGetValue("contentText", out string? contentText)
                 ? contentText
