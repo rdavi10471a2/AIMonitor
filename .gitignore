@@ -16,6 +16,9 @@ config/local-smoke-samples.json
 .claude-local/
 runtime/
 
+# Machine-specific MCP binding (absolute paths to the stdio bridge dll/repo/config)
+.mcp.json
+
 # Local-only probes
 local/
 samples/watched-solutions/*

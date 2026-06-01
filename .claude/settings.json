@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__ai-monitor__*",
+      "Read(//c/VSCodeProjects/AIMonitor/**)",
+      "Read(//c/Schema Studio - DBV2/**)",
+      "Bash(git pull *)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git fetch *)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(rg:*)",
+      "Bash(tasklist *)",
+      "Bash(dotnet build:*)",
+      "PowerShell($exe = \"C:\\\\VSCodeProjects\\\\AIMonitor\\\\src\\\\AIMonitor.App\\\\bin\\\\Debug\\\\net10.0-windows\\\\AIMonitor.App.exe\"; Start-Process -FilePath $exe -WorkingDirectory \\(Split-Path $exe\\); Start-Sleep -Seconds 4; Get-Process -Name \"AIMonitor.App\" -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,StartTime | Format-Table -AutoSize)",
+      "Bash(git check-ignore *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git rebase *)"
+    ],
+    "deny": [
+      "Edit(//c/Schema Studio - DBV2/**)",
+      "Write(//c/Schema Studio - DBV2/**)",
+      "NotebookEdit(//c/Schema Studio - DBV2/**)"
+    ]
+  }
+}
