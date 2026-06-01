@@ -54,6 +54,11 @@ internal static class Program
             return await RunMcpLiveHumanWinMergeAsync();
         }
 
+        if (args.Contains("--mcp-live-human-existing-winmerge", StringComparer.OrdinalIgnoreCase))
+        {
+            return await RunMcpLiveHumanExistingWinMergeAsync();
+        }
+
         if (args.Contains("--mcp-live-record-decision", StringComparer.OrdinalIgnoreCase))
         {
             return await RunMcpLiveRecordDecisionAsync(args);
@@ -74,6 +79,7 @@ internal static class Program
         Console.WriteLine("  --mcp-live-all-edit-tools Run non-human file and Roslyn edit tools through the stdio bridge against a monitor-owned new-file candidate, then reject.");
         Console.WriteLine("  --mcp-live-multi-file-session Run a two-file staged session through the stdio bridge, then reject both files.");
         Console.WriteLine("  --mcp-live-human-winmerge Launch real WinMerge through the live MCP bridge and stop for human save/reject.");
+        Console.WriteLine("  --mcp-live-human-existing-winmerge Launch real WinMerge for an existing-file edit through the live MCP bridge.");
         Console.WriteLine("  --mcp-live-record-decision --staged-record-id <id> --decision accepted|rejected [--expected-staged-hash <hash>] Record the human WinMerge decision.");
         Console.WriteLine("  --visible-test-suite      Run live MCP calls, then dotnet test, and emit test result telemetry to the WinForms monitor log.");
         return 2;
@@ -743,6 +749,79 @@ internal static class Program
 
         Console.WriteLine();
         Console.WriteLine("Human WinMerge smoke launched.");
+        Console.WriteLine($"Session ID: {sessionId}");
+        Console.WriteLine($"Staged record ID: {stagedRecordId}");
+        Console.WriteLine($"Expected staged hash: {stagedHash}");
+        Console.WriteLine("After reviewing/saving in WinMerge, record the result with:");
+        Console.WriteLine($"dotnet .\\tests\\smoke\\AIMonitor.ToolSmokeTests\\bin\\Debug\\net10.0\\AIMonitor.ToolSmokeTests.dll --mcp-live-record-decision --staged-record-id {stagedRecordId} --decision accepted --expected-staged-hash {stagedHash}");
+        Console.WriteLine($"dotnet .\\tests\\smoke\\AIMonitor.ToolSmokeTests\\bin\\Debug\\net10.0\\AIMonitor.ToolSmokeTests.dll --mcp-live-record-decision --staged-record-id {stagedRecordId} --decision rejected");
+        Console.WriteLine();
+        Console.WriteLine(launchText);
+        return launch.IsError == true ? 1 : 0;
+    }
+
+    private static async Task<int> RunMcpLiveHumanExistingWinMergeAsync()
+    {
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        const string relativePath = "AppConfig/AppConfig.cs";
+        string marker = DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssfff");
+        const string oldText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = true;";
+        string newText = oldText + $"\r\n\r\n        public bool AIMonitorExistingWinMergeSmoke_{marker} {{ get; set; }} = true;";
+
+        await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
+        CallToolResult session = await CallAndPrintAsync(
+            client,
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["title"] = "existing-file human WinMerge smoke"
+            });
+        string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
+
+        await CallAndPrintAsync(
+            client,
+            "refresh_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = relativePath,
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "replace_text_in_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["oldText"] = oldText,
+                ["newText"] = newText,
+                ["expectedMatches"] = 1,
+                ["sessionId"] = sessionId
+            });
+        CallToolResult stage = await CallAndPrintAsync(
+            client,
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["ledgerSummary"] = "existing-file human WinMerge smoke",
+                ["sessionId"] = sessionId
+            });
+        string stageJson = ExtractToolText(stage);
+        string stagedRecordId = ExtractJsonString(stageJson, "stagedRecordId");
+        string stagedHash = ExtractJsonString(stageJson, "stagedHash");
+
+        CallToolResult launch = await CallAndPrintAsync(
+            client,
+            "launch_staged_diff",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = stagedRecordId
+            });
+        string launchText = ExtractToolText(launch);
+
+        Console.WriteLine();
+        Console.WriteLine("Existing-file human WinMerge smoke launched.");
         Console.WriteLine($"Session ID: {sessionId}");
         Console.WriteLine($"Staged record ID: {stagedRecordId}");
         Console.WriteLine($"Expected staged hash: {stagedHash}");
