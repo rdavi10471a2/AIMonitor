@@ -680,12 +680,16 @@ internal sealed class ProjectSymbolIndex
             references,
             referenceIdentities,
             cancellationToken);
-        AddSourceGeneratedRazorReferences(
-            compilation,
-            solutionSymbolsByIdentity,
-            references,
-            referenceIdentities,
-            cancellationToken);
+        if (razorDocuments.Count > 0)
+        {
+            await AddSourceGeneratedRazorReferences(
+                project,
+                compilation,
+                solutionSymbolsByIdentity,
+                references,
+                referenceIdentities,
+                cancellationToken);
+        }
 
         return new ProjectSymbolIndex(
             declarations.Symbols,
@@ -743,17 +747,49 @@ internal sealed class ProjectSymbolIndex
         }
     }
 
-    private static void AddSourceGeneratedRazorReferences(
+    private static async Task AddSourceGeneratedRazorReferences(
+        Microsoft.CodeAnalysis.Project project,
         Compilation compilation,
         IReadOnlyDictionary<string, MSBuildSymbolSnapshot> solutionSymbolsByIdentity,
         List<MSBuildReferenceSnapshot> references,
         HashSet<string> referenceIdentities,
         CancellationToken cancellationToken)
     {
-        foreach (SyntaxTree tree in compilation.SyntaxTrees.Where(IsSourceGeneratedRazorTree))
+        IEnumerable<SourceGeneratedDocument> generatedDocuments =
+            await project.GetSourceGeneratedDocumentsAsync(cancellationToken);
+        List<SyntaxTree> generatedRazorTrees = [];
+        HashSet<string> generatedRazorTreePaths = new(StringComparer.OrdinalIgnoreCase);
+        foreach (SourceGeneratedDocument document in generatedDocuments)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            SemanticModel model = compilation.GetSemanticModel(tree);
+            SyntaxTree? tree = await document.GetSyntaxTreeAsync(cancellationToken);
+            if (tree is not null
+                && IsSourceGeneratedRazorTree(tree)
+                && generatedRazorTreePaths.Add(tree.FilePath))
+            {
+                generatedRazorTrees.Add(tree);
+            }
+        }
+
+        if (generatedRazorTrees.Count == 0)
+        {
+            return;
+        }
+
+        HashSet<string> existingTreePaths = compilation.SyntaxTrees
+            .Where(tree => !string.IsNullOrWhiteSpace(tree.FilePath))
+            .Select(tree => tree.FilePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        SyntaxTree[] missingTrees = generatedRazorTrees
+            .Where(tree => !existingTreePaths.Contains(tree.FilePath))
+            .ToArray();
+        Compilation generatedCompilation = missingTrees.Length == 0
+            ? compilation
+            : compilation.AddSyntaxTrees(missingTrees);
+        foreach (SyntaxTree tree in generatedRazorTrees)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SemanticModel model = generatedCompilation.GetSemanticModel(tree);
             SyntaxNode root = tree.GetRoot(cancellationToken);
             foreach (SyntaxNode node in root.DescendantNodes().Where(node => IsReferenceCandidate(node) && !IsNestedDuplicateReferenceCandidate(node)))
             {

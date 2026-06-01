@@ -1,5 +1,5 @@
 ---
-status: new
+status: partially-addressed
 type: finding
 created: 2026-06-01
 scope: CLI vs MCP adapters over the shared workflow + data engine
@@ -8,6 +8,26 @@ confidence: high
 ---
 
 ## Summary
+
+## Resolution update - 2026-06-01
+
+Addressed in the follow-up fix after this review:
+
+- Engine now persists pre-merge validation status on each staged record and `RecordDecision` refuses accepted decisions if validation never ran or failed without explicit force approval.
+- Accepted `dirty-unexpected` decisions now throw instead of recording an accepted decision against stale watched bytes.
+- MCP `submit_file` now delegates to `WorkflowEditService.SubmitFile`, which creates/uses the monitor-owned session, enforces refresh-required, and normalizes submitted content to the Working file's existing line endings.
+- MCP write helpers that call `EnsureSession` now reject refresh-required sessions before touching the Working candidate.
+- `get_ledger` now validates supplied ledger paths with `Path.GetRelativePath` boundary checks instead of a raw string prefix check.
+- The stale VS Code `build bridge` task now targets `AIMonitor.McpStdioBridge`.
+- `src/AIMonitor.Storage` was removed; durable store behavior remains in `AIMonitor.Data` until a real tested storage boundary exists.
+
+Still open/backlog from this review:
+
+- Factor launch-diff and record-decision orchestration into a shared facade to reduce CLI/MCP duplication.
+- Move span edit positioning into the workflow engine and define CRLF column semantics there.
+- Decide whether `occurrenceIndex` should be implemented or removed from `replace_text_in_file`.
+- Push selected index filters into SQL and reduce repeated schema setup on reads.
+- Revisit manifest locking/concurrency, raw build-output fallback for validation diagnostics, and the lower-priority cleanup items.
 
 Read-only deep dive evaluating whether the AIMonitor monitor code meets its core design rule —
 **"MCP is not the workflow. MCP is the Claude adapter over the shared workflow engine"** — and whether
@@ -155,7 +175,7 @@ The two cracks (both expected for a V0.1 built in a day, not yet independently r
 
 ## Wiring & hygiene
 
-- **AIMonitor.Bridge is fully dead and still referenced by a broken task (medium).** No `*.csproj` under `src/AIMonitor.Bridge`
+- **AIMonitor.Bridge is fully dead and still referenced by a broken task (medium, addressed 2026-06-01).** No `*.csproj` under `src/AIMonitor.Bridge`
   and it is not in the slnx, yet `.vscode/tasks.json:29-39` ("build bridge") points at
   `${workspaceFolder}/src/AIMonitor.Bridge/AIMonitor.Bridge.csproj`, which will fail.
   *Fix: delete the stale bin/obj and remove/retarget the task to `AIMonitor.McpStdioBridge`.*
@@ -195,7 +215,7 @@ The two cracks (both expected for a V0.1 built in a day, not yet independently r
 - Stage byte-exact vs normalization-aware accept asymmetry — `WorkflowEditService.cs:294`. *Fix: choose one authoritative comparison.*
 - Non-atomic file reads / no manifest lock — `WorkflowEditService.cs:372-407`, `496-500`. *Fix: advisory lock around manifest read-modify-write.*
 - PreMergeValidationService English-token error parse — `PreMergeValidationService.cs:417-424`. *Fix: surface raw build output when no diagnostics parsed.*
-- AIMonitor.Bridge dead + broken build task — `.vscode/tasks.json:29-39`. *Fix: delete bin/obj and remove/retarget the task.*
+- AIMonitor.Bridge dead + broken build task — `.vscode/tasks.json:29-39`. **Addressed 2026-06-01.**
 - AIMonitor.Storage empty placeholder — `src/AIMonitor.Storage/StorageBoundary.cs`. *Fix: delete until real durable state migrates.*
 
 ### Low

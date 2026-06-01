@@ -1,5 +1,5 @@
 ---
-status: new
+status: addressed-in-code
 type: finding
 created: 2026-06-01
 scope: solution-index reference extraction for Razor component-attribute bindings (two-file pages)
@@ -8,6 +8,16 @@ watched-target: C:\SchemaStudioWebViewer V 1.1 - Monitor\SchemaStudioWebViewer.s
 ---
 
 ## Summary
+
+Resolution update - 2026-06-01:
+
+- `MSBuildWorkspaceLoader` now feeds the Razor source-generated reference path from
+  `Project.GetSourceGeneratedDocumentsAsync()` in addition to any generated Razor trees already present in the
+  compilation.
+- The generated-tree path de-duplicates trees already present in the compilation before adding missing trees for
+  semantic binding.
+- Added a regression test for a two-file Razor component with a component `@bind-Value` markup reference back to a
+  code-behind property.
 
 Indexed references from `.razor` **markup** back to user symbols work for **C# in `@code`/expression blocks**, but
 **not for component-attribute bindings** (`@bind-Value="X"`, `Click="@Method"`, component parameters). A newly authored

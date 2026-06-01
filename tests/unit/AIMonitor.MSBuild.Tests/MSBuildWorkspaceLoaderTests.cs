@@ -177,6 +177,74 @@ public sealed class MSBuildWorkspaceLoaderTests
         Assert.Equal("razor:IdentifierName", reference.ReferenceKind);
     }
 
+    [Fact]
+    public async Task OpenProjectAsync_indexes_two_file_razor_component_binding_references()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "AIMonitorTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string projectPath = Path.Combine(root, "ComponentBindingFixture.csproj");
+        string importsPath = Path.Combine(root, "_Imports.razor");
+        string boundInputPath = Path.Combine(root, "BoundInput.razor");
+        string consumerMarkupPath = Path.Combine(root, "Consumer.razor");
+        string consumerCodeBehindPath = Path.Combine(root, "Consumer.razor.cs");
+
+        await File.WriteAllTextAsync(projectPath, """
+            <Project Sdk="Microsoft.NET.Sdk.Razor">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+              <ItemGroup>
+                <FrameworkReference Include="Microsoft.AspNetCore.App" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        await File.WriteAllTextAsync(importsPath, """
+            @using ComponentBindingFixture
+            @using Microsoft.AspNetCore.Components
+            """);
+
+        await File.WriteAllTextAsync(boundInputPath, """
+            <input value="@Value" />
+
+            @code {
+                [Parameter] public string Value { get; set; } = "";
+                [Parameter] public EventCallback<string> ValueChanged { get; set; }
+            }
+            """);
+
+        await File.WriteAllTextAsync(consumerMarkupPath, """
+            <BoundInput @bind-Value="DisplayName" />
+            """);
+
+        await File.WriteAllTextAsync(consumerCodeBehindPath, """
+            using Microsoft.AspNetCore.Components;
+
+            namespace ComponentBindingFixture;
+
+            public partial class Consumer : ComponentBase
+            {
+                public string DisplayName { get; set; } = "ready";
+            }
+            """);
+
+        MSBuildSolutionSnapshot snapshot = await new MSBuildWorkspaceLoader().OpenProjectAsync(projectPath);
+
+        MSBuildSymbolSnapshot displayName = snapshot.Projects
+            .SelectMany(project => project.Symbols)
+            .Single(symbol => symbol.Name == "DisplayName" && symbol.Kind == "Property");
+        MSBuildReferenceSnapshot reference = snapshot.Projects
+            .SelectMany(project => project.References)
+            .Single(reference =>
+                reference.TargetStableKey == displayName.StableKey
+                && reference.FilePath.EndsWith("Consumer.razor", StringComparison.OrdinalIgnoreCase)
+                && reference.Snippet.Contains("DisplayName", StringComparison.Ordinal));
+
+        Assert.StartsWith("razor-generated:", reference.ReferenceKind, StringComparison.Ordinal);
+    }
+
     private static string ComputeFileHash(string filePath)
     {
         using FileStream stream = File.OpenRead(filePath);

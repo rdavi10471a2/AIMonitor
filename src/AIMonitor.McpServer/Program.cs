@@ -581,16 +581,13 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
-        EditSessionStatus status = File.Exists(fullPath)
-            ? EnsureSession(fullPath)
-            : workflowService.NewFile(fullPath);
-        File.WriteAllText(status.WorkingFilePath, content);
+        EditSessionStatus status = workflowService.SubmitFile(fullPath, content);
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
             RecordMonitorSessionEvent(sessionId, "submit-file", fullPath, manifestJson);
         }
 
-        return workflowService.GetStatus(fullPath);
+        return status;
     }
 
     [McpServerTool]
@@ -890,6 +887,8 @@ public sealed class AIMonitorTools
             validationPrompt = forceValidation ? "approved" : "cancelled";
         }
 
+        record = workflowService.RecordPreMergeValidation(record.StagedRecordId, validation, forceValidation);
+
         logger.Write(
             validation.IsError ? MonitorLogLevel.Warning : MonitorLogLevel.Information,
             "AIMonitor.McpServer",
@@ -1020,7 +1019,11 @@ public sealed class AIMonitorTools
         string path = !string.IsNullOrWhiteSpace(ledgerPath)
             ? Path.GetFullPath(ledgerPath)
             : Path.Combine(root, $"{Sanitize(workflowPaths.GetRelativeWatchedPath(ResolveWatchedPath(sourceFilePath ?? throw new InvalidOperationException("sourceFilePath or ledgerPath is required."))).Replace(Path.DirectorySeparatorChar, '_'))}.md");
-        if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+        string relativeLedgerPath = Path.GetRelativePath(root, path);
+        if (Path.IsPathRooted(relativeLedgerPath)
+            || relativeLedgerPath.Equals("..", StringComparison.Ordinal)
+            || relativeLedgerPath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+            || relativeLedgerPath.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Ledger path must be under monitor-owned ledger storage.");
         }
@@ -1126,7 +1129,17 @@ public sealed class AIMonitorTools
     private EditSessionStatus EnsureSession(string watchedFilePath)
     {
         EditSessionStatus status = workflowService.GetStatus(watchedFilePath);
-        return status.HasSession ? status : workflowService.Refresh(watchedFilePath);
+        if (!status.HasSession)
+        {
+            return workflowService.Refresh(watchedFilePath);
+        }
+
+        if (status.RequiresRefresh)
+        {
+            throw new InvalidOperationException("Previous decision was accepted. Run refresh_file before editing or staging this file again.");
+        }
+
+        return status;
     }
 
     private void SaveSession(AIMonitorSessionState session)

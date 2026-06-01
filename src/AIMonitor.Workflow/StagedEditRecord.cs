@@ -42,6 +42,16 @@ public sealed class StagedEditRecord
 
     public string LaunchedAtUtc { get; set; } = string.Empty;
 
+    public string PreMergeValidationStatus { get; set; } = string.Empty;
+
+    public bool PreMergeValidationIsError { get; set; }
+
+    public bool PreMergeValidationForceApproved { get; set; }
+
+    public int PreMergeValidationDiagnosticCount { get; set; }
+
+    public string PreMergeValidationAtUtc { get; set; } = string.Empty;
+
     public string LastCompareRunId { get; set; } = string.Empty;
 
     public string LastCompareSnapshotPath { get; set; } = string.Empty;

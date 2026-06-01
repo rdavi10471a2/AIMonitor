@@ -252,6 +252,32 @@ public sealed class WorkflowEditService
         };
     }
 
+    public EditSessionStatus SubmitFile(string watchedFilePath, string content)
+    {
+        string fullWatchedPath = Path.GetFullPath(watchedFilePath);
+        EditSessionManifest? manifest = LoadManifest(fullWatchedPath);
+        if (manifest is null)
+        {
+            _ = File.Exists(fullWatchedPath)
+                ? Refresh(fullWatchedPath)
+                : NewFile(fullWatchedPath);
+            manifest = LoadManifest(fullWatchedPath)
+                ?? throw new InvalidOperationException("Edit session could not be created for the file.");
+        }
+
+        EnsureSessionCanEdit(manifest);
+        Directory.CreateDirectory(Path.GetDirectoryName(manifest.WorkingFilePath) ?? ".");
+
+        string existingText = File.Exists(manifest.WorkingFilePath)
+            ? File.ReadAllText(manifest.WorkingFilePath)
+            : string.Empty;
+        string lineEnding = string.IsNullOrEmpty(existingText)
+            ? DetectDominantLineEnding(content)
+            : DetectDominantLineEnding(existingText);
+        File.WriteAllText(manifest.WorkingFilePath, NormalizeLineEndingsForFile(content, lineEnding));
+        return GetStatus(fullWatchedPath);
+    }
+
     public CompareSnapshotResult Compare(string watchedFilePath, string? ledgerSummary = null)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
@@ -439,6 +465,18 @@ public sealed class WorkflowEditService
         return record;
     }
 
+    public StagedEditRecord RecordPreMergeValidation(string stagedRecordId, PreMergeValidationResult validation, bool forceApproved)
+    {
+        StagedEditRecord record = GetStagedRecord(stagedRecordId);
+        record.PreMergeValidationStatus = validation.Status;
+        record.PreMergeValidationIsError = validation.IsError;
+        record.PreMergeValidationForceApproved = validation.IsError && forceApproved;
+        record.PreMergeValidationDiagnosticCount = validation.DiagnosticCount;
+        record.PreMergeValidationAtUtc = DateTimeOffset.UtcNow.ToString("O");
+        SaveStagedRecord(record);
+        return record;
+    }
+
     public StagedEditRecord PrepareReviewFileForLaunch(string stagedRecordId)
     {
         StagedEditRecord record = GetStagedRecord(stagedRecordId);
@@ -503,6 +541,16 @@ public sealed class WorkflowEditService
             {
                 throw new InvalidOperationException("Cannot accept a staged record before a successful diff review launch.");
             }
+
+            if (string.IsNullOrWhiteSpace(record.PreMergeValidationStatus))
+            {
+                throw new InvalidOperationException("Cannot accept a staged record before pre-merge validation has completed.");
+            }
+
+            if (record.PreMergeValidationIsError && !record.PreMergeValidationForceApproved)
+            {
+                throw new InvalidOperationException("Cannot accept a staged record with failed pre-merge validation unless the failure was explicitly approved before launch.");
+            }
         }
 
         if (normalizedDecision == "rejected"
@@ -526,6 +574,11 @@ public sealed class WorkflowEditService
                 string.IsNullOrWhiteSpace(record.StagedNormalizedHash) ? null : record.StagedNormalizedHash,
                 record.IsNewFile,
                 reviewedFileExists));
+
+        if (normalizedDecision == "accepted" && result.Classification == "dirty-unexpected")
+        {
+            throw new InvalidOperationException("Cannot accept because the watched source does not match the staged candidate. Refresh, reapply the edit, and stage again.");
+        }
 
         record.Decision = decision;
         record.DecisionAtUtc = DateTimeOffset.UtcNow.ToString("O");

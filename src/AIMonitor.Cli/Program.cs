@@ -216,6 +216,8 @@ internal static class Program
             validationPrompt = forceValidation ? "approved" : "cancelled";
         }
 
+        record = service.RecordPreMergeValidation(record.StagedRecordId, validation, forceValidation);
+
         logger.Write(
             validation.IsError ? MonitorLogLevel.Warning : MonitorLogLevel.Information,
             "AIMonitor.Cli",

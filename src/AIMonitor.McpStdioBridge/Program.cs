@@ -8,6 +8,8 @@ namespace AIMonitor.McpStdioBridge;
 
 internal static class Program
 {
+    private const int ProxyHubConnectTimeoutMilliseconds = 60000;
+
     public static async Task<int> Main(string[] args)
     {
         try
@@ -25,11 +27,11 @@ internal static class Program
             using NamedPipeClientStream pipe = new(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
             try
             {
-                await pipe.ConnectAsync(10000);
+                await pipe.ConnectAsync(ProxyHubConnectTimeoutMilliseconds);
             }
             catch (TimeoutException)
             {
-                Console.Error.WriteLine($"AIMonitor WinForms MCP proxy hub did not accept pipe '{pipeName}' within 10 seconds.");
+                Console.Error.WriteLine($"AIMonitor WinForms MCP proxy hub did not accept pipe '{pipeName}' within {ProxyHubConnectTimeoutMilliseconds / 1000} seconds.");
                 Console.Error.WriteLine("Start or restart AIMonitor.exe, then restart the client/test MCP session.");
                 return 10;
             }

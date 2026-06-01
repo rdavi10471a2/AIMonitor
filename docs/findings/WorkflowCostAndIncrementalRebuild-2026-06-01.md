@@ -1,5 +1,5 @@
 ---
-status: new
+status: confirmed-backlog
 type: finding
 created: 2026-06-01
 scope: edit-workflow latency (full-solution rebuild/validation) and token cost, observed live
@@ -8,6 +8,17 @@ method: live workflow test — added UI/DatabaseDomainTestForm.cs (new-file) + S
 ---
 
 ## Summary
+
+Investigation update - 2026-06-01:
+
+- This is still a real cost issue after the adapter safety fixes.
+- No partial "edited project only" build was applied in this pass because it can miss downstream solution compile breaks
+  when a shared/public API changes.
+- No single-file SQLite row replacement was applied in this pass because correct reference freshness needs dependency
+  and target-symbol invalidation, not just deleting rows for the changed file.
+- The next correct implementation should add an indexing/validation orchestration layer that can compute affected
+  projects/files, reuse validation workspaces, and upsert only safe slices while falling back to full rebuild when the
+  affected set is uncertain.
 
 A two-cycle safe-edit workflow test (one new file, one existing-file symbol edit) surfaced two cost problems that
 are latency/token issues, not correctness issues. Both edits validated clean (full-solution build, 0 diagnostics) and

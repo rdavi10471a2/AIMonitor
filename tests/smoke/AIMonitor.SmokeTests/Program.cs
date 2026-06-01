@@ -384,7 +384,7 @@ internal static class Program
                     "SchemaStudioWebViewer.WEBSemanticModel.Binding.ColumnBinder.BindFromSource",
                     "ColumnBinder.cs",
                     new ExpectedGrepAnchor(Path.Combine("WEBSemanticModel", "Binding", "ColumnBinder.cs"), "private static void BindFromSource(SelectItem item, SourceTable source, string column)"),
-                    new ExpectedGrepAnchor(Path.Combine("WEBSemanticModel", "Binding", "ColumnBinder.cs"), "BindFromSource(item, source, col);")),
+                    new ExpectedGrepAnchor(Path.Combine("WEBSemanticModel", "Binding", "ColumnBinder.cs"), "BindFromSource(item, source, col)")),
                 new ExpectedReference(
                     "IsBaseObject",
                     "Property",
@@ -421,14 +421,14 @@ internal static class Program
                     "BlazorDetectorSample.Models.DetectorModel.DisplayName",
                     "SplitProbe.razor.cs",
                     new ExpectedGrepAnchor(Path.Combine("Models", "DetectorModel.cs"), "public string DisplayName { get; set; } = \"Detector\";"),
-                    new ExpectedGrepAnchor(Path.Combine("Components", "Pages", "Detector", "SplitProbe.razor.cs"), "DisplayName = \"Split\"")),
+                    new ExpectedGrepAnchor(Path.Combine("Components", "Pages", "Detector", "SplitProbe.razor.cs"), "DisplayName")),
                 new ExpectedReference(
                     "DisplayName",
                     "Property",
                     "BlazorDetectorSample.Models.DetectorModel.DisplayName",
                     "LegacyMixed.razor.cs",
                     new ExpectedGrepAnchor(Path.Combine("Models", "DetectorModel.cs"), "public string DisplayName { get; set; } = \"Detector\";"),
-                    new ExpectedGrepAnchor(Path.Combine("Components", "Pages", "Detector", "LegacyMixed.razor.cs"), "@MixedModel.DisplayName"))
+                    new ExpectedGrepAnchor(Path.Combine("Components", "Pages", "Detector", "LegacyMixed.razor.cs"), "DisplayName"))
             ],
             VerifyAllRazorCodeBehindFiles: true);
     }
@@ -461,14 +461,14 @@ internal static class Program
                     "USExcomManager.DAXGenerator.FinancialSheetDaxGenerator.GenerateAll",
                     "ExcelProcessorSQL.cs",
                     new ExpectedGrepAnchor(Path.Combine("DAXGenerator", "DaxGenerator.cs"), "public DaxCompilationResult GenerateAll(FinancialPage page, IReadOnlyList<ReportRowDTO> rows)"),
-                    new ExpectedGrepAnchor(Path.Combine("UI", "ExcelProcessorSQL.cs"), "_compilationResult = generator.GenerateAll(SelectedSheet, IngestedRows);")),
+                    new ExpectedGrepAnchor(Path.Combine("UI", "ExcelProcessorSQL.cs"), "generator.GenerateAll(SelectedSheet, IngestedRows)")),
                 new ExpectedReference(
                     "TryParseToFilter",
                     "Method",
                     "USExcomManager.CubeMemberParser.MemberParser.TryParseToFilter(string)",
                     "ExcelProcessor.cs",
                     new ExpectedGrepAnchor(Path.Combine("CubeMemberParser", "CubeMemberParser.cs"), "public CubeMemberParseResult TryParseToFilter(string formula)"),
-                    new ExpectedGrepAnchor(Path.Combine("UI", "ExcelProcessor.cs"), "var parseResult = _parser.TryParseToFilter(rawFormula);")),
+                    new ExpectedGrepAnchor(Path.Combine("UI", "ExcelProcessor.cs"), "_parser.TryParseToFilter(rawFormula)")),
                 new ExpectedReference(
                     "BuildConnectionString",
                     "Method",

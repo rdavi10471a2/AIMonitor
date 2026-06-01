@@ -32,7 +32,7 @@
       "command": "dotnet",
       "args": [
         "build",
-        "${workspaceFolder}/src/AIMonitor.Bridge/AIMonitor.Bridge.csproj"
+        "${workspaceFolder}/src/AIMonitor.McpStdioBridge/AIMonitor.McpStdioBridge.csproj"
       ],
       "group": "build",
       "problemMatcher": "$msCompile"
