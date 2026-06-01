@@ -7,7 +7,7 @@ The CLI and MCP server are adapters over the same monitor-owned data model. WinF
 ## AI-Maintained Map
 
 - `AIMonitor.Data` owns the read-only query surface through `SolutionIndexQueryService`.
-- `AIMonitor.Data` owns the active SQLite query/store implementation today. `AIMonitor.Storage` is an existing boundary scaffold for durable monitor state and schema ownership, not a replacement adapter surface.
+- `AIMonitor.Data` owns the active SQLite query/store implementation today. Do not add `AIMonitor.Storage` back to the solution unless durable monitor state moves there with behavior and tests.
 - `AIMonitor.Cli` exposes that query surface as JSON commands.
 - `AIMonitor.App` exposes an Adapter Surface tab backed by the in-process `MonitorLogService`.
 - `AIMonitor.App` hosts the named-pipe log ingress and owns runtime log serialization.

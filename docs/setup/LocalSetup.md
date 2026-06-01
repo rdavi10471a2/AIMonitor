@@ -8,7 +8,7 @@
 
 2. Copy `config/appsettings.template.json` to `config/appsettings.json`.
 
-3. Set `Monitor:WatchedSolutionPath` to the absolute watched solution path.
+3. Set `Monitor:WatchedSolutionPath` to the absolute watched solution path, and keep `Monitor:WinMergeCandidatePaths` pointed at the local WinMerge executable candidates.
 
    The WinForms app can also set this value with `Choose...`. `config/appsettings.json` is local and ignored, so one AIMonitor checkout can switch between watched solutions without cloning the monitor for each target.
 

@@ -31,7 +31,7 @@ The first real capability is loading SDK-style projects through `MSBuildWorkspac
 
 The first persisted capability is rebuilding the monitor-owned solution index from `Monitor:WatchedSolutionPath`.
 
-`AIMonitor.Data` owns the active SQLite solution index. `AIMonitor.Storage` exists as a boundary scaffold for future durable monitor/workflow state; it should stay intentionally small until real behavior and tests move into that boundary, and it should not replace the current index model by accident.
+`AIMonitor.Data` owns the active SQLite solution index. `AIMonitor.Storage` is not part of the active solution build; if a durable monitor/workflow state boundary becomes real later, add it with behavior and tests instead of carrying an empty scaffold.
 
 ## Semantic Boundary
 
