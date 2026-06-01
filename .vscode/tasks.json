@@ -9,10 +9,7 @@
         "build",
         "${workspaceFolder}/AIMonitor.slnx"
       ],
-      "group": {
-        "kind": "build",
-        "isDefault": true
-      },
+      "group": "build",
       "problemMatcher": "$msCompile"
     },
     {
@@ -23,7 +20,10 @@
         "build",
         "${workspaceFolder}/src/AIMonitor.Cli/AIMonitor.Cli.csproj"
       ],
-      "group": "build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
       "problemMatcher": "$msCompile"
     },
     {
@@ -50,19 +50,80 @@
     },
     {
       "label": "test all",
+      "dependsOn": [
+        "test core",
+        "test data",
+        "test indexing",
+        "test logging",
+        "test msbuild",
+        "test workflow",
+        "test integration"
+      ],
+      "dependsOrder": "sequence",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "test core",
       "type": "process",
       "command": "dotnet",
       "args": [
         "test",
-        "${workspaceFolder}/AIMonitor.slnx",
-        "--no-restore"
+        "${workspaceFolder}/tests/unit/AIMonitor.Core.Tests/AIMonitor.Core.Tests.csproj"
       ],
-      "group": {
-        "kind": "test",
-        "isDefault": true
-      },
+      "group": "test",
       "problemMatcher": "$msCompile",
-      "dependsOn": "build solution"
+      "dependsOn": "build cli"
+    },
+    {
+      "label": "test data",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "test",
+        "${workspaceFolder}/tests/unit/AIMonitor.Data.Tests/AIMonitor.Data.Tests.csproj"
+      ],
+      "group": "test",
+      "problemMatcher": "$msCompile",
+      "dependsOn": "build cli"
+    },
+    {
+      "label": "test indexing",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "test",
+        "${workspaceFolder}/tests/unit/AIMonitor.Indexing.Tests/AIMonitor.Indexing.Tests.csproj"
+      ],
+      "group": "test",
+      "problemMatcher": "$msCompile",
+      "dependsOn": "build cli"
+    },
+    {
+      "label": "test logging",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "test",
+        "${workspaceFolder}/tests/unit/AIMonitor.Logging.Tests/AIMonitor.Logging.Tests.csproj"
+      ],
+      "group": "test",
+      "problemMatcher": "$msCompile",
+      "dependsOn": "build cli"
+    },
+    {
+      "label": "test msbuild",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "test",
+        "${workspaceFolder}/tests/unit/AIMonitor.MSBuild.Tests/AIMonitor.MSBuild.Tests.csproj"
+      ],
+      "group": "test",
+      "problemMatcher": "$msCompile",
+      "dependsOn": "build cli"
     },
     {
       "label": "test workflow",
