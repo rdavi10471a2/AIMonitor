@@ -38,6 +38,17 @@
       "problemMatcher": "$msCompile"
     },
     {
+      "label": "build mcp",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/src/AIMonitor.McpServer/AIMonitor.McpServer.csproj"
+      ],
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
       "label": "build app",
       "type": "process",
       "command": "dotnet",
