@@ -34,6 +34,7 @@ public sealed class MonitorDashboardControl : UserControl
             MinimumSize = new Size(850, 360)
         };
         solutionIndexControl.StatusChanged += status => statusLabel.Text = status;
+        solutionIndexControl.SettingsChanged += ConfigureLogViewer;
         adapterSurfaceControl = new AdapterSurfaceControl
         {
             Dock = DockStyle.Fill

@@ -133,6 +133,7 @@ public sealed class SolutionIndexControl : UserControl
     }
 
     public event Action<string>? StatusChanged;
+    public event Action? SettingsChanged;
 
     public void SetLogger(IMonitorLogger monitorLogger)
     {
@@ -330,6 +331,7 @@ public sealed class SolutionIndexControl : UserControl
                     ["watchedSolutionPath"] = dialog.FileName
                 });
             LoadSettingsAndRefresh();
+            SettingsChanged?.Invoke();
             SetStatus($"Watched solution saved: {dialog.FileName}");
         }
         catch (Exception ex)

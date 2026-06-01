@@ -447,17 +447,7 @@ public sealed class WorkflowEditService
             throw new FileNotFoundException("Watched file was not found.", record.WatchedFilePath);
         }
 
-        if (!File.Exists(record.StagedFilePath))
-        {
-            throw new FileNotFoundException("Staged candidate file was not found.", record.StagedFilePath);
-        }
-
         string normalizedDecision = decision.Trim().ToLowerInvariant();
-        string currentStagedHash = FileHash.Compute(record.StagedFilePath);
-        if (!currentStagedHash.Equals(record.StagedHash, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("Staged candidate content changed after staging. Edit the Working file and run edit stage again.");
-        }
 
         if (normalizedDecision == "accepted")
         {
@@ -469,6 +459,17 @@ public sealed class WorkflowEditService
             if (!record.StagedHash.Equals(expectedStagedHash, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException("Staged record hash does not match --expected-staged-hash.");
+            }
+
+            if (!File.Exists(record.StagedFilePath))
+            {
+                throw new FileNotFoundException("Staged candidate file was not found.", record.StagedFilePath);
+            }
+
+            string currentStagedHash = FileHash.Compute(record.StagedFilePath);
+            if (!currentStagedHash.Equals(record.StagedHash, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Staged candidate content changed after staging. Edit the Working file and run edit stage again.");
             }
 
             if (!record.LaunchStatus.Equals("launched", StringComparison.OrdinalIgnoreCase))
