@@ -380,6 +380,45 @@ public sealed class McpServerSmokeTests
     }
 
     [Fact]
+    public async Task Mcp_launch_staged_diff_blocks_when_premerge_validation_fails()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+
+        CallToolResult refresh = await client.CallToolAsync(
+            "refresh_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = fixture.ProgramFilePath
+            });
+        Assert.False(refresh.IsError == true);
+        string workingFilePath = ExtractJsonString(ExtractToolText(refresh), "workingFilePath");
+        await File.WriteAllTextAsync(workingFilePath, "namespace Example { internal static class Program { public static string Value => ");
+
+        CallToolResult stage = await client.CallToolAsync(
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath
+            });
+        Assert.False(stage.IsError == true);
+        string stagedRecordId = ExtractJsonString(ExtractToolText(stage), "stagedRecordId");
+
+        CallToolResult launch = await client.CallToolAsync(
+            "launch_staged_diff",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = stagedRecordId,
+                ["diffToolPath"] = GetFakeDiffToolPath()
+            });
+
+        Assert.False(launch.IsError == true, ExtractToolText(launch));
+        string launchJson = ExtractToolText(launch);
+        Assert.Contains("\"launched\":false", launchJson, StringComparison.Ordinal);
+        Assert.Contains("Pre-merge validation failed", launchJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Mcp_new_file_member_pair_edit_stress_removes_removed_members_before_review()
     {
         McpFixture fixture = CreateFixture();
@@ -603,7 +642,10 @@ public sealed class McpServerSmokeTests
                 ["expectedStagedHash"] = helperStagedHash
             });
         Assert.False(helperDecision.IsError == true, ExtractToolText(helperDecision));
-        Assert.Equal("accepted", ExtractJsonString(ExtractToolText(helperDecision), "classification"));
+        string helperDecisionJson = ExtractToolText(helperDecision);
+        Assert.Equal("accepted", ExtractJsonString(helperDecisionJson, "classification"));
+        Assert.Contains("\"indexRefresh\"", helperDecisionJson, StringComparison.Ordinal);
+        Assert.Contains("\"status\":\"rebuilt\"", helperDecisionJson, StringComparison.Ordinal);
 
         CallToolResult programLaunch = await client.CallToolAsync(
             "launch_staged_diff",
@@ -625,7 +667,10 @@ public sealed class McpServerSmokeTests
                 ["expectedStagedHash"] = programStagedHash
             });
         Assert.False(programDecision.IsError == true, ExtractToolText(programDecision));
-        Assert.Equal("accepted", ExtractJsonString(ExtractToolText(programDecision), "classification"));
+        string programDecisionJson = ExtractToolText(programDecision);
+        Assert.Equal("accepted", ExtractJsonString(programDecisionJson, "classification"));
+        Assert.Contains("\"indexRefresh\"", programDecisionJson, StringComparison.Ordinal);
+        Assert.Contains("\"status\":\"rebuilt\"", programDecisionJson, StringComparison.Ordinal);
 
         Assert.Contains("accepted-helper", await File.ReadAllTextAsync(helperFilePath), StringComparison.Ordinal);
         Assert.Contains("Helper.Value()", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);

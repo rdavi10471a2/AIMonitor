@@ -680,12 +680,12 @@ internal static class Program
     {
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
         string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
-        const string relativePath = "AppConfig/AIMonitorHumanWinMergeSmoke.cs";
         string marker = DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssfff");
+        string relativePath = $"AppConfig/AIMonitorHumanWinMergeSmoke_{marker}.cs";
         string content = $$"""
             namespace SchemaStudioWebViewer.Configuration
             {
-                public static class AIMonitorHumanWinMergeSmoke
+                public static class AIMonitorHumanWinMergeSmoke_{{marker}}
                 {
                     public static string Marker => "{{marker}}";
                 }

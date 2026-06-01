@@ -1,5 +1,6 @@
 using AIMonitor.Core;
 using AIMonitor.Data;
+using AIMonitor.Indexing;
 using AIMonitor.Logging;
 using AIMonitor.MSBuild;
 using AIMonitor.Runtime;
@@ -77,6 +78,7 @@ public sealed class AIMonitorTools
     private readonly WorkflowEditPaths workflowPaths;
     private readonly AIMonitorMcpRuntimeState runtimeState;
     private readonly IHostApplicationLifetime applicationLifetime;
+    private readonly IMonitorLogger logger;
 
     public AIMonitorTools(
         MonitorSettings settings,
@@ -85,7 +87,8 @@ public sealed class AIMonitorTools
         RoslynEditService roslynEditService,
         WorkflowEditPaths workflowPaths,
         AIMonitorMcpRuntimeState runtimeState,
-        IHostApplicationLifetime applicationLifetime)
+        IHostApplicationLifetime applicationLifetime,
+        IMonitorLogger logger)
     {
         this.settings = settings;
         this.queryService = queryService;
@@ -94,6 +97,7 @@ public sealed class AIMonitorTools
         this.workflowPaths = workflowPaths;
         this.runtimeState = runtimeState;
         this.applicationLifetime = applicationLifetime;
+        this.logger = logger;
     }
 
     [McpServerTool]
@@ -835,23 +839,86 @@ public sealed class AIMonitorTools
 
     [McpServerTool]
     [Description("Classify a completed WinMerge review for a staged edit. Accepted decisions require the expected staged hash.")]
-    public StagedEditRecord RecordDiffDecision(
+    public ReviewDecisionWithIndexRefreshResult RecordDiffDecision(
         [Description("Staged edit record id returned by stage_candidate_for_review.")] string stagedRecordId,
         [Description("Operator-reported outcome: accepted or rejected.")] string decision,
         [Description("Expected staged hash for accepted decisions.")] string? expectedStagedHash = null)
     {
         runtimeState.Touch();
-        return workflowService.RecordDecision(stagedRecordId, decision, expectedStagedHash);
+        StagedEditRecord record = workflowService.RecordDecision(stagedRecordId, decision, expectedStagedHash);
+        PostAcceptIndexRefreshResult? indexRefresh = null;
+        if (record.Classification is "accepted" or "accepted-normalized")
+        {
+            indexRefresh = new PostAcceptIndexRefreshService().RebuildAfterAcceptedDecision(
+                settings,
+                logger,
+                record,
+                "AIMonitor.McpServer");
+        }
+
+        return new ReviewDecisionWithIndexRefreshResult
+        {
+            StagedRecordId = record.StagedRecordId,
+            WatchedFilePath = record.WatchedFilePath,
+            RelativePath = record.RelativePath,
+            Decision = record.Decision,
+            Classification = record.Classification,
+            Status = record.Status,
+            Message = record.Message,
+            StagedRecord = record,
+            IndexRefresh = indexRefresh,
+            NextStep = record.Classification is "accepted" or "accepted-normalized"
+                ? "Index was rebuilt after accept. Run edit refresh before further edits to this watched file."
+                : "Decision recorded. Do not rely on changed index rows unless an accepted decision rebuilt the index."
+        };
     }
 
     [McpServerTool]
-    [Description("Launch WinMerge for a staged edit record and return review paths. This first slice launches only when validation is handled outside MCP; CLI remains authoritative for pre-merge build gating until the next MCP slice.")]
+    [Description("Run pre-merge validation, then launch WinMerge for a staged edit record and return review paths.")]
     public AIMonitorStagedDiffLaunchResult LaunchStagedDiff(
         [Description("Staged edit record id returned by stage_candidate_for_review.")] string stagedRecordId,
-        [Description("Explicit diff tool executable path.")] string? diffToolPath = null)
+        [Description("Explicit diff tool executable path.")] string? diffToolPath = null,
+        [Description("Force launch after an explicit human validation override.")] bool forceValidation = false)
     {
         runtimeState.Touch();
-        StagedEditRecord record = workflowService.PrepareReviewFileForLaunch(stagedRecordId);
+        StagedEditRecord record = workflowService.GetStagedRecord(stagedRecordId);
+        PreMergeValidationResult validation = new PreMergeValidationService().Validate(settings, record);
+        logger.Write(
+            validation.IsError ? MonitorLogLevel.Warning : MonitorLogLevel.Information,
+            "AIMonitor.McpServer",
+            "premerge.validation.completed",
+            validation.Message,
+            new Dictionary<string, string>
+            {
+                ["stagedRecordId"] = record.StagedRecordId,
+                ["watchedFilePath"] = record.WatchedFilePath,
+                ["relativePath"] = record.RelativePath,
+                ["validationStatus"] = validation.Status,
+                ["diagnosticCount"] = validation.DiagnosticCount.ToString(),
+                ["validationWorkspacePath"] = validation.ValidationWorkspacePath,
+                ["forceValidation"] = forceValidation.ToString().ToLowerInvariant(),
+                ["isError"] = validation.IsError.ToString().ToLowerInvariant()
+            });
+
+        if (validation.IsError && !forceValidation)
+        {
+            StagedEditRecord blocked = workflowService.RecordDiffLaunch(
+                record.StagedRecordId,
+                launched: false,
+                "Pre-merge validation failed. WinMerge launch is blocked unless forceValidation is used after human approval.");
+            return new AIMonitorStagedDiffLaunchResult(
+                blocked,
+                new DiffLaunchResult
+                {
+                    Launched = false,
+                    Tool = "WinMerge",
+                    ToolPath = string.Empty,
+                    ProcessId = 0,
+                    Message = "Pre-merge validation failed. Human approval is required before force-launching WinMerge."
+                });
+        }
+
+        record = workflowService.PrepareReviewFileForLaunch(stagedRecordId);
         DiffLaunchResult launch = new WinMergeDiffToolLauncher().Launch(new DiffLaunchRequest
         {
             OriginalFilePath = string.IsNullOrWhiteSpace(record.ReviewBaselineFilePath)

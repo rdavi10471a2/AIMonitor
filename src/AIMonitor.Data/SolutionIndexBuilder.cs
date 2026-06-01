@@ -18,9 +18,10 @@ public sealed class SolutionIndexBuilder
         MonitorSettings settings,
         CancellationToken cancellationToken = default)
     {
-        MSBuildSolutionSnapshot snapshot = await workspaceLoader.OpenSolutionAsync(
-            settings.WatchedSolutionPath,
-            cancellationToken);
+        string extension = Path.GetExtension(settings.WatchedSolutionPath);
+        MSBuildSolutionSnapshot snapshot = extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
+            ? await workspaceLoader.OpenProjectAsync(settings.WatchedSolutionPath, cancellationToken)
+            : await workspaceLoader.OpenSolutionAsync(settings.WatchedSolutionPath, cancellationToken);
 
         return store.SaveSnapshot(snapshot);
     }

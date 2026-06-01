@@ -1,5 +1,6 @@
 using AIMonitor.Core;
 using AIMonitor.Data;
+using AIMonitor.Indexing;
 using AIMonitor.Logging;
 using AIMonitor.MSBuild;
 using AIMonitor.Runtime;
@@ -198,9 +199,7 @@ internal static class Program
                 "stage" => service.Stage(RequireOption(args, "--file"), GetOption(args, "--ledger-summary")),
                 "launch-diff" => LaunchDiff(args, settings, logger, service),
                 "record-decision" => RecordDecision(args, settings, logger, service),
-                "accept" => service.Accept(
-                    RequireOption(args, "--file"),
-                    RequireOption(args, "--expected-hash")),
+                "accept" => Accept(args, settings, logger, service),
                 "reject" => service.Reject(RequireOption(args, "--file")),
                 _ => throw new InvalidOperationException($"Unknown edit command: {args[1]}")
             };
@@ -210,7 +209,7 @@ internal static class Program
     private static object LaunchDiff(string[] args, MonitorSettings settings, IMonitorLogger logger, WorkflowEditService service)
     {
         StagedEditRecord record = service.GetStagedRecord(RequireOption(args, "--staged-record-id"));
-        PreMergeValidationResult validation = ValidateStagedRecord(settings, record);
+        AIMonitor.Workflow.PreMergeValidationResult validation = new PreMergeValidationService().Validate(settings, record);
         bool forceValidation = HasOption(args, "--force-validation");
         string validationPrompt = "";
         if (validation.IsError && !forceValidation && CanShowValidationDialog())
@@ -292,24 +291,47 @@ internal static class Program
             RequireOption(args, "--staged-record-id"),
             RequireOption(args, "--decision"),
             GetOption(args, "--expected-staged-hash"));
+        return CreateDecisionResponse(settings, logger, record);
+    }
+
+    private static object Accept(string[] args, MonitorSettings settings, IMonitorLogger logger, WorkflowEditService service)
+    {
+        string file = RequireOption(args, "--file");
+        EditSessionStatus status = service.GetStatus(file);
+        if (string.IsNullOrWhiteSpace(status.LastStagedRecordId))
+        {
+            throw new InvalidOperationException("No staged record exists for this file. Run edit stage first.");
+        }
+
+        service.Accept(file, RequireOption(args, "--expected-hash"));
+        StagedEditRecord record = service.GetStagedRecord(status.LastStagedRecordId);
+        return CreateDecisionResponse(settings, logger, record);
+    }
+
+    private static ReviewDecisionWithIndexRefreshResult CreateDecisionResponse(MonitorSettings settings, IMonitorLogger logger, StagedEditRecord record)
+    {
         PostAcceptIndexRefreshResult? indexRefresh = null;
         if (record.Classification is "accepted" or "accepted-normalized")
         {
-            indexRefresh = RebuildIndexAfterAcceptedDecision(settings, logger, record);
+            indexRefresh = new PostAcceptIndexRefreshService().RebuildAfterAcceptedDecision(
+                settings,
+                logger,
+                record,
+                "AIMonitor.Cli");
         }
 
-        return new
+        return new ReviewDecisionWithIndexRefreshResult
         {
-            stagedRecordId = record.StagedRecordId,
-            watchedFilePath = record.WatchedFilePath,
-            relativePath = record.RelativePath,
-            decision = record.Decision,
-            classification = record.Classification,
-            status = record.Status,
-            message = record.Message,
-            stagedRecord = record,
-            indexRefresh,
-            nextStep = record.Classification is "accepted" or "accepted-normalized"
+            StagedRecordId = record.StagedRecordId,
+            WatchedFilePath = record.WatchedFilePath,
+            RelativePath = record.RelativePath,
+            Decision = record.Decision,
+            Classification = record.Classification,
+            Status = record.Status,
+            Message = record.Message,
+            StagedRecord = record,
+            IndexRefresh = indexRefresh,
+            NextStep = record.Classification is "accepted" or "accepted-normalized"
                 ? "Index was rebuilt after accept. Run edit refresh before further edits to this watched file."
                 : "Decision recorded. Do not rely on changed index rows unless an accepted decision rebuilt the index."
         };
@@ -420,90 +442,6 @@ internal static class Program
         {
             Console.Error.WriteLine(ex.Message);
             return 1;
-        }
-    }
-
-    private static PostAcceptIndexRefreshResult RebuildIndexAfterAcceptedDecision(
-        MonitorSettings settings,
-        IMonitorLogger logger,
-        StagedEditRecord record)
-    {
-        Stopwatch stopwatch = Stopwatch.StartNew();
-        string databasePath = MonitorDataPaths.GetDefaultIndexDatabasePath(settings);
-        logger.Write(
-            MonitorLogLevel.Information,
-            "AIMonitor.Cli",
-            "index.refresh-after-accept.started",
-            "Post-accept solution index rebuild started.",
-            new Dictionary<string, string>
-            {
-                ["stagedRecordId"] = record.StagedRecordId,
-                ["watchedFilePath"] = record.WatchedFilePath,
-                ["watchedSolutionPath"] = settings.WatchedSolutionPath,
-                ["databasePath"] = databasePath
-            });
-
-        try
-        {
-            SolutionIndexStore store = new(new SolutionIndexDatabase(databasePath));
-            SolutionIndexBuilder builder = new(new MSBuildWorkspaceLoader(), store);
-            SolutionIndexSummary summary = builder.RebuildAsync(settings).GetAwaiter().GetResult();
-            stopwatch.Stop();
-            PostAcceptIndexRefreshResult result = new()
-            {
-                Status = "rebuilt",
-                IsError = false,
-                DatabasePath = databasePath,
-                ProjectCount = summary.ProjectCount,
-                DocumentCount = summary.DocumentCount,
-                DiagnosticCount = summary.DiagnosticCount,
-                DurationMs = stopwatch.ElapsedMilliseconds,
-                Message = "Post-accept solution index rebuild completed."
-            };
-            logger.Write(
-                MonitorLogLevel.Information,
-                "AIMonitor.Cli",
-                "index.refresh-after-accept.completed",
-                result.Message,
-                new Dictionary<string, string>
-                {
-                    ["stagedRecordId"] = record.StagedRecordId,
-                    ["watchedFilePath"] = record.WatchedFilePath,
-                    ["databasePath"] = databasePath,
-                    ["projectCount"] = result.ProjectCount.ToString(),
-                    ["documentCount"] = result.DocumentCount.ToString(),
-                    ["diagnosticCount"] = result.DiagnosticCount.ToString(),
-                    ["durationMs"] = result.DurationMs.ToString(),
-                    ["isError"] = "false"
-                });
-            return result;
-        }
-        catch (Exception ex)
-        {
-            stopwatch.Stop();
-            PostAcceptIndexRefreshResult result = new()
-            {
-                Status = "failed",
-                IsError = true,
-                DatabasePath = databasePath,
-                DurationMs = stopwatch.ElapsedMilliseconds,
-                Message = ex.Message
-            };
-            logger.Write(
-                MonitorLogLevel.Error,
-                "AIMonitor.Cli",
-                "index.refresh-after-accept.failed",
-                "Post-accept solution index rebuild failed.",
-                new Dictionary<string, string>
-                {
-                    ["stagedRecordId"] = record.StagedRecordId,
-                    ["watchedFilePath"] = record.WatchedFilePath,
-                    ["databasePath"] = databasePath,
-                    ["durationMs"] = result.DurationMs.ToString(),
-                    ["isError"] = "true",
-                    ["error"] = ex.Message
-                });
-            return result;
         }
     }
 
@@ -924,7 +862,7 @@ internal static class Program
             .ToArray();
     }
 
-    private static bool PromptForValidationOverride(PreMergeValidationResult validation)
+    private static bool PromptForValidationOverride(AIMonitor.Workflow.PreMergeValidationResult validation)
     {
         string diagnostics = validation.Diagnostics.Length == 0
             ? "No error diagnostics were captured."
@@ -1395,22 +1333,4 @@ internal static class Program
         IReadOnlyList<string> Directories,
         IReadOnlyList<string> Files);
 
-    private sealed class PostAcceptIndexRefreshResult
-    {
-        public string Status { get; set; } = string.Empty;
-
-        public bool IsError { get; set; }
-
-        public string DatabasePath { get; set; } = string.Empty;
-
-        public int ProjectCount { get; set; }
-
-        public int DocumentCount { get; set; }
-
-        public int DiagnosticCount { get; set; }
-
-        public long DurationMs { get; set; }
-
-        public string Message { get; set; } = string.Empty;
-    }
 }

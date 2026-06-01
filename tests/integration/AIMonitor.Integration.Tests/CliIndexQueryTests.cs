@@ -155,6 +155,7 @@ public sealed class CliIndexQueryTests
         Assert.Equal(0, decision.ExitCode);
         using JsonDocument decisionDocument = JsonDocument.Parse(decision.StdOut);
         Assert.Equal("accepted", decisionDocument.RootElement.GetProperty("classification").GetString());
+        Assert.Equal("rebuilt", decisionDocument.RootElement.GetProperty("indexRefresh").GetProperty("status").GetString());
         Assert.Contains("changed", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
 
         CliResult postAcceptStatus = await RunCliAsync(
@@ -188,6 +189,68 @@ public sealed class CliIndexQueryTests
 
         Assert.Equal(1, staleReplace.ExitCode);
         Assert.Contains("Run edit refresh", staleReplace.StdErr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Edit_accept_hash_gated_path_rebuilds_index_after_accept()
+    {
+        CliFixture fixture = CreateFixture();
+
+        CliResult refresh = await RunCliAsync(
+            "edit",
+            "refresh",
+            "--file",
+            fixture.ProgramFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, refresh.ExitCode);
+        using JsonDocument refreshDocument = JsonDocument.Parse(refresh.StdOut);
+        string workingFilePath = refreshDocument.RootElement.GetProperty("workingFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing working file path.");
+        await File.WriteAllTextAsync(workingFilePath, "namespace Example { internal static class Program { public static string Value => \"accepted through shortcut\"; } }");
+
+        CliResult stage = await RunCliAsync(
+            "edit",
+            "stage",
+            "--file",
+            fixture.ProgramFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, stage.ExitCode);
+        using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
+        string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
+            ?? throw new InvalidOperationException("Missing staged record id.");
+        string stagedFilePath = stageDocument.RootElement.GetProperty("stagedFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing staged file path.");
+        string stagedHash = stageDocument.RootElement.GetProperty("stagedHash").GetString()
+            ?? throw new InvalidOperationException("Missing staged hash.");
+
+        await LaunchDiffAsync(fixture, stagedRecordId);
+        File.Copy(stagedFilePath, fixture.ProgramFilePath, overwrite: true);
+
+        CliResult accept = await RunCliAsync(
+            "edit",
+            "accept",
+            "--file",
+            fixture.ProgramFilePath,
+            "--expected-hash",
+            stagedHash,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, accept.ExitCode);
+        using JsonDocument acceptDocument = JsonDocument.Parse(accept.StdOut);
+        Assert.Equal("accepted", acceptDocument.RootElement.GetProperty("classification").GetString());
+        Assert.Equal("rebuilt", acceptDocument.RootElement.GetProperty("indexRefresh").GetProperty("status").GetString());
+        Assert.Equal(fixture.ProgramFilePath, acceptDocument.RootElement.GetProperty("watchedFilePath").GetString());
     }
 
     [Fact]
