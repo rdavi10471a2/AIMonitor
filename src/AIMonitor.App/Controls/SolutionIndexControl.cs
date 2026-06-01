@@ -21,11 +21,12 @@ public sealed class SolutionIndexControl : UserControl
     private readonly TextBox databasePathBox;
     private readonly Label statusLabel;
     private readonly TreeView indexTree;
-    private readonly SelectionDetailsControl selectionDetailsControl;
+    private readonly FileOverviewControl fileOverviewControl;
     private readonly DataGridView projectsGrid;
     private readonly DataGridView documentsGrid;
     private readonly DataGridView symbolsGrid;
     private readonly DataGridView referencesGrid;
+    private readonly DataGridView relationshipsGrid;
     private readonly DataGridView packagesGrid;
     private readonly TextBox rawBox;
     private readonly SplitContainer mainSplit;
@@ -36,6 +37,7 @@ public sealed class SolutionIndexControl : UserControl
     private readonly TabPage documentsTab;
     private readonly TabPage symbolsTab;
     private readonly TabPage referencesTab;
+    private readonly TabPage relationshipsTab;
     private readonly TabPage packagesTab;
     private readonly TabPage rawTab;
     private MonitorSettings? settings;
@@ -71,11 +73,12 @@ public sealed class SolutionIndexControl : UserControl
             Dock = DockStyle.Fill,
             HideSelection = false
         };
-        selectionDetailsControl = new SelectionDetailsControl();
+        fileOverviewControl = new FileOverviewControl();
         projectsGrid = CreateGrid();
         documentsGrid = CreateGrid();
         symbolsGrid = CreateGrid();
         referencesGrid = CreateGrid();
+        relationshipsGrid = CreateGrid();
         packagesGrid = CreateGrid();
         rawBox = new TextBox
         {
@@ -105,11 +108,12 @@ public sealed class SolutionIndexControl : UserControl
         {
             Dock = DockStyle.Fill
         };
-        overviewTab = BuildControlTab("Overview", selectionDetailsControl);
+        overviewTab = BuildControlTab("File Overview", fileOverviewControl);
         projectsTab = BuildGridTab("Projects", projectsGrid);
         documentsTab = BuildGridTab("Documents", documentsGrid);
         symbolsTab = BuildGridTab("Symbols", symbolsGrid);
         referencesTab = BuildGridTab("References", referencesGrid);
+        relationshipsTab = BuildGridTab("Relationships", relationshipsGrid);
         packagesTab = BuildGridTab("Packages", packagesGrid);
         rawTab = BuildTextTab("Raw", rawBox);
 
@@ -119,6 +123,7 @@ public sealed class SolutionIndexControl : UserControl
         detailSplit.Panel2.BackColor = SystemColors.Control;
 
         Controls.Add(BuildLayout());
+        fileOverviewControl.SymbolSelected += ShowSymbol;
         WireEvents();
         Load += (_, _) =>
         {
@@ -128,6 +133,7 @@ public sealed class SolutionIndexControl : UserControl
     }
 
     public event Action<string>? StatusChanged;
+    public event Action? SettingsChanged;
 
     public void SetLogger(IMonitorLogger monitorLogger)
     {
@@ -153,6 +159,7 @@ public sealed class SolutionIndexControl : UserControl
         detailTabs.TabPages.Add(documentsTab);
         detailTabs.TabPages.Add(symbolsTab);
         detailTabs.TabPages.Add(referencesTab);
+        detailTabs.TabPages.Add(relationshipsTab);
         detailTabs.TabPages.Add(packagesTab);
         detailTabs.TabPages.Add(rawTab);
 
@@ -199,6 +206,7 @@ public sealed class SolutionIndexControl : UserControl
         viewMenu.DropDownItems.Add(new ToolStripMenuItem("Documents", null, (_, _) => detailTabs.SelectedTab = documentsTab));
         viewMenu.DropDownItems.Add(new ToolStripMenuItem("Symbols", null, (_, _) => detailTabs.SelectedTab = symbolsTab));
         viewMenu.DropDownItems.Add(new ToolStripMenuItem("References", null, (_, _) => detailTabs.SelectedTab = referencesTab));
+        viewMenu.DropDownItems.Add(new ToolStripMenuItem("Relationships", null, (_, _) => detailTabs.SelectedTab = relationshipsTab));
         viewMenu.DropDownItems.Add(new ToolStripMenuItem("Packages", null, (_, _) => detailTabs.SelectedTab = packagesTab));
         viewMenu.DropDownItems.Add(new ToolStripMenuItem("Raw", null, (_, _) => detailTabs.SelectedTab = rawTab));
 
@@ -256,7 +264,11 @@ public sealed class SolutionIndexControl : UserControl
         openWatchedFolderMenuItem.Click += (_, _) => OpenFolder(settings?.WatchedProjectFolder);
         openDatabaseFolderMenuItem.Click += (_, _) => OpenFolder(Path.GetDirectoryName(databasePathBox.Text));
         indexTree.AfterSelect += (_, args) => SelectTreeNode(args.Node);
-        symbolsGrid.CellDoubleClick += (_, _) => LoadReferencesForSelectedSymbol();
+        projectsGrid.CellDoubleClick += (_, _) => SelectProjectFromGrid();
+        documentsGrid.CellDoubleClick += (_, _) => SelectDocumentFromGrid();
+        symbolsGrid.CellDoubleClick += (_, _) => SelectSymbolFromGrid();
+        referencesGrid.CellDoubleClick += (_, _) => SelectReferenceTargetFromGrid(referencesGrid);
+        relationshipsGrid.CellDoubleClick += (_, _) => SelectReferenceTargetFromGrid(relationshipsGrid);
     }
 
     private void LoadSettingsAndRefresh()
@@ -319,6 +331,7 @@ public sealed class SolutionIndexControl : UserControl
                     ["watchedSolutionPath"] = dialog.FileName
                 });
             LoadSettingsAndRefresh();
+            SettingsChanged?.Invoke();
             SetStatus($"Watched solution saved: {dialog.FileName}");
         }
         catch (Exception ex)
@@ -522,29 +535,17 @@ public sealed class SolutionIndexControl : UserControl
 
     private void ShowSolutionOverview()
     {
-        SetGrid(projectsGrid, projects);
-        SetGrid(documentsGrid, documents);
+        SetGrid(projectsGrid, CreateProjectViews(projects));
+        SetDocumentsGrid(documents);
         SetSymbolsGrid(symbols);
-        SetGrid(referencesGrid, references);
+        SetReferencesGrid(references);
+        SetRelationshipsGrid(references);
         SetGrid(packagesGrid, packages);
-        selectionDetailsControl.ShowDetails(
-            "Solution",
-            settings?.WatchedSolutionPath ?? currentSummary.InputPath,
-            [
-                ("Indexed", FormatIndexedAt(currentSummary.IndexedAtUtc)),
-                ("Projects", projects.Count.ToString()),
-                ("Documents", documents.Count.ToString()),
-                ("Symbols", symbols.Count.ToString()),
-                ("References", references.Count.ToString()),
-                ("Packages", packages.Count.ToString()),
-                ("Diagnostics", currentSummary.DiagnosticCount.ToString())
-            ],
-            "Projects",
-            projects,
-            "Documents",
-            documents);
-        rawBox.Text = $"Solution: {settings?.WatchedSolutionPath ?? currentSummary.InputPath}";
-        detailTabs.SelectedTab = overviewTab;
+        rawBox.Text = BuildRawText(
+            ("Solution", settings?.WatchedSolutionPath ?? currentSummary.InputPath),
+            ("Indexed", FormatIndexedAt(currentSummary.IndexedAtUtc)),
+            ("Database", databasePathBox.Text));
+        detailTabs.SelectedTab = projectsTab;
     }
 
     private void ShowProject(string projectPath)
@@ -560,37 +561,19 @@ public sealed class SolutionIndexControl : UserControl
         List<IndexedReferenceRow> projectReferences = references.Where(reference => PathEquals(reference.ProjectPath, projectPath)).ToList();
         List<IndexedPackageReferenceRow> projectPackages = packages.Where(package => PathEquals(package.ProjectPath, projectPath)).ToList();
 
-        SetGrid(projectsGrid, new[] { project });
-        SetGrid(documentsGrid, projectDocuments);
+        SetGrid(projectsGrid, CreateProjectViews(new[] { project }));
+        SetDocumentsGrid(projectDocuments);
         SetSymbolsGrid(projectSymbols);
-        SetGrid(referencesGrid, projectReferences);
+        SetReferencesGrid(projectReferences);
+        SetRelationshipsGrid(projectReferences);
         SetGrid(packagesGrid, projectPackages);
-        selectionDetailsControl.ShowDetails(
-            $"Project: {project.Name}",
-            project.ProjectPath,
-            [
-                ("Stable Key", project.StableKey),
-                ("Language", project.Language),
-                ("Target Framework", project.TargetFramework),
-                ("Target Frameworks", project.TargetFrameworks),
-                ("Output Type", project.OutputType),
-                ("SDK", project.Sdk),
-                ("Assembly Name", project.AssemblyName),
-                ("Root Namespace", project.RootNamespace),
-                ("Nullable", project.Nullable),
-                ("Implicit Usings", project.ImplicitUsings),
-                ("Lang Version", project.LangVersion),
-                ("Documents", projectDocuments.Count.ToString()),
-                ("Symbols", projectSymbols.Count.ToString()),
-                ("References", projectReferences.Count.ToString()),
-                ("Packages", projectPackages.Count.ToString())
-            ],
-            "Documents",
-            projectDocuments,
-            "Package References",
-            projectPackages);
-        rawBox.Text = project.ToString();
-        detailTabs.SelectedTab = overviewTab;
+        rawBox.Text = BuildRawText(
+            ("Stable Key", project.StableKey),
+            ("Name", project.Name),
+            ("Project", project.ProjectPath),
+            ("Target Framework", project.TargetFramework),
+            ("Preprocessor Symbols", project.PreprocessorSymbols));
+        detailTabs.SelectedTab = documentsTab;
         SetStatus($"Project {project.Name} | Documents: {projectDocuments.Count} | Symbols: {projectSymbols.Count} | References: {projectReferences.Count}");
     }
 
@@ -598,17 +581,9 @@ public sealed class SolutionIndexControl : UserControl
     {
         List<IndexedPackageReferenceRow> projectPackages = packages.Where(package => PathEquals(package.ProjectPath, projectPath)).ToList();
         SetGrid(packagesGrid, projectPackages);
-        SetGrid(projectsGrid, projects.Where(project => PathEquals(project.ProjectPath, projectPath)).ToList());
-        selectionDetailsControl.ShowDetails(
-            "Dependencies",
-            projectPath,
-            [("Package References", projectPackages.Count.ToString())],
-            "Package References",
-            projectPackages,
-            "Project",
-            projects.Where(project => PathEquals(project.ProjectPath, projectPath)).ToList());
+        SetGrid(projectsGrid, CreateProjectViews(projects.Where(project => PathEquals(project.ProjectPath, projectPath))));
         rawBox.Text = string.Join(Environment.NewLine, projectPackages.Select(package => $"{package.Include} {package.Version}"));
-        detailTabs.SelectedTab = overviewTab;
+        detailTabs.SelectedTab = packagesTab;
         SetStatus($"Dependencies | Packages: {projectPackages.Count}");
     }
 
@@ -623,20 +598,11 @@ public sealed class SolutionIndexControl : UserControl
         }
 
         SetGrid(packagesGrid, new[] { package });
-        selectionDetailsControl.ShowDetails(
-            $"Package: {package.Include}",
-            package.ProjectPath,
-            [
-                ("Include", package.Include),
-                ("Version", package.Version),
-                ("Project", package.ProjectPath)
-            ],
-            "Package",
-            new[] { package },
-            "Project",
-            projects.Where(project => PathEquals(project.ProjectPath, projectPath)).ToList());
-        rawBox.Text = package.ToString();
-        detailTabs.SelectedTab = overviewTab;
+        rawBox.Text = BuildRawText(
+            ("Include", package.Include),
+            ("Version", package.Version),
+            ("Project", package.ProjectPath));
+        detailTabs.SelectedTab = packagesTab;
         SetStatus($"Package {package.Include} {package.Version}");
     }
 
@@ -650,22 +616,11 @@ public sealed class SolutionIndexControl : UserControl
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         List<IndexedSymbolRow> folderSymbols = symbols.Where(symbol => filePaths.Contains(symbol.FilePath)).ToList();
 
-        SetGrid(documentsGrid, folderDocuments);
+        SetDocumentsGrid(folderDocuments);
         SetSymbolsGrid(folderSymbols);
-        SetGrid(projectsGrid, projects.Where(project => PathEquals(project.ProjectPath, projectPath)).ToList());
-        selectionDetailsControl.ShowDetails(
-            $"Folder: {folderNode.Text}",
-            projectPath,
-            [
-                ("Documents", folderDocuments.Count.ToString()),
-                ("Symbols", folderSymbols.Count.ToString())
-            ],
-            "Documents",
-            folderDocuments,
-            "Symbols",
-            folderSymbols);
+        SetGrid(projectsGrid, CreateProjectViews(projects.Where(project => PathEquals(project.ProjectPath, projectPath))));
         rawBox.Text = string.Join(Environment.NewLine, folderDocuments.Select(document => document.FilePath));
-        detailTabs.SelectedTab = overviewTab;
+        detailTabs.SelectedTab = documentsTab;
         SetStatus($"Folder {folderNode.Text} | Documents: {folderDocuments.Count} | Symbols: {folderSymbols.Count}");
     }
 
@@ -679,27 +634,31 @@ public sealed class SolutionIndexControl : UserControl
 
         List<IndexedSymbolRow> documentSymbols = symbols.Where(symbol => PathEquals(symbol.FilePath, document.FilePath)).ToList();
         List<IndexedReferenceRow> documentReferences = references.Where(reference => PathEquals(reference.FilePath, document.FilePath)).ToList();
-        SetGrid(documentsGrid, new[] { document });
+        HashSet<string> documentSymbolKeys = documentSymbols.Select(symbol => symbol.StableKey).ToHashSet(StringComparer.Ordinal);
+        List<IndexedReferenceRow> incomingReferences = references
+            .Where(reference => documentSymbolKeys.Contains(reference.TargetStableKey)
+                && !PathEquals(reference.FilePath, document.FilePath))
+            .ToList();
+        (List<IndexedReferenceRow> localReferences, List<IndexedReferenceRow> externalReferences) = SplitFileReferences(document, documentReferences);
+        SetDocumentsGrid(new[] { document });
         SetSymbolsGrid(documentSymbols);
-        SetGrid(referencesGrid, documentReferences);
-        SetGrid(projectsGrid, projects.Where(project => PathEquals(project.ProjectPath, document.ProjectPath)).ToList());
-        selectionDetailsControl.ShowDetails(
-            $"File: {document.Name}",
-            document.FilePath,
-            [
-                ("Stable Key", document.StableKey),
-                ("Project", document.ProjectPath),
-                ("Folders", document.Folders),
-                ("Declared Symbols", documentSymbols.Count.ToString()),
-                ("References In File", documentReferences.Count.ToString())
-            ],
-            "Declared Symbols",
+        SetReferencesGrid(documentReferences);
+        SetRelationshipsGrid(documentReferences);
+        SetGrid(projectsGrid, CreateProjectViews(projects.Where(project => PathEquals(project.ProjectPath, document.ProjectPath))));
+        fileOverviewControl.ShowFile(
+            document,
             documentSymbols,
-            "References In File",
-            documentReferences);
-        rawBox.Text = document.ToString();
+            CreateFileReferenceViews(localReferences).ToArray(),
+            CreateFileReferenceViews(externalReferences).ToArray(),
+            CreateFileReferenceViews(incomingReferences).ToArray());
+        rawBox.Text = BuildRawText(
+            ("Stable Key", document.StableKey),
+            ("Name", document.Name),
+            ("File", document.FilePath),
+            ("Project", document.ProjectPath),
+            ("Folders", document.Folders));
         detailTabs.SelectedTab = overviewTab;
-        SetStatus($"File {document.Name} | Symbols: {documentSymbols.Count} | References in file: {documentReferences.Count}");
+        SetStatus($"File {document.Name} | Symbols: {documentSymbols.Count} | Local refs: {localReferences.Count} | External refs: {externalReferences.Count} | Incoming refs: {incomingReferences.Count}");
     }
 
     private void ShowSymbol(string stableKey)
@@ -712,40 +671,51 @@ public sealed class SolutionIndexControl : UserControl
 
         List<IndexedReferenceRow> symbolReferences = references.Where(reference => reference.TargetStableKey == stableKey).ToList();
         SetSymbolsGrid(new[] { symbol });
-        SetGrid(referencesGrid, symbolReferences);
-        SetGrid(documentsGrid, documents.Where(document => PathEquals(document.FilePath, symbol.FilePath)).ToList());
-        SetGrid(projectsGrid, projects.Where(project => PathEquals(project.ProjectPath, symbol.ProjectPath)).ToList());
-        selectionDetailsControl.ShowDetails(
-            $"{symbol.Kind}: {symbol.Name}",
-            symbol.FilePath,
-            [
-                ("Stable Key", symbol.StableKey),
-                ("Namespace", symbol.Namespace),
-                ("Containing Type", symbol.ContainingType),
-                ("Signature", symbol.Signature),
-                ("Lines", $"{symbol.StartLine}-{symbol.EndLine}"),
-                ("References", symbolReferences.Count.ToString())
-            ],
-            "References",
-            symbolReferences,
-            "Containing File",
-            documents.Where(document => PathEquals(document.FilePath, symbol.FilePath)).ToList());
-        rawBox.Text = symbol.ToString();
-        detailTabs.SelectedTab = overviewTab;
+        SetReferencesGrid(symbolReferences);
+        SetRelationshipsGrid(symbolReferences);
+        SetDocumentsGrid(documents.Where(document => PathEquals(document.FilePath, symbol.FilePath)));
+        SetGrid(projectsGrid, CreateProjectViews(projects.Where(project => PathEquals(project.ProjectPath, symbol.ProjectPath))));
+        rawBox.Text = BuildRawText(
+            ("Stable Key", symbol.StableKey),
+            ("Kind", symbol.Kind),
+            ("Name", symbol.Name),
+            ("Signature", symbol.Signature),
+            ("File", symbol.FilePath),
+            ("Lines", $"{symbol.StartLine}-{symbol.EndLine}"));
+        detailTabs.SelectedTab = referencesTab;
         SetStatus($"Symbol {symbol.Kind} {symbol.Name} | References: {symbolReferences.Count}");
     }
 
-    private void LoadReferencesForSelectedSymbol()
+    private void SelectProjectFromGrid()
     {
-        if (symbolsGrid.CurrentRow?.DataBoundItem is not IndexedSymbolRow symbol)
+        if (projectsGrid.CurrentRow?.DataBoundItem is ProjectView project)
         {
-            return;
+            ShowProject(project.ProjectPath);
         }
+    }
 
-        List<IndexedReferenceRow> symbolReferences = references.Where(reference => reference.TargetStableKey == symbol.StableKey).ToList();
-        SetGrid(referencesGrid, symbolReferences);
-        rawBox.Text = symbol.StableKey;
-        SetStatus($"Selected {symbol.Kind} {symbol.Name} | References: {symbolReferences.Count}");
+    private void SelectDocumentFromGrid()
+    {
+        if (documentsGrid.CurrentRow?.DataBoundItem is DocumentView document)
+        {
+            ShowDocument(document.StableKey);
+        }
+    }
+
+    private void SelectSymbolFromGrid()
+    {
+        if (symbolsGrid.CurrentRow?.DataBoundItem is SymbolView symbol)
+        {
+            ShowSymbol(symbol.StableKey);
+        }
+    }
+
+    private void SelectReferenceTargetFromGrid(DataGridView grid)
+    {
+        if (grid.CurrentRow?.DataBoundItem is ReferenceView reference)
+        {
+            ShowSymbol(reference.TargetStableKey);
+        }
     }
 
     private void SetBusy(bool busy)
@@ -814,9 +784,134 @@ public sealed class SolutionIndexControl : UserControl
         grid.DataSource = rows.ToList();
     }
 
+    private void SetDocumentsGrid(IEnumerable<IndexedDocumentRow> rows)
+    {
+        documentsGrid.DataSource = CreateDocumentViews(rows).ToList();
+    }
+
     private void SetSymbolsGrid(IEnumerable<IndexedSymbolRow> rows)
     {
-        symbolsGrid.DataSource = rows.ToList();
+        symbolsGrid.DataSource = CreateSymbolViews(rows).ToList();
+    }
+
+    private void SetReferencesGrid(IEnumerable<IndexedReferenceRow> rows)
+    {
+        referencesGrid.DataSource = CreateReferenceViews(rows).ToList();
+    }
+
+    private void SetRelationshipsGrid(IEnumerable<IndexedReferenceRow> rows)
+    {
+        relationshipsGrid.DataSource = CreateReferenceViews(rows.Where(IsRelationshipReference)).ToList();
+    }
+
+    private IEnumerable<ProjectView> CreateProjectViews(IEnumerable<IndexedProjectRow> rows)
+    {
+        foreach (IndexedProjectRow project in rows)
+        {
+            yield return new ProjectView(
+                project.StableKey,
+                project.Name,
+                project.ProjectPath,
+                project.Language,
+                project.TargetFramework,
+                documents.Count(document => PathEquals(document.ProjectPath, project.ProjectPath)),
+                symbols.Count(symbol => PathEquals(symbol.ProjectPath, project.ProjectPath)),
+                references.Count(reference => PathEquals(reference.ProjectPath, project.ProjectPath)),
+                packages.Count(package => PathEquals(package.ProjectPath, project.ProjectPath)));
+        }
+    }
+
+    private IEnumerable<DocumentView> CreateDocumentViews(IEnumerable<IndexedDocumentRow> rows)
+    {
+        foreach (IndexedDocumentRow document in rows)
+        {
+            yield return new DocumentView(
+                document.StableKey,
+                document.Name,
+                document.FilePath,
+                document.ProjectPath,
+                document.Folders,
+                symbols.Count(symbol => PathEquals(symbol.FilePath, document.FilePath)),
+                references.Count(reference => PathEquals(reference.FilePath, document.FilePath)));
+        }
+    }
+
+    private IEnumerable<SymbolView> CreateSymbolViews(IEnumerable<IndexedSymbolRow> rows)
+    {
+        foreach (IndexedSymbolRow symbol in rows)
+        {
+            yield return new SymbolView(
+                symbol.StableKey,
+                symbol.Kind,
+                symbol.Name,
+                symbol.Signature,
+                symbol.Namespace,
+                symbol.ContainingType,
+                symbol.FilePath,
+                symbol.StartLine,
+                symbol.EndLine,
+                references.Count(reference => reference.TargetStableKey == symbol.StableKey));
+        }
+    }
+
+    private IEnumerable<ReferenceView> CreateReferenceViews(IEnumerable<IndexedReferenceRow> rows)
+    {
+        foreach (IndexedReferenceRow reference in rows)
+        {
+            IndexedSymbolRow? target = symbols.FirstOrDefault(symbol => symbol.StableKey == reference.TargetStableKey);
+            yield return new ReferenceView(
+                target?.Name ?? string.Empty,
+                target?.Kind ?? string.Empty,
+                target?.Signature ?? string.Empty,
+                reference.ReferenceKind,
+                reference.FilePath,
+                reference.Line,
+                reference.Column,
+                reference.Snippet,
+                reference.TargetStableKey,
+                reference.ProjectPath);
+        }
+    }
+
+    private IEnumerable<FileOverviewControl.ReferenceView> CreateFileReferenceViews(IEnumerable<IndexedReferenceRow> rows)
+    {
+        foreach (ReferenceView reference in CreateReferenceViews(rows))
+        {
+            yield return new FileOverviewControl.ReferenceView(
+                reference.TargetName,
+                reference.TargetKind,
+                reference.TargetSignature,
+                reference.ReferenceKind,
+                reference.FilePath,
+                reference.Line,
+                reference.Column,
+                reference.Snippet,
+                reference.TargetStableKey,
+                reference.ProjectPath);
+        }
+    }
+
+    private (List<IndexedReferenceRow> LocalReferences, List<IndexedReferenceRow> ExternalReferences) SplitFileReferences(
+        IndexedDocumentRow document,
+        IEnumerable<IndexedReferenceRow> documentReferences)
+    {
+        List<IndexedReferenceRow> localReferences = [];
+        List<IndexedReferenceRow> externalReferences = [];
+
+        foreach (IndexedReferenceRow reference in documentReferences)
+        {
+            IndexedSymbolRow? target = symbols.FirstOrDefault(symbol => symbol.StableKey == reference.TargetStableKey);
+            if (target is not null && PathEquals(target.FilePath, document.FilePath))
+            {
+                localReferences.Add(reference);
+            }
+            else
+            {
+                externalReferences.Add(reference);
+            }
+        }
+
+        return (localReferences, externalReferences);
     }
 
     private static string FormatIndexedAt(DateTimeOffset indexedAtUtc)
@@ -835,6 +930,18 @@ public sealed class SolutionIndexControl : UserControl
     {
         return segment.Equals("bin", StringComparison.OrdinalIgnoreCase)
             || segment.Equals("obj", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsRelationshipReference(IndexedReferenceRow reference)
+    {
+        return reference.ReferenceKind.Equals("implements_interface_member", StringComparison.OrdinalIgnoreCase)
+            || reference.ReferenceKind.Equals("overrides", StringComparison.OrdinalIgnoreCase)
+            || reference.ReferenceKind.Equals("partial_declaration", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildRawText(params (string Name, string Value)[] lines)
+    {
+        return string.Join(Environment.NewLine, lines.Select(line => $"{line.Name}: {line.Value}"));
     }
 
     private static DataGridView CreateGrid()
@@ -869,4 +976,48 @@ public sealed class SolutionIndexControl : UserControl
     private sealed record DocumentNodeTag(string StableKey);
 
     private sealed record SymbolNodeTag(string StableKey);
+
+    private sealed record ProjectView(
+        string StableKey,
+        string Name,
+        string ProjectPath,
+        string Language,
+        string TargetFramework,
+        int Documents,
+        int Symbols,
+        int References,
+        int Packages);
+
+    private sealed record DocumentView(
+        string StableKey,
+        string Name,
+        string FilePath,
+        string ProjectPath,
+        string Folders,
+        int Symbols,
+        int References);
+
+    private sealed record SymbolView(
+        string StableKey,
+        string Kind,
+        string Name,
+        string Signature,
+        string Namespace,
+        string ContainingType,
+        string FilePath,
+        int StartLine,
+        int EndLine,
+        int References);
+
+    private sealed record ReferenceView(
+        string TargetName,
+        string TargetKind,
+        string TargetSignature,
+        string ReferenceKind,
+        string FilePath,
+        int Line,
+        int Column,
+        string Snippet,
+        string TargetStableKey,
+        string ProjectPath);
 }

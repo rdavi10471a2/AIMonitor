@@ -78,7 +78,8 @@ public sealed class SolutionIndexStore
         using SqliteConnection connection = database.OpenConnection();
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = """
-            select projects.project_path, documents.stable_key, documents.name, documents.file_path, documents.folders
+            select projects.project_path, documents.stable_key, documents.name, documents.file_path,
+                   documents.folders, documents.content_hash
             from documents
             inner join projects on projects.id = documents.project_id
             order by documents.file_path;
@@ -93,7 +94,8 @@ public sealed class SolutionIndexStore
                 reader.GetString(1),
                 reader.GetString(2),
                 reader.GetString(3),
-                reader.GetString(4)));
+                reader.GetString(4),
+                reader.GetString(5)));
         }
 
         return rows;
@@ -315,14 +317,15 @@ public sealed class SolutionIndexStore
         foreach (MSBuildDocumentSnapshot document in documents)
         {
             Execute(connection, transaction, """
-                insert into documents(project_id, stable_key, name, file_path, folders)
-                values ($projectId, $stableKey, $name, $filePath, $folders);
+                insert into documents(project_id, stable_key, name, file_path, folders, content_hash)
+                values ($projectId, $stableKey, $name, $filePath, $folders, $contentHash);
                 """,
                 ("$projectId", projectId),
                 ("$stableKey", document.StableDocumentKey),
                 ("$name", document.Name),
                 ("$filePath", document.FilePath),
-                ("$folders", string.Join("/", document.Folders)));
+                ("$folders", string.Join("/", document.Folders)),
+                ("$contentHash", document.ContentHash));
         }
     }
 

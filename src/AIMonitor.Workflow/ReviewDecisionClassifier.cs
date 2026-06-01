@@ -23,6 +23,13 @@ public sealed class ReviewDecisionClassifier
             }
         }
 
+        if (normalizedDecision == "rejected"
+            && input.IsNewFile
+            && !input.WatchedFileExists)
+        {
+            return new ReviewDecisionResult("rejected", "New file was not created in watched source.");
+        }
+
         if (normalizedDecision == "rejected" && HashesEqual(input.WatchedHash, input.OriginalHash))
         {
             return new ReviewDecisionResult("rejected", "Watched content remains at original baseline.");
@@ -43,7 +50,9 @@ public sealed record ReviewDecisionInput(
     string StagedHash,
     string WatchedHash,
     string? NormalizedWatchedHash = null,
-    string? NormalizedStagedHash = null);
+    string? NormalizedStagedHash = null,
+    bool IsNewFile = false,
+    bool WatchedFileExists = true);
 
 public sealed record ReviewDecisionResult(
     string Classification,
