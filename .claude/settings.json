@@ -20,7 +20,12 @@
       "Bash(git push *)",
       "Bash(git rebase *)",
       "WebSearch",
-      "PowerShell($p = Get-Process -Name \"AIMonitor.App\" -ErrorAction SilentlyContinue; if \\($p\\) { \"RUNNING pid=$\\($p.Id\\)\" } else { $exe=\"C:\\\\VSCodeProjects\\\\AIMonitor\\\\src\\\\AIMonitor.App\\\\bin\\\\Debug\\\\net10.0-windows\\\\AIMonitor.App.exe\"; Start-Process -FilePath $exe -WorkingDirectory \\(Split-Path $exe\\); Start-Sleep -Seconds 4; $p2=Get-Process -Name \"AIMonitor.App\" -ErrorAction SilentlyContinue; \"STARTED pid=$\\($p2.Id\\)\" })"
+      "PowerShell",
+      "PowerShell($p = Get-Process -Name \"AIMonitor.App\" -ErrorAction SilentlyContinue; if \\($p\\) { \"RUNNING pid=$\\($p.Id\\)\" } else { $exe=\"C:\\\\VSCodeProjects\\\\AIMonitor\\\\src\\\\AIMonitor.App\\\\bin\\\\Debug\\\\net10.0-windows\\\\AIMonitor.App.exe\"; Start-Process -FilePath $exe -WorkingDirectory \\(Split-Path $exe\\); Start-Sleep -Seconds 4; $p2=Get-Process -Name \"AIMonitor.App\" -ErrorAction SilentlyContinue; \"STARTED pid=$\\($p2.Id\\)\" })",
+      "Bash(git -C c:/VSCodeProjects/AIMonitor commit -q -m 'Add finding: workflow cost + no incremental rebuild \\(live test\\) *)",
+      "Bash(git -C \"c:/VSCodeProjects/AIMonitor\" pull --rebase -q origin main)",
+      "Bash(git -C \"c:/VSCodeProjects/AIMonitor\" push origin main)",
+      "PowerShell(dotnet build \"C:\\\\Schema Studio - DBV2\\\\SchemaStudio.csproj\" -c Debug -v minimal 2>&1)"
     ],
     "deny": [
       "Edit(//c/Schema Studio - DBV2/**)",
