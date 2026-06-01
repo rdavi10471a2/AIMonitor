@@ -30,8 +30,11 @@ public static class MonitorSettingsLoader
         JsonElement monitor = document.RootElement.GetProperty("Monitor");
         string watchedSolutionPath = RequireString(monitor, "WatchedSolutionPath");
         string runtimeRoot = GetString(monitor, "RuntimeRoot") ?? "runtime";
-        IReadOnlyList<string> winMergeCandidatePaths = GetStringArray(monitor, "WinMergeCandidatePaths");
         string settingsDirectory = Path.GetDirectoryName(resolvedSettingsPath) ?? resolvedRepositoryRoot;
+        IReadOnlyList<string> winMergeCandidatePaths = LoadWinMergeCandidatePaths(
+            monitor,
+            resolvedRepositoryRoot,
+            settingsDirectory);
 
         return MonitorSettings.Create(
             resolvedRepositoryRoot,
@@ -54,7 +57,9 @@ public static class MonitorSettingsLoader
             : runtimeRoot;
 
         Directory.CreateDirectory(Path.GetDirectoryName(resolvedSettingsPath) ?? resolvedRepositoryRoot);
-        IReadOnlyList<string> existingWinMergeCandidatePaths = LoadExistingWinMergeCandidatePaths(resolvedSettingsPath);
+        IReadOnlyList<string> existingWinMergeCandidatePaths = LoadExistingWinMergeCandidatePaths(
+            resolvedSettingsPath,
+            resolvedRepositoryRoot);
         LocalSettingsFile file = new(
             new LocalMonitorSettings(
                 resolvedWatchedSolutionPath,
@@ -89,12 +94,13 @@ public static class MonitorSettingsLoader
             : null;
     }
 
-    private static IReadOnlyList<string> GetStringArray(JsonElement element, string propertyName)
+    private static bool TryGetStringArray(JsonElement element, string propertyName, out IReadOnlyList<string> values)
     {
         if (!element.TryGetProperty(propertyName, out JsonElement value)
             || value.ValueKind != JsonValueKind.Array)
         {
-            return [];
+            values = [];
+            return false;
         }
 
         List<string> items = [];
@@ -107,21 +113,62 @@ public static class MonitorSettingsLoader
             }
         }
 
-        return items;
+        values = items;
+        return true;
     }
 
-    private static IReadOnlyList<string> LoadExistingWinMergeCandidatePaths(string settingsPath)
+    private static IReadOnlyList<string> LoadWinMergeCandidatePaths(
+        JsonElement monitor,
+        string resolvedRepositoryRoot,
+        string settingsDirectory)
+    {
+        if (TryGetStringArray(monitor, "WinMergeCandidatePaths", out IReadOnlyList<string> configuredPaths))
+        {
+            return ResolvePaths(configuredPaths, settingsDirectory);
+        }
+
+        return LoadTemplateWinMergeCandidatePaths(resolvedRepositoryRoot);
+    }
+
+    private static IReadOnlyList<string> LoadExistingWinMergeCandidatePaths(
+        string settingsPath,
+        string resolvedRepositoryRoot)
     {
         if (!File.Exists(settingsPath))
         {
-            return [];
+            return LoadTemplateWinMergeCandidatePaths(resolvedRepositoryRoot);
         }
 
         using FileStream stream = File.OpenRead(settingsPath);
         using JsonDocument document = JsonDocument.Parse(stream);
-        return document.RootElement.TryGetProperty("Monitor", out JsonElement monitor)
-            ? GetStringArray(monitor, "WinMergeCandidatePaths")
-            : [];
+        if (!document.RootElement.TryGetProperty("Monitor", out JsonElement monitor))
+        {
+            return LoadTemplateWinMergeCandidatePaths(resolvedRepositoryRoot);
+        }
+
+        return TryGetStringArray(monitor, "WinMergeCandidatePaths", out IReadOnlyList<string> existingPaths)
+            ? existingPaths
+            : LoadTemplateWinMergeCandidatePaths(resolvedRepositoryRoot);
+    }
+
+    private static IReadOnlyList<string> LoadTemplateWinMergeCandidatePaths(string resolvedRepositoryRoot)
+    {
+        string templatePath = Path.Combine(resolvedRepositoryRoot, "config", "appsettings.template.json");
+        if (!File.Exists(templatePath))
+        {
+            return [];
+        }
+
+        using FileStream stream = File.OpenRead(templatePath);
+        using JsonDocument document = JsonDocument.Parse(stream);
+        if (!document.RootElement.TryGetProperty("Monitor", out JsonElement monitor)
+            || !TryGetStringArray(monitor, "WinMergeCandidatePaths", out IReadOnlyList<string> templatePaths))
+        {
+            return [];
+        }
+
+        string templateDirectory = Path.GetDirectoryName(templatePath) ?? resolvedRepositoryRoot;
+        return ResolvePaths(templatePaths, templateDirectory);
     }
 
     private static string ResolvePath(string path, string baseDirectory)
