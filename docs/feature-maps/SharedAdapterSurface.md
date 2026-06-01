@@ -52,13 +52,13 @@ Starting WinForms starts the named-pipe log ingress automatically and emits `ada
 
 ## Tests / Smokes
 
-- `tests/integration/AIMonitor.Integration.Tests/CliIndexQueryTests.cs` seeds a SQLite index and verifies CLI JSON for status, symbol filtering, and references-in-file.
+- Stacked tests PR #3 adds `tests/integration/AIMonitor.Integration.Tests/CliIndexQueryTests.cs`, which seeds a SQLite index and verifies CLI JSON for status, symbol filtering, and references-in-file. Keep this as TODO-level coverage until that tests PR lands.
 - TODO: add or keep a focused regression that sets a non-empty document `ContentHash` and asserts it is persisted and returned from `SolutionIndexStore`.
 - Existing smoke tests continue to prove real watched-solution indexing.
 
 ## Known Risks
 
-- Adapter events now include full response JSON in bounded command responses. Keep long-running or bulk payloads bounded before expanding this further.
+- Adapter events persist response shape/count and redacted previews rather than full response JSON. Keep long-running, snippet-bearing, or bulk payloads out of durable adapter logs unless an explicit redaction policy is in place.
 - `accepted-normalized` is intentionally visible because it can mean the operator save changed line endings while preserving normalized text. Treat it as successful but worth reviewing when formatting stability matters.
 - After an accepted or accepted-normalized workflow decision, the CLI reports `refresh-required` until the watched file is refreshed. This keeps later telemetry tied to the hashes and line endings actually saved by WinMerge/editor.
 - Failed pre-merge validation should be treated as a human gate, not a warning. On an interactive Windows desktop the CLI displays a `Yes Launch`/`Cancel` override dialog before launching WinMerge, with `Yes`/`No` as a Win32 fallback if custom button text is unavailable. If no dialog is available, Codex/Claude must ask the user in chat and use `--force-validation` only after explicit approval.
