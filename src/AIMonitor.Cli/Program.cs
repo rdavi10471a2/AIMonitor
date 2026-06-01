@@ -7,6 +7,7 @@ using AIMonitor.Workflow;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Xml.Linq;
 
@@ -164,8 +165,7 @@ internal static class Program
                     ["contentType"] = "application/json",
                     ["contentShape"] = GetResultKind(responseJson),
                     ["contentCount"] = GetResultCount(responseJson),
-                    ["contentTextPreview"] = CreateResponsePreview(responseJson),
-                    ["contentText"] = responseJson
+                    ["contentTextPreview"] = CreateResponsePreview(responseJson)
                 });
             return 0;
         }
@@ -359,8 +359,7 @@ internal static class Program
                     ["contentType"] = "application/json",
                     ["contentShape"] = GetResultKind(responseJson),
                     ["contentCount"] = GetResultCount(responseJson),
-                    ["contentTextPreview"] = CreateResponsePreview(responseJson),
-                    ["contentText"] = responseJson
+                    ["contentTextPreview"] = CreateResponsePreview(responseJson)
                 });
             return 0;
         }
@@ -1198,12 +1197,54 @@ internal static class Program
 
     private static string CreateResponsePreview(string responseJson)
     {
-        string singleLine = string.Join(" ", responseJson.Split(
+        string redactedResponseJson = RedactResponseForLogPreview(responseJson);
+        string singleLine = string.Join(" ", redactedResponseJson.Split(
             [' ', '\r', '\n', '\t'],
             StringSplitOptions.RemoveEmptyEntries));
         return singleLine.Length <= 600
             ? singleLine
             : singleLine[..600] + "...";
+    }
+
+    private static string RedactResponseForLogPreview(string responseJson)
+    {
+        try
+        {
+            JsonNode? node = JsonNode.Parse(responseJson);
+            RedactSnippetProperties(node);
+            return node?.ToJsonString(JsonOptions) ?? string.Empty;
+        }
+        catch (JsonException)
+        {
+            return "[unavailable]";
+        }
+    }
+
+    private static void RedactSnippetProperties(JsonNode? node)
+    {
+        if (node is JsonObject jsonObject)
+        {
+            foreach (KeyValuePair<string, JsonNode?> property in jsonObject.ToList())
+            {
+                if (property.Key.Equals("snippet", StringComparison.OrdinalIgnoreCase))
+                {
+                    jsonObject[property.Key] = "[redacted]";
+                    continue;
+                }
+
+                RedactSnippetProperties(property.Value);
+            }
+
+            return;
+        }
+
+        if (node is JsonArray jsonArray)
+        {
+            foreach (JsonNode? item in jsonArray)
+            {
+                RedactSnippetProperties(item);
+            }
+        }
     }
 
     private static string CreateParamsPreview(string[] args)
