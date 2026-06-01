@@ -86,12 +86,21 @@ internal static class Program
             IReadOnlyList<IndexedReferenceRow> targetReferences = target is null
                 ? []
                 : references.Where(reference => reference.TargetStableKey == target.StableKey).ToArray();
+            IReadOnlyList<IndexedSymbolRow> callers = target is null || item.ExpectedCallerCount is null
+                ? []
+                : FindCallers(symbols, targetReferences, target);
+            IReadOnlyList<string> relationshipKinds = target is null || item.ExpectedRelationshipKinds.Count == 0
+                ? []
+                : ExpandRelationshipKinds(targetReferences.Select(reference => reference.ReferenceKind))
+                    .Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal)
+                    .ToArray();
             FileLinePositionSpan bindSpan = CSharpSyntaxTree.ParseText(markup.Source, path: item.RelativePath)
                 .GetLineSpan(new TextSpan(markup.BindStart, markup.BindLength));
             int bindLine = bindSpan.StartLinePosition.Line + 1;
             int bindColumn = bindSpan.StartLinePosition.Character + 1;
             bool monitorReferenceAtBind = targetReferences.Any(reference =>
-                NormalizePath(reference.FilePath).EndsWith(NormalizePath(item.RelativePath), StringComparison.OrdinalIgnoreCase)
+                PathMatchesRelativePath(reference.FilePath, item.RelativePath)
                 && reference.Line == bindLine
                 && reference.Column == bindColumn);
             if (!item.ExpectedMonitorTarget)
@@ -99,7 +108,7 @@ internal static class Program
                 monitorReferenceAtBind = true;
             }
 
-            results.Add(new CorpusResult(item, answer, target, targetReferences, monitorReferenceAtBind));
+            results.Add(new CorpusResult(item, answer, target, targetReferences, callers, relationshipKinds, monitorReferenceAtBind));
         }
 
         bool passed = results.Where(result => !result.Case.Informational).All(result => result.Passed);
@@ -205,7 +214,8 @@ internal static class Program
             SemanticModel model = compilation.GetSemanticModel(tree, ignoreAccessibility: true);
             SyntaxNode root = tree.GetRoot();
             SyntaxNode node = root.FindNode(new TextSpan(markup.BindStart, markup.BindLength), getInnermostNodeForTie: true);
-            ISymbol? symbol = ResolveBoundSymbol(model, node);
+            SyntaxToken token = root.FindToken(markup.BindStart);
+            ISymbol? symbol = ResolveBoundSymbol(model, node, token);
             string display = symbol?.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat) ?? string.Empty;
             answers[item.Name] = new RoslynAnswer(symbol is not null, display);
         }
@@ -213,13 +223,23 @@ internal static class Program
         return answers;
     }
 
-    private static ISymbol? ResolveBoundSymbol(SemanticModel model, SyntaxNode node)
+    private static ISymbol? ResolveBoundSymbol(SemanticModel model, SyntaxNode node, SyntaxToken token)
     {
         if (node.FirstAncestorOrSelf<AttributeSyntax>() is { } attribute
             && attribute.Name.Span.Contains(node.Span))
         {
             ISymbol? attributeSymbol = GetBestSymbol(model.GetSymbolInfo(attribute));
             return attributeSymbol is IMethodSymbol method ? method.ContainingType : attributeSymbol;
+        }
+
+        if (token.IsKind(SyntaxKind.AwaitKeyword)
+            && token.Parent?.FirstAncestorOrSelf<LocalDeclarationStatementSyntax>() is { AwaitKeyword.RawKind: not 0 } awaitUsingDeclaration)
+        {
+            TypeInfo typeInfo = model.GetTypeInfo(awaitUsingDeclaration.Declaration.Type);
+            return typeInfo.Type?
+                .GetMembers("DisposeAsync")
+                .OfType<IMethodSymbol>()
+                .FirstOrDefault(method => method.Parameters.Length == 0);
         }
 
         SyntaxNode target = node;
@@ -266,10 +286,97 @@ internal static class Program
     private static IndexedSymbolRow? FindIndexedTarget(IReadOnlyList<IndexedSymbolRow> symbols, CorpusCase item)
     {
         return symbols.FirstOrDefault(symbol =>
-            NormalizePath(symbol.FilePath).EndsWith(NormalizePath(item.ExpectedTargetRelativePath), StringComparison.OrdinalIgnoreCase)
+            PathMatchesRelativePath(symbol.FilePath, item.ExpectedTargetRelativePath)
             && KindMatches(symbol.Kind, item.ExpectedKind)
             && (symbol.Name.Equals(item.ExpectedName, StringComparison.Ordinal)
                 || symbol.Signature.Contains(item.ExpectedName, StringComparison.Ordinal)));
+    }
+
+    private static IReadOnlyList<IndexedSymbolRow> FindCallers(
+        IReadOnlyList<IndexedSymbolRow> symbols,
+        IReadOnlyList<IndexedReferenceRow> references,
+        IndexedSymbolRow target)
+    {
+        return references
+            .Where(reference => IsCallerReference(reference, target))
+            .Select(reference => FindContainingCallable(symbols, reference))
+            .Where(symbol => symbol is not null)
+            .Select(symbol => symbol!)
+            .DistinctBy(symbol => symbol.StableKey)
+            .ToArray();
+    }
+
+    private static IndexedSymbolRow? FindContainingCallable(
+        IReadOnlyList<IndexedSymbolRow> symbols,
+        IndexedReferenceRow reference)
+    {
+        return symbols
+            .Where(symbol => IsCallableKind(symbol.Kind))
+            .Where(symbol => Path.GetFullPath(symbol.FilePath).Equals(Path.GetFullPath(reference.FilePath), StringComparison.OrdinalIgnoreCase))
+            .Where(symbol => symbol.StartLine <= reference.Line && reference.Line <= symbol.EndLine)
+            .OrderBy(symbol => symbol.EndLine - symbol.StartLine)
+            .ThenByDescending(symbol => symbol.StartLine)
+            .FirstOrDefault();
+    }
+
+    private static bool IsCallableKind(string kind)
+    {
+        return kind.Equals("Method", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("Constructor", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("Property", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("Event", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCallerReference(IndexedReferenceRow reference, IndexedSymbolRow target)
+    {
+        if (IsRelationshipKind(reference.ReferenceKind))
+        {
+            return false;
+        }
+
+        string line = File.Exists(reference.FilePath)
+            ? File.ReadLines(reference.FilePath).Skip(reference.Line - 1).FirstOrDefault() ?? string.Empty
+            : string.Empty;
+        if (line.Contains("nameof(", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        bool bareMethodGroup = target.Kind.Equals("Method", StringComparison.OrdinalIgnoreCase)
+            && reference.Snippet.Equals(target.Name, StringComparison.Ordinal)
+            && !line.Contains(target.Name + "(", StringComparison.Ordinal);
+        return !bareMethodGroup;
+    }
+
+    private static bool IsRelationshipKind(string referenceKind)
+    {
+        return referenceKind is "partial_declaration"
+            or "derived_type"
+            or "inherits_from"
+            or "overridden_by"
+            or "overrides"
+            or "implemented_by"
+            or "implements_interface_member";
+    }
+
+    private static IEnumerable<string> ExpandRelationshipKinds(IEnumerable<string> referenceKinds)
+    {
+        foreach (string referenceKind in referenceKinds.Where(IsRelationshipKind))
+        {
+            yield return referenceKind;
+            if (referenceKind.Equals("inherits_from", StringComparison.Ordinal))
+            {
+                yield return "derived_type";
+            }
+            else if (referenceKind.Equals("overrides", StringComparison.Ordinal))
+            {
+                yield return "overridden_by";
+            }
+            else if (referenceKind.Equals("implements_interface_member", StringComparison.Ordinal))
+            {
+                yield return "implemented_by";
+            }
+        }
     }
 
     private static bool KindMatches(string actualKind, string expectedKind)
@@ -305,7 +412,7 @@ internal static class Program
         bool assertMode)
     {
         string rows = string.Join(Environment.NewLine, results.Select(result =>
-            $"- `{result.Case.Name}` mode `{(result.Case.Informational ? "informational" : "asserted")}` Roslyn `{result.Roslyn?.TargetDisplay}` AIMonitor target `{result.IndexedTarget?.StableKey}` refs `{result.References.Count}/{result.Case.ExpectedReferenceCount}` bind row `{result.MonitorReferenceAtBind}` passed `{result.Passed}`"));
+            $"- `{result.Case.Name}` mode `{(result.Case.Informational ? "informational" : "asserted")}` Roslyn `{result.Roslyn?.TargetDisplay}` AIMonitor target `{result.IndexedTarget?.StableKey}` refs `{result.References.Count}/{result.Case.ExpectedReferenceCount}` callers `{FormatExpectedCount(result.Callers.Count, result.Case.ExpectedCallerCount)}` relationships `{FormatRelationshipKinds(result)}` bind row `{result.MonitorReferenceAtBind}` passed `{result.Passed}`"));
 
         return $"""
             # AIMonitor Language Corpus Smoke
@@ -330,6 +437,26 @@ internal static class Program
     private static string NormalizePath(string path)
     {
         return path.Replace('\\', '/');
+    }
+
+    private static string FormatExpectedCount(int actual, int? expected)
+    {
+        return expected is null ? "n/a" : $"{actual}/{expected}";
+    }
+
+    private static string FormatRelationshipKinds(CorpusResult result)
+    {
+        return result.Case.ExpectedRelationshipKinds.Count == 0
+            ? "n/a"
+            : string.Join(",", result.RelationshipKinds) + "/" + string.Join(",", result.Case.ExpectedRelationshipKinds);
+    }
+
+    private static bool PathMatchesRelativePath(string fullPath, string relativePath)
+    {
+        string normalizedFullPath = NormalizePath(fullPath);
+        string normalizedRelativePath = NormalizePath(relativePath);
+        return normalizedFullPath.Equals(normalizedRelativePath, StringComparison.OrdinalIgnoreCase)
+            || normalizedFullPath.EndsWith("/" + normalizedRelativePath, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ResolveRepositoryRoot(string start)
@@ -401,6 +528,8 @@ internal static class Program
         RoslynAnswer? Roslyn,
         IndexedSymbolRow? IndexedTarget,
         IReadOnlyList<IndexedReferenceRow> References,
+        IReadOnlyList<IndexedSymbolRow> Callers,
+        IReadOnlyList<string> RelationshipKinds,
         bool MonitorReferenceAtBind)
     {
         public bool Passed =>
@@ -408,6 +537,8 @@ internal static class Program
             && Roslyn.TargetDisplay.Equals(Case.ExpectedRoslynDisplay, StringComparison.Ordinal)
             && (Case.ExpectedMonitorTarget ? IndexedTarget is not null : IndexedTarget is null)
             && References.Count == Case.ExpectedReferenceCount
+            && (Case.ExpectedCallerCount is null || Callers.Count == Case.ExpectedCallerCount)
+            && Case.ExpectedRelationshipKinds.All(expected => RelationshipKinds.Contains(expected, StringComparer.Ordinal))
             && MonitorReferenceAtBind;
     }
 }

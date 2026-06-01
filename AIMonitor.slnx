@@ -27,6 +27,7 @@
   <Folder Name="/tests/smoke/">
     <Project Path="tests/smoke/AIMonitor.LanguageCorpusSmokeTests/AIMonitor.LanguageCorpusSmokeTests.csproj" />
     <Project Path="tests/smoke/AIMonitor.SmokeTests/AIMonitor.SmokeTests.csproj" />
+    <Project Path="tests/smoke/AIMonitor.ToolSmokeTests/AIMonitor.ToolSmokeTests.csproj" />
   </Folder>
   <Folder Name="/tests/fixtures/">
     <File Path="tests/fixtures/README.md" />
