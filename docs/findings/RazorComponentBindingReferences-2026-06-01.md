@@ -100,6 +100,28 @@ Regression coverage:
   `Click="@Method"`), accepts it, and asserts `find_indexed_references` on the bound members returns `razor*` reference
   rows in the `.razor`. The existing corpus only proves `@code`-block references, which is why this slipped through.
 
+## Local reproduction gap (verification, 2026-06-01)
+
+The code fix landed on `origin/main` (`cf52655`) and was pulled locally (`3b81216`). Verifying the new regression
+test on this machine:
+
+- `AIMonitor.Workflow.Tests` — **6/6 pass** (the accompanying accept-path safety guards).
+- `AIMonitor.MSBuild.Tests` — **3/4**. The **legacy** two-file Razor test
+  (`razor:IdentifierName` from `@code`/expression C#) passes. The **new**
+  `OpenProjectAsync_indexes_two_file_razor_component_binding_references` test **fails** here:
+  `Single(... reference)` throws *"Sequence contains no matching element"* — the `DisplayName` symbol is found, but
+  **no `razor-generated:` reference** from the generated `Consumer.razor` (`@bind-Value="DisplayName"`) is produced.
+
+Not a missing targeting pack: `Microsoft.AspNetCore.App.Ref` **10.0.8** and runtime **10.0.8** are installed locally
+(SDK 10.0.300). The fixture is fully self-contained (temp `Microsoft.NET.Sdk.Razor` project). So `GetSourceGeneratedDocumentsAsync`
+is not yielding the `@bind-Value` binding reference on this machine the way it did on the author's machine — a
+**source-generator / MSBuildWorkspace environment difference**, not (apparently) a logic regression in the fix itself.
+
+**Decision:** treated as a known environment difference and deferred (operator call, 2026-06-01) rather than debugged
+now. Open question for a later session: whether the Razor source generator is actually running under
+`MSBuildWorkspace.OpenProjectAsync` here (dump `project.GetSourceGeneratedDocumentsAsync()` count + tree paths during the
+test) vs. on the author's setup, and whether a `dotnet restore`/SDK Razor-generator version skew is responsible.
+
 ## Notes
 
 - Probe-key gotcha worth documenting for agents: `find_indexed_references`/`find_indexed_callers` require the
