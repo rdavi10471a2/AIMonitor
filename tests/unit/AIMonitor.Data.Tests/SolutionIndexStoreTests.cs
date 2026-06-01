@@ -85,6 +85,114 @@ public sealed class SolutionIndexStoreTests
         Assert.True(TableExists(databasePath, "solution_state"));
     }
 
+    [Fact]
+    public void SaveSnapshot_replaces_previous_snapshot_rows()
+    {
+        string databasePath = Path.Combine(Path.GetTempPath(), "AIMonitorTests", Guid.NewGuid().ToString("N"), "index.sqlite");
+        SolutionIndexStore store = new(new SolutionIndexDatabase(databasePath));
+
+        store.SaveSnapshot(CreateSnapshot(
+            @"C:\Example\Example.sln",
+            "project:old",
+            "Old",
+            @"C:\Example\Old.csproj",
+            "Old.cs",
+            @"C:\Example\Old.cs",
+            "symbol:old",
+            "OldType",
+            "Old.Package",
+            "old diagnostic"));
+
+        SolutionIndexSummary summary = store.SaveSnapshot(CreateSnapshot(
+            @"C:\Example\Example.sln",
+            "project:new",
+            "New",
+            @"C:\Example\New.csproj",
+            "New.cs",
+            @"C:\Example\New.cs",
+            "symbol:new",
+            "NewType",
+            "New.Package",
+            "new diagnostic"));
+
+        Assert.Equal(1, summary.ProjectCount);
+        Assert.Equal(1, summary.DocumentCount);
+        Assert.Equal(1, summary.DiagnosticCount);
+        Assert.DoesNotContain(store.ListProjects(), project => project.StableKey == "project:old");
+        Assert.DoesNotContain(store.ListDocuments(), document => document.Name == "Old.cs");
+        Assert.DoesNotContain(store.ListSymbols(), symbol => symbol.StableKey == "symbol:old");
+        Assert.DoesNotContain(store.ListReferences(), reference => reference.TargetStableKey == "symbol:old");
+        Assert.DoesNotContain(store.ListPackageReferences(), package => package.Include == "Old.Package");
+        Assert.Contains(store.ListProjects(), project => project.StableKey == "project:new");
+        Assert.Contains(store.ListDocuments(), document => document.Name == "New.cs");
+        Assert.Contains(store.ListSymbols(), symbol => symbol.StableKey == "symbol:new");
+        Assert.Contains(store.ListReferences(), reference => reference.TargetStableKey == "symbol:new");
+        Assert.Contains(store.ListPackageReferences(), package => package.Include == "New.Package");
+    }
+
+    private static MSBuildSolutionSnapshot CreateSnapshot(
+        string inputPath,
+        string projectKey,
+        string projectName,
+        string projectPath,
+        string documentName,
+        string documentPath,
+        string symbolKey,
+        string symbolName,
+        string packageName,
+        string diagnostic)
+    {
+        return new MSBuildSolutionSnapshot(
+            inputPath,
+            [
+                new MSBuildProjectSnapshot(
+                    projectKey,
+                    projectName,
+                    projectPath,
+                    "C#",
+                    "net10.0",
+                    "",
+                    "Library",
+                    "Microsoft.NET.Sdk",
+                    projectName,
+                    projectName,
+                    "enable",
+                    "enable",
+                    "latest",
+                    [
+                        new MSBuildDocumentSnapshot($"document:{documentName}", documentName, documentPath, [], documentName)
+                    ],
+                    [
+                        new MSBuildSymbolSnapshot(
+                            symbolKey,
+                            symbolName,
+                            "NamedType",
+                            projectName,
+                            "",
+                            documentPath,
+                            1,
+                            1,
+                            $"{projectName}.{symbolName}")
+                    ],
+                    [
+                        new MSBuildReferenceSnapshot(
+                            symbolKey,
+                            documentPath,
+                            1,
+                            1,
+                            "IdentifierName",
+                            symbolName)
+                    ],
+                    [],
+                    [],
+                    [new MSBuildPackageReferenceSnapshot(packageName, "1.0.0")],
+                    [],
+                    [],
+                    []),
+            ],
+            [diagnostic]);
+    }
+
     private static bool TableExists(string databasePath, string tableName)
     {
         using SqliteConnection connection = new($"Data Source={databasePath}");
