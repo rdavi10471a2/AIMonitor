@@ -28,6 +28,13 @@ Expected to work through normal MSBuild loading when SDKs are installed:
 Not a V2 focus:
 
 - ASP.NET routing, middleware, auth-policy, hosting, deployment, or OpenAPI-specific semantic workflows.
+- Full Visual Studio-equivalent Razor UI binding analysis.
+
+## Razor Scope
+
+Razor support is intentionally practical rather than absolute. AIMonitor indexes normal C#, clean `.razor.cs` code-behind, and Razor references that map back to user source through compiler/Razor source maps. This is enough for the current monitor workflow when combined with grep-verified smoke tests, builds, and iterative fixes.
+
+Literal component/event binding strings and complete Blazor UI binding semantics are outside the current hard correctness contract. They can be revisited later as a dedicated Razor binding subsystem.
 
 ## Project Layout
 
@@ -73,6 +80,12 @@ dotnet run --project .\tests\smoke\AIMonitor.LanguageCorpusSmokeTests
 ```
 
 Use `--assert` when the corpus is ready to become a hard gate.
+
+## Local Sample Smoke
+
+Local watched-solution smoke tests can be configured through ignored `config/local-smoke-samples.json`. These samples are not committed; they exist to prove AIMonitor against real local projects such as SchemaStudioWebViewer and generated Blazor detector samples.
+
+The smoke checks should stay representative and grep-verified. Do not turn a production Razor page into an exhaustive UI-binding proof unless the project has a dedicated Razor binding provider.
 
 ## Rebuild Index
 
