@@ -1,0 +1,102 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "AIMonitor App (WinForms)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build app",
+      "program": "${workspaceFolder}/src/AIMonitor.App/bin/Debug/net10.0-windows/AIMonitor.App.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "stopAtEntry": false
+    },
+    {
+      "name": "AIMonitor CLI: status",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build cli",
+      "program": "${workspaceFolder}/src/AIMonitor.Cli/bin/Debug/net10.0/AIMonitor.Cli.dll",
+      "args": [
+        "status",
+        "--repo-root",
+        "${workspaceFolder}",
+        "--config",
+        "${workspaceFolder}/config/appsettings.json"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "AIMonitor CLI: index rebuild",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build cli",
+      "program": "${workspaceFolder}/src/AIMonitor.Cli/bin/Debug/net10.0/AIMonitor.Cli.dll",
+      "args": [
+        "index",
+        "rebuild",
+        "--repo-root",
+        "${workspaceFolder}",
+        "--config",
+        "${workspaceFolder}/config/appsettings.json"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "AIMonitor CLI: edit status",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build cli",
+      "program": "${workspaceFolder}/src/AIMonitor.Cli/bin/Debug/net10.0/AIMonitor.Cli.dll",
+      "args": [
+        "edit",
+        "status",
+        "--file",
+        "${input:watchedFilePath}",
+        "--repo-root",
+        "${workspaceFolder}",
+        "--config",
+        "${workspaceFolder}/config/appsettings.json"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "AIMonitor MCP Bridge",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build bridge",
+      "program": "${workspaceFolder}/src/AIMonitor.Bridge/bin/Debug/net10.0/AIMonitor.Bridge.dll",
+      "args": [
+        "--server",
+        "monitor"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    }
+  ],
+  "compounds": [
+    {
+      "name": "App + CLI status",
+      "configurations": [
+        "AIMonitor App (WinForms)",
+        "AIMonitor CLI: status"
+      ],
+      "stopAll": true
+    }
+  ],
+  "inputs": [
+    {
+      "id": "watchedFilePath",
+      "type": "promptString",
+      "description": "Absolute path to a watched source file"
+    }
+  ]
+}
