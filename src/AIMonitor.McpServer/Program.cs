@@ -679,7 +679,9 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         _ = sessionId;
-        return workflowService.FindTextSpan(ResolveWatchedPath(path), findText, occurrenceIndex, expectedFileHash);
+        string fullPath = ResolveWatchedPath(path);
+        EnsureSession(fullPath);
+        return workflowService.FindTextSpan(fullPath, findText, occurrenceIndex, expectedFileHash);
     }
 
     [McpServerTool]
@@ -699,8 +701,10 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         _ = manifestJson;
+        string fullPath = ResolveWatchedPath(path);
+        EnsureSession(fullPath);
         EditSessionStatus status = workflowService.ReplaceSpan(
-            ResolveWatchedPath(path),
+            fullPath,
             startLine,
             startColumn,
             endLine,

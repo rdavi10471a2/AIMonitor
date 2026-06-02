@@ -465,6 +465,44 @@ public sealed class McpServerSmokeTests
     }
 
     [Fact]
+    public async Task Mcp_span_tools_auto_refresh_when_no_working_session_exists()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+        await File.WriteAllTextAsync(
+            fixture.ProgramFilePath,
+            "namespace Example { internal static class Program { public static string Value => \"fresh-span\"; } }");
+
+        CallToolResult span = await client.CallToolAsync(
+            "find_text_span",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["findText"] = "fresh-span"
+            });
+        Assert.False(span.IsError == true);
+        string spanJson = ExtractToolText(span);
+        string workingFilePath = ExtractJsonString(spanJson, "workingFilePath");
+
+        CallToolResult replace = await client.CallToolAsync(
+            "replace_span_in_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["startLine"] = ExtractJsonInt(spanJson, "startLine"),
+                ["startColumn"] = ExtractJsonInt(spanJson, "startColumn"),
+                ["endLine"] = ExtractJsonInt(spanJson, "endLine"),
+                ["endColumn"] = ExtractJsonInt(spanJson, "endColumn"),
+                ["newText"] = "fresh-replaced",
+                ["expectedOldTextHash"] = ExtractJsonString(spanJson, "textHash"),
+                ["expectedOldText"] = "fresh-span"
+            });
+        Assert.False(replace.IsError == true);
+        Assert.Contains("fresh-replaced", await File.ReadAllTextAsync(workingFilePath), StringComparison.Ordinal);
+        Assert.DoesNotContain("fresh-replaced", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Mcp_new_file_stage_and_reject_leaves_watched_source_absent()
     {
         McpFixture fixture = CreateFixture();
