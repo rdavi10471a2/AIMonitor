@@ -58,6 +58,48 @@ public sealed class WorkflowEditServiceSafetyTests
         Assert.Contains("Cannot accept", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void ReplaceText_honors_occurrence_index_without_adapter_file_writes()
+    {
+        WorkflowFixture fixture = CreateFixture();
+        WorkflowEditService service = new(fixture.Settings);
+        EditSessionStatus refresh = service.Refresh(fixture.ProgramFilePath);
+        File.WriteAllText(refresh.WorkingFilePath, "one fish one fish");
+
+        ReplaceTextResult result = service.ReplaceText(
+            fixture.ProgramFilePath,
+            "one",
+            "two",
+            expectedMatches: 2,
+            occurrenceIndex: 1);
+
+        Assert.True(result.Changed);
+        Assert.Equal("one fish two fish", File.ReadAllText(refresh.WorkingFilePath));
+    }
+
+    [Fact]
+    public void ReplaceSpan_uses_crlf_aware_line_columns()
+    {
+        WorkflowFixture fixture = CreateFixture();
+        WorkflowEditService service = new(fixture.Settings);
+        EditSessionStatus refresh = service.Refresh(fixture.ProgramFilePath);
+        File.WriteAllText(refresh.WorkingFilePath, "first\r\nsecond\r\nthird\r\n");
+
+        TextSpanResult span = service.FindTextSpan(fixture.ProgramFilePath, "second");
+        EditSessionStatus status = service.ReplaceSpan(
+            fixture.ProgramFilePath,
+            span.StartLine,
+            span.StartColumn,
+            span.EndLine,
+            span.EndColumn,
+            "changed",
+            expectedOldTextHash: span.TextHash,
+            expectedOldText: "second");
+
+        Assert.Equal("pending", status.Classification);
+        Assert.Equal("first\r\nchanged\r\nthird\r\n", File.ReadAllText(refresh.WorkingFilePath));
+    }
+
     private static StagedEditRecord StageChangedCandidate(WorkflowEditService service, WorkflowFixture fixture)
     {
         EditSessionStatus refresh = service.Refresh(fixture.ProgramFilePath);

@@ -20,14 +20,22 @@ Addressed in the follow-up fix after this review:
 - `get_ledger` now validates supplied ledger paths with `Path.GetRelativePath` boundary checks instead of a raw string prefix check.
 - The stale VS Code `build bridge` task now targets `AIMonitor.McpStdioBridge`.
 - `src/AIMonitor.Storage` was removed; durable store behavior remains in `AIMonitor.Data` until a real tested storage boundary exists.
+- `launch-diff` orchestration is shared by CLI and MCP through `AIMonitor.Runtime.StagedDiffLaunchWorkflow`, so validation,
+  prompt fallback, telemetry, review-file preparation, and WinMerge launch use the same path.
+- Span find/replace positioning moved into `WorkflowEditService`, including CRLF-aware line/column semantics.
+- `replace_text_in_file` / `edit replace-text` now honor `occurrenceIndex` through the workflow service.
+- Stage/launch/decision replies are compact by default, with `--verbose` / `verbose: true` for full inline records and
+  `edit staged-record` / `get_staged_record` for explicit fetch-back.
+- Workflow manifests now use an advisory per-file lock around read-modify-write paths.
+- MCP index reference tools now return a visible guidance payload for source-map selector keys instead of a silent `[]`;
+  `find_indexed_callers` now filters invocation/object-creation rows instead of broad identifier references.
+- Roslyn source-map/symbol calls now return actionable MCP-visible guidance when pointed at Razor markup.
 
 Still open/backlog from this review:
 
-- Factor launch-diff and record-decision orchestration into a shared facade to reduce CLI/MCP duplication.
-- Move span edit positioning into the workflow engine and define CRLF column semantics there.
-- Decide whether `occurrenceIndex` should be implemented or removed from `replace_text_in_file`.
 - Push selected index filters into SQL and reduce repeated schema setup on reads.
-- Revisit manifest locking/concurrency, raw build-output fallback for validation diagnostics, and the lower-priority cleanup items.
+- Revisit raw build-output fallback for validation diagnostics and the lower-priority cleanup items.
+- MCP elicitation and dependency-aware/incremental validation/indexing remain deliberately deferred.
 
 Read-only deep dive evaluating whether the AIMonitor monitor code meets its core design rule —
 **"MCP is not the workflow. MCP is the Claude adapter over the shared workflow engine"** — and whether

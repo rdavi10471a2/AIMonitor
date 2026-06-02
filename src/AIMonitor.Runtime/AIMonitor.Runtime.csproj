@@ -2,6 +2,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\AIMonitor.Core\AIMonitor.Core.csproj" />
+    <ProjectReference Include="..\AIMonitor.Logging\AIMonitor.Logging.csproj" />
+    <ProjectReference Include="..\AIMonitor.Workflow\AIMonitor.Workflow.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

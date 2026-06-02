@@ -1,4 +1,6 @@
 using AIMonitor.Core;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace AIMonitor.Workflow;
@@ -22,6 +24,7 @@ public sealed class WorkflowEditService
     public EditSessionStatus Refresh(string watchedFilePath)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
+        using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
         if (!File.Exists(fullWatchedPath))
         {
             throw new FileNotFoundException("Watched file was not found.", fullWatchedPath);
@@ -48,6 +51,7 @@ public sealed class WorkflowEditService
     public EditSessionStatus NewFile(string watchedFilePath)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
+        using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
         paths.GetRelativeWatchedPath(fullWatchedPath);
         if (File.Exists(fullWatchedPath))
         {
@@ -190,7 +194,8 @@ public sealed class WorkflowEditService
         string oldText,
         string newText,
         int? expectedMatches = null,
-        string? expectedWorkingHash = null)
+        string? expectedWorkingHash = null,
+        int? occurrenceIndex = null)
     {
         if (string.IsNullOrEmpty(oldText))
         {
@@ -198,6 +203,7 @@ public sealed class WorkflowEditService
         }
 
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
+        using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
         EditSessionManifest manifest = LoadManifest(fullWatchedPath)
             ?? throw new InvalidOperationException("No edit session exists for this file. Run edit refresh first.");
         EnsureSessionCanEdit(manifest);
@@ -235,7 +241,9 @@ public sealed class WorkflowEditService
             throw new InvalidOperationException("Replacement old text was not found in the working candidate.");
         }
 
-        string updatedText = workingText.Replace(textToFind, normalizedNewText, StringComparison.Ordinal);
+        string updatedText = occurrenceIndex.HasValue
+            ? ReplaceOccurrence(workingText, textToFind, normalizedNewText, occurrenceIndex.Value)
+            : workingText.Replace(textToFind, normalizedNewText, StringComparison.Ordinal);
         File.WriteAllText(manifest.WorkingFilePath, updatedText);
         return new ReplaceTextResult
         {
@@ -252,17 +260,140 @@ public sealed class WorkflowEditService
         };
     }
 
+    public TextSpanResult FindTextSpan(
+        string watchedFilePath,
+        string findText,
+        int occurrenceIndex = 0,
+        string? expectedWorkingHash = null)
+    {
+        if (string.IsNullOrEmpty(findText))
+        {
+            throw new InvalidOperationException("Find text must not be empty.");
+        }
+
+        string fullWatchedPath = Path.GetFullPath(watchedFilePath);
+        using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
+        EditSessionManifest manifest = LoadManifest(fullWatchedPath)
+            ?? throw new InvalidOperationException("No edit session exists for this file. Run edit refresh first.");
+        EnsureSessionCanEdit(manifest);
+        if (!File.Exists(manifest.WorkingFilePath))
+        {
+            throw new FileNotFoundException("Working candidate file was not found.", manifest.WorkingFilePath);
+        }
+
+        ValidateWorkingHash(manifest.WorkingFilePath, expectedWorkingHash);
+        string text = File.ReadAllText(manifest.WorkingFilePath);
+        int index = FindOccurrence(text, findText, occurrenceIndex);
+        TextPosition start = GetPosition(text, index);
+        TextPosition end = GetPosition(text, index + findText.Length);
+        return new TextSpanResult
+        {
+            WatchedFilePath = fullWatchedPath,
+            WorkingFilePath = manifest.WorkingFilePath,
+            Text = findText,
+            OccurrenceIndex = occurrenceIndex,
+            StartLine = start.Line,
+            StartColumn = start.Column,
+            EndLine = end.Line,
+            EndColumn = end.Column,
+            TextHash = ComputeHash(findText)
+        };
+    }
+
+    public EditSessionStatus ReplaceSpan(
+        string watchedFilePath,
+        int startLine,
+        int startColumn,
+        int endLine,
+        int endColumn,
+        string newText,
+        string? expectedWorkingHash = null,
+        string? expectedOldTextHash = null,
+        string? expectedOldText = null)
+    {
+        string fullWatchedPath = Path.GetFullPath(watchedFilePath);
+        using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
+        EditSessionManifest manifest = LoadManifest(fullWatchedPath)
+            ?? throw new InvalidOperationException("No edit session exists for this file. Run edit refresh first.");
+        EnsureSessionCanEdit(manifest);
+        if (!File.Exists(manifest.WorkingFilePath))
+        {
+            throw new FileNotFoundException("Working candidate file was not found.", manifest.WorkingFilePath);
+        }
+
+        ValidateWorkingHash(manifest.WorkingFilePath, expectedWorkingHash);
+        string text = File.ReadAllText(manifest.WorkingFilePath);
+        int startIndex = GetIndex(text, startLine, startColumn);
+        int endIndex = GetIndex(text, endLine, endColumn);
+        if (endIndex < startIndex)
+        {
+            throw new InvalidOperationException("End span must be after start span.");
+        }
+
+        string oldText = text[startIndex..endIndex];
+        if (expectedOldText is not null && !oldText.Equals(expectedOldText, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Extracted old span text did not match expectedOldText.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(expectedOldTextHash)
+            && !ComputeHash(oldText).Equals(expectedOldTextHash, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Extracted old span text hash did not match expectedOldTextHash.");
+        }
+
+        string lineEnding = DetectDominantLineEnding(text);
+        File.WriteAllText(
+            manifest.WorkingFilePath,
+            text[..startIndex] + NormalizeLineEndingsForFile(newText, lineEnding) + text[endIndex..]);
+        return GetStatus(fullWatchedPath);
+    }
+
     public EditSessionStatus SubmitFile(string watchedFilePath, string content)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
+        using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
         EditSessionManifest? manifest = LoadManifest(fullWatchedPath);
         if (manifest is null)
         {
-            _ = File.Exists(fullWatchedPath)
-                ? Refresh(fullWatchedPath)
-                : NewFile(fullWatchedPath);
-            manifest = LoadManifest(fullWatchedPath)
-                ?? throw new InvalidOperationException("Edit session could not be created for the file.");
+            string workingFilePath = paths.GetWorkingFilePath(fullWatchedPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(workingFilePath) ?? ".");
+            if (File.Exists(fullWatchedPath))
+            {
+                File.Copy(fullWatchedPath, workingFilePath, overwrite: true);
+                manifest = new EditSessionManifest
+                {
+                    WatchedFilePath = fullWatchedPath,
+                    WorkingFilePath = workingFilePath,
+                    RelativePath = paths.GetRelativeWatchedPath(fullWatchedPath),
+                    OriginalHash = FileHash.Compute(fullWatchedPath),
+                    OriginalNormalizedHash = FileHash.ComputeNormalizedFile(fullWatchedPath),
+                    RequiresRefresh = false,
+                    RefreshedAtUtc = DateTimeOffset.UtcNow.ToString("O")
+                };
+            }
+            else
+            {
+                paths.GetRelativeWatchedPath(fullWatchedPath);
+                if (!File.Exists(workingFilePath))
+                {
+                    File.WriteAllText(workingFilePath, string.Empty);
+                }
+
+                manifest = new EditSessionManifest
+                {
+                    WatchedFilePath = fullWatchedPath,
+                    WorkingFilePath = workingFilePath,
+                    RelativePath = paths.GetRelativeWatchedPath(fullWatchedPath),
+                    OriginalHash = NewFileHash,
+                    OriginalNormalizedHash = NewFileHash,
+                    IsNewFile = true,
+                    RequiresRefresh = false,
+                    RefreshedAtUtc = DateTimeOffset.UtcNow.ToString("O")
+                };
+            }
+
+            SaveManifest(fullWatchedPath, manifest);
         }
 
         EnsureSessionCanEdit(manifest);
@@ -281,6 +412,7 @@ public sealed class WorkflowEditService
     public CompareSnapshotResult Compare(string watchedFilePath, string? ledgerSummary = null)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
+        using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
         EditSessionManifest manifest = LoadManifest(fullWatchedPath)
             ?? throw new InvalidOperationException("No edit session exists for this file. Run edit refresh first.");
         EnsureSessionCanEdit(manifest);
@@ -377,6 +509,7 @@ public sealed class WorkflowEditService
     public StagedEditRecord Stage(string watchedFilePath, string? ledgerSummary = null)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
+        using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
         EditSessionManifest manifest = LoadManifest(fullWatchedPath)
             ?? throw new InvalidOperationException("No edit session exists for this file. Run edit refresh first.");
         EnsureSessionCanEdit(manifest);
@@ -453,6 +586,29 @@ public sealed class WorkflowEditService
     {
         return LoadStagedRecord(stagedRecordId)
             ?? throw new InvalidOperationException($"Staged edit record was not found: {stagedRecordId}");
+    }
+
+    public StagedEditSummary GetStagedSummary(string stagedRecordId)
+    {
+        return CreateSummary(GetStagedRecord(stagedRecordId));
+    }
+
+    public StagedEditSummary CreateSummary(StagedEditRecord record)
+    {
+        return new StagedEditSummary
+        {
+            StagedRecordId = record.StagedRecordId,
+            WatchedFilePath = record.WatchedFilePath,
+            RelativePath = record.RelativePath,
+            Status = record.Status,
+            Decision = record.Decision,
+            Classification = record.Classification,
+            StagedHash = record.StagedHash,
+            LaunchStatus = record.LaunchStatus,
+            RecordPath = paths.GetStagedRecordPath(record.StagedRecordId),
+            CreatedAtUtc = record.CreatedAtUtc,
+            Message = record.Message
+        };
     }
 
     public StagedEditRecord RecordDiffLaunch(string stagedRecordId, bool launched, string message)
@@ -587,13 +743,16 @@ public sealed class WorkflowEditService
         record.Status = result.Classification;
         SaveStagedRecord(record);
 
-        EditSessionManifest? manifest = LoadManifest(record.WatchedFilePath);
-        if (manifest is not null)
+        using (IDisposable manifestLock = AcquireManifestLock(record.WatchedFilePath))
         {
-            manifest.LastDecision = decision;
-            manifest.LastDecisionAtUtc = record.DecisionAtUtc;
-            manifest.RequiresRefresh = result.Classification is "accepted" or "accepted-normalized";
-            SaveManifest(record.WatchedFilePath, manifest);
+            EditSessionManifest? manifest = LoadManifest(record.WatchedFilePath);
+            if (manifest is not null)
+            {
+                manifest.LastDecision = decision;
+                manifest.LastDecisionAtUtc = record.DecisionAtUtc;
+                manifest.RequiresRefresh = result.Classification is "accepted" or "accepted-normalized";
+                SaveManifest(record.WatchedFilePath, manifest);
+            }
         }
 
         return record;
@@ -672,6 +831,24 @@ public sealed class WorkflowEditService
         string recordPath = paths.GetStagedRecordPath(record.StagedRecordId);
         Directory.CreateDirectory(Path.GetDirectoryName(recordPath) ?? ".");
         File.WriteAllText(recordPath, JsonSerializer.Serialize(record, JsonOptions));
+    }
+
+    private IDisposable AcquireManifestLock(string watchedFilePath)
+    {
+        string lockPath = paths.GetMetadataPath(watchedFilePath) + ".lock";
+        Directory.CreateDirectory(Path.GetDirectoryName(lockPath) ?? ".");
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (true)
+        {
+            try
+            {
+                return new ManifestLock(File.Open(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None));
+            }
+            catch (IOException) when (DateTimeOffset.UtcNow < deadline)
+            {
+                Thread.Sleep(50);
+            }
+        }
     }
 
     private static void EnsureSessionCanEdit(EditSessionManifest manifest)
@@ -770,4 +947,151 @@ public sealed class WorkflowEditService
             startIndex = index + value.Length;
         }
     }
+
+    private static string ReplaceOccurrence(string text, string oldText, string newText, int occurrenceIndex)
+    {
+        int index = FindOccurrence(text, oldText, occurrenceIndex);
+        return text[..index] + newText + text[(index + oldText.Length)..];
+    }
+
+    private static int FindOccurrence(string text, string findText, int occurrenceIndex)
+    {
+        if (occurrenceIndex < 0)
+        {
+            throw new InvalidOperationException("Occurrence index must be zero or greater.");
+        }
+
+        int start = 0;
+        for (int current = 0; current <= occurrenceIndex; current++)
+        {
+            int index = text.IndexOf(findText, start, StringComparison.Ordinal);
+            if (index < 0)
+            {
+                throw new InvalidOperationException($"Text occurrence {occurrenceIndex} was not found.");
+            }
+
+            if (current == occurrenceIndex)
+            {
+                return index;
+            }
+
+            start = index + findText.Length;
+        }
+
+        throw new InvalidOperationException($"Text occurrence {occurrenceIndex} was not found.");
+    }
+
+    private static TextPosition GetPosition(string text, int index)
+    {
+        if (index < 0 || index > text.Length)
+        {
+            throw new InvalidOperationException("Text index is out of range.");
+        }
+
+        int line = 1;
+        int column = 1;
+        int current = 0;
+        while (current < index)
+        {
+            if (text[current] == '\r')
+            {
+                if (current + 1 < text.Length && text[current + 1] == '\n' && current + 1 < index)
+                {
+                    current++;
+                }
+
+                line++;
+                column = 1;
+            }
+            else if (text[current] == '\n')
+            {
+                line++;
+                column = 1;
+            }
+            else
+            {
+                column++;
+            }
+
+            current++;
+        }
+
+        return new TextPosition(line, column);
+    }
+
+    private static int GetIndex(string text, int line, int column)
+    {
+        if (line < 1 || column < 1)
+        {
+            throw new InvalidOperationException("Line and column are 1-based and must be greater than zero.");
+        }
+
+        int currentLine = 1;
+        int currentColumn = 1;
+        for (int index = 0; index < text.Length; index++)
+        {
+            if (currentLine == line && currentColumn == column)
+            {
+                return index;
+            }
+
+            if (text[index] == '\r')
+            {
+                if (index + 1 < text.Length && text[index + 1] == '\n')
+                {
+                    index++;
+                }
+
+                currentLine++;
+                currentColumn = 1;
+            }
+            else if (text[index] == '\n')
+            {
+                currentLine++;
+                currentColumn = 1;
+            }
+            else
+            {
+                currentColumn++;
+            }
+        }
+
+        if (currentLine == line && currentColumn == column)
+        {
+            return text.Length;
+        }
+
+        throw new InvalidOperationException("Line/column span is outside the working candidate.");
+    }
+
+    private static void ValidateWorkingHash(string workingFilePath, string? expectedWorkingHash)
+    {
+        if (!string.IsNullOrWhiteSpace(expectedWorkingHash)
+            && !FileHash.Compute(workingFilePath).Equals(expectedWorkingHash, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Working candidate hash does not match the expected hash. Refresh status before editing.");
+        }
+    }
+
+    private static string ComputeHash(string text)
+    {
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+    }
+
+    private sealed class ManifestLock : IDisposable
+    {
+        private readonly FileStream stream;
+
+        public ManifestLock(FileStream stream)
+        {
+            this.stream = stream;
+        }
+
+        public void Dispose()
+        {
+            stream.Dispose();
+        }
+    }
+
+    private sealed record TextPosition(int Line, int Column);
 }

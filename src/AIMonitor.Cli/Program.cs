@@ -192,9 +192,14 @@ internal static class Program
                     RequireTextOption(args, "--old-text", "--old-text-file"),
                     RequireTextOption(args, "--new-text", "--new-text-file"),
                     GetIntOption(args, "--expected-matches"),
-                    GetOption(args, "--expected-working-hash")),
+                    GetOption(args, "--expected-working-hash"),
+                    GetIntOption(args, "--occurrence-index")),
                 "status" => service.GetStatus(RequireOption(args, "--file")),
-                "stage" => service.Stage(RequireOption(args, "--file"), GetOption(args, "--ledger-summary")),
+                "stage" => CreateStageResponse(
+                    service,
+                    service.Stage(RequireOption(args, "--file"), GetOption(args, "--ledger-summary")),
+                    HasOption(args, "--verbose")),
+                "staged-record" => service.GetStagedRecord(RequireOption(args, "--staged-record-id")),
                 "launch-diff" => LaunchDiff(args, settings, logger, service),
                 "record-decision" => RecordDecision(args, settings, logger, service),
                 "accept" => Accept(args, settings, logger, service),
@@ -206,83 +211,34 @@ internal static class Program
 
     private static object LaunchDiff(string[] args, MonitorSettings settings, IMonitorLogger logger, WorkflowEditService service)
     {
-        StagedEditRecord record = service.GetStagedRecord(RequireOption(args, "--staged-record-id"));
-        AIMonitor.Workflow.PreMergeValidationResult validation = new PreMergeValidationService().Validate(settings, record);
-        bool forceValidation = HasOption(args, "--force-validation");
-        string validationPrompt = "";
-        if (validation.IsError && !forceValidation && PreMergeValidationOverridePrompt.CanShow())
-        {
-            forceValidation = PreMergeValidationOverridePrompt.Prompt(validation.Diagnostics);
-            validationPrompt = forceValidation ? "approved" : "cancelled";
-        }
-
-        record = service.RecordPreMergeValidation(record.StagedRecordId, validation, forceValidation);
-
-        logger.Write(
-            validation.IsError ? MonitorLogLevel.Warning : MonitorLogLevel.Information,
+        return new StagedDiffLaunchWorkflow().Launch(
+            settings,
+            logger,
+            service,
+            RequireOption(args, "--staged-record-id"),
             "AIMonitor.Cli",
-            "premerge.validation.completed",
-            validation.Message,
-            new Dictionary<string, string>
-            {
-                ["stagedRecordId"] = record.StagedRecordId,
-                ["watchedFilePath"] = record.WatchedFilePath,
-                ["relativePath"] = record.RelativePath,
-                ["validationStatus"] = validation.Status,
-                ["diagnosticCount"] = validation.DiagnosticCount.ToString(),
-                ["validationWorkspacePath"] = validation.ValidationWorkspacePath,
-                ["forceValidation"] = forceValidation.ToString().ToLowerInvariant(),
-                ["validationPrompt"] = validationPrompt,
-                ["isError"] = validation.IsError.ToString().ToLowerInvariant()
-            });
-
-        if (validation.IsError && !forceValidation)
-        {
-            StagedEditRecord blockedRecord = service.RecordDiffLaunch(
-                record.StagedRecordId,
-                launched: false,
-                "Pre-merge validation failed. WinMerge launch is blocked unless --force-validation is used after human approval.");
-            return new
-            {
-                stagedRecord = blockedRecord,
-                preMergeValidation = validation,
-                diffLaunch = new
-                {
-                    launched = false,
-                    status = "blocked-premerge-validation",
-                    message = "Pre-merge validation failed. Human approval is required before force-launching WinMerge."
-                },
-                nextStep = PreMergeValidationOverridePrompt.CanShow()
-                    ? "Human cancelled validation override. Fix and restage before launching WinMerge."
-                    : "Validation failed and no interactive dialog is available. Ask the user whether to override; rerun edit launch-diff with --force-validation only if they explicitly approve."
-            };
-        }
-
-        record = service.PrepareReviewFileForLaunch(record.StagedRecordId);
-        DiffLaunchResult result = new WinMergeDiffToolLauncher().Launch(new DiffLaunchRequest
-        {
-            OriginalFilePath = GetDiffOriginalFilePath(record),
-            ProposedFilePath = record.StagedFilePath,
-            ExplicitToolPath = GetOption(args, "--diff-tool"),
-            CandidateToolPaths = settings.WinMergeCandidatePaths
-        });
-        StagedEditRecord updatedRecord = service.RecordDiffLaunch(record.StagedRecordId, result.Launched, result.Message);
-        return new
-        {
-            stagedRecord = updatedRecord,
-            preMergeValidation = validation,
-            diffLaunch = result,
-            nextStep = record.IsNewFile
-                ? "After WinMerge review, save the staged candidate into watched source for accept, or leave watched source absent for reject. Then run edit record-decision."
-                : "After WinMerge review, save the staged candidate into the watched source for accept, or leave watched source unchanged for reject. Then run edit record-decision."
-        };
+            GetOption(args, "--diff-tool"),
+            HasOption(args, "--force-validation"),
+            HasOption(args, "--verbose"));
     }
 
-    private static string GetDiffOriginalFilePath(StagedEditRecord record)
+    private static object CreateStageResponse(WorkflowEditService service, StagedEditRecord record, bool verbose)
     {
-        return string.IsNullOrWhiteSpace(record.ReviewBaselineFilePath)
-            ? record.WatchedFilePath
-            : record.ReviewBaselineFilePath;
+        StagedEditSummary summary = service.CreateSummary(record);
+        return new
+        {
+            stagedRecordId = summary.StagedRecordId,
+            watchedFilePath = summary.WatchedFilePath,
+            relativePath = summary.RelativePath,
+            status = summary.Status,
+            classification = summary.Classification,
+            stagedHash = summary.StagedHash,
+            launchStatus = summary.LaunchStatus,
+            stagedRecordPath = summary.RecordPath,
+            stagedRecordSummary = summary,
+            stagedRecord = verbose ? record : null,
+            nextStep = "Candidate staged. Use edit staged-record for full details or edit launch-diff for review."
+        };
     }
 
     private static object RecordDecision(string[] args, MonitorSettings settings, IMonitorLogger logger, WorkflowEditService service)
@@ -291,7 +247,7 @@ internal static class Program
             RequireOption(args, "--staged-record-id"),
             RequireOption(args, "--decision"),
             GetOption(args, "--expected-staged-hash"));
-        return CreateDecisionResponse(settings, logger, record);
+        return CreateDecisionResponse(settings, logger, service, record, HasOption(args, "--verbose"));
     }
 
     private static object Accept(string[] args, MonitorSettings settings, IMonitorLogger logger, WorkflowEditService service)
@@ -305,10 +261,15 @@ internal static class Program
 
         service.Accept(file, RequireOption(args, "--expected-hash"));
         StagedEditRecord record = service.GetStagedRecord(status.LastStagedRecordId);
-        return CreateDecisionResponse(settings, logger, record);
+        return CreateDecisionResponse(settings, logger, service, record, HasOption(args, "--verbose"));
     }
 
-    private static ReviewDecisionWithIndexRefreshResult CreateDecisionResponse(MonitorSettings settings, IMonitorLogger logger, StagedEditRecord record)
+    private static ReviewDecisionWithIndexRefreshResult CreateDecisionResponse(
+        MonitorSettings settings,
+        IMonitorLogger logger,
+        WorkflowEditService service,
+        StagedEditRecord record,
+        bool verbose)
     {
         PostAcceptIndexRefreshResult? indexRefresh = null;
         if (record.Classification is "accepted" or "accepted-normalized")
@@ -320,6 +281,7 @@ internal static class Program
                 "AIMonitor.Cli");
         }
 
+        StagedEditSummary summary = service.CreateSummary(record);
         return new ReviewDecisionWithIndexRefreshResult
         {
             StagedRecordId = record.StagedRecordId,
@@ -329,7 +291,9 @@ internal static class Program
             Classification = record.Classification,
             Status = record.Status,
             Message = record.Message,
-            StagedRecord = record,
+            StagedRecordSummary = summary,
+            StagedRecordPath = summary.RecordPath,
+            StagedRecord = verbose ? record : null,
             IndexRefresh = indexRefresh,
             NextStep = record.Classification is "accepted" or "accepted-normalized"
                 ? "Index was rebuilt after accept. Run edit refresh before further edits to this watched file."

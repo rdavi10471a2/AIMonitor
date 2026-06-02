@@ -290,51 +290,71 @@ public sealed class AIMonitorTools
 
     [McpServerTool]
     [Description("Return one indexed C# symbol by stable symbol key from the monitor-owned watched solution index.")]
-    public IndexedSymbolRow? GetIndexedSymbol(
+    public object? GetIndexedSymbol(
         [Description("Stable symbol key returned by query_solution_index or find_indexed_symbols.")] string stableSymbolKey)
     {
         runtimeState.Touch();
+        if (TryCreateIndexedStableSymbolKeyError(stableSymbolKey) is { } error)
+        {
+            return error;
+        }
+
         return queryService.ListSymbols().FirstOrDefault(symbol => symbol.StableKey.Equals(stableSymbolKey, StringComparison.Ordinal));
     }
 
     [McpServerTool]
     [Description("Return persisted indexed reference sites for one stable C# symbol key.")]
-    public IReadOnlyList<IndexedReferenceRow> FindIndexedReferences(
+    public object FindIndexedReferences(
         [Description("Stable symbol key returned by query_solution_index, find_indexed_symbols, or get_indexed_symbol.")] string stableSymbolKey,
         [Description("Maximum reference rows to return.")] int maxResults = 500)
     {
         runtimeState.Touch();
+        if (TryCreateIndexedStableSymbolKeyError(stableSymbolKey) is { } error)
+        {
+            return error;
+        }
+
         return queryService.ListReferences(stableSymbolKey).Take(maxResults).ToArray();
     }
 
     [McpServerTool]
     [Description("Return persisted indexed invocation call sites for one stable C# method or constructor symbol key.")]
-    public IReadOnlyList<IndexedReferenceRow> FindIndexedCallers(
+    public object FindIndexedCallers(
         [Description("Stable method or constructor symbol key returned by query_solution_index, find_indexed_symbols, or get_indexed_symbol.")] string stableSymbolKey,
         [Description("Maximum caller rows to return.")] int maxResults = 500)
     {
         runtimeState.Touch();
+        if (TryCreateIndexedStableSymbolKeyError(stableSymbolKey) is { } error)
+        {
+            return error;
+        }
+
         return queryService.ListReferences(stableKey: stableSymbolKey)
             .Where(reference => reference.ReferenceKind.Contains("Invocation", StringComparison.OrdinalIgnoreCase)
-                || reference.ReferenceKind.Contains("Identifier", StringComparison.OrdinalIgnoreCase))
+                || reference.ReferenceKind.Contains("ObjectCreation", StringComparison.OrdinalIgnoreCase))
             .Take(maxResults)
             .ToArray();
     }
 
     [McpServerTool]
     [Description("Return indexed symbol relationship rows for one stable symbol key. AIMonitor V2 currently returns an empty compatibility set until relationship rows are added to the shared index schema.")]
-    public IReadOnlyList<AIMonitorIndexedRelationship> FindIndexedRelationships(
+    public object FindIndexedRelationships(
         [Description("Stable symbol key returned by query_solution_index, find_indexed_symbols, or get_indexed_symbol.")] string stableSymbolKey,
         [Description("Optional exact relationship kind filter.")] string? relationshipKind = null,
         [Description("Relationship direction: outgoing, incoming, or both.")] string direction = "both",
         [Description("Maximum relationship rows to return.")] int maxResults = 500)
     {
         runtimeState.Touch();
+        if (TryCreateIndexedStableSymbolKeyError(stableSymbolKey) is { } error)
+        {
+            return error;
+        }
+
         _ = stableSymbolKey;
         _ = relationshipKind;
         _ = direction;
         _ = maxResults;
-        return [];
+        return Array.Empty<AIMonitorIndexedRelationship>();
     }
 
     [McpServerTool]
@@ -517,7 +537,7 @@ public sealed class AIMonitorTools
 
     [McpServerTool]
     [Description("Return a Roslyn-derived source map for a C# file, folder, namespace, or watched project. Use selector mode before C# symbol edits.")]
-    public RoslynSourceMapResult GetSourceMap(
+    public object GetSourceMap(
         [Description("Optional source file/folder path, or namespace text when scope is namespace.")] string? path = null,
         [Description("Source map scope: auto, file, folder, namespace, or project.")] string scope = "auto",
         [Description("Source map density: auto, navigation, selector, detail, or full.")] string mode = "auto",
@@ -525,7 +545,16 @@ public sealed class AIMonitorTools
         [Description("Optional durable session handle for ownership/telemetry.")] string? sessionId = null)
     {
         runtimeState.Touch();
-        RoslynSourceMapResult result = roslynEditService.GetSourceMap(path, scope, mode, namespaceName);
+        RoslynSourceMapResult result;
+        try
+        {
+            result = roslynEditService.GetSourceMap(path, scope, mode, namespaceName);
+        }
+        catch (InvalidOperationException ex) when (IsRecoverableRoslynGuidanceError(ex))
+        {
+            return new AIMonitorToolErrorResult(true, ex.Message, "Use .cs/.razor.cs for Roslyn symbol tools or text/file workflow tools for markup.", path);
+        }
+
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
             RecordMonitorSessionEvent(sessionId, "get-source-map", path ?? settings.WatchedProjectFolder, JsonSerializer.Serialize(result, JsonOptions));
@@ -536,7 +565,7 @@ public sealed class AIMonitorTools
 
     [McpServerTool]
     [Description("Read one C# symbol body from the monitor-owned Working candidate using a Roslyn selector.")]
-    public RoslynSymbolReadResult GetSymbol(
+    public object GetSymbol(
         [Description("Source file path, absolute or relative to the watched solution folder.")] string path,
         [Description("Compatibility shortcut symbol name.")] string? symbolName = null,
         [Description("Structured selector JSON from get_source_map when available.")] string? symbolSelectorJson = null,
@@ -546,7 +575,16 @@ public sealed class AIMonitorTools
         string selector = !string.IsNullOrWhiteSpace(symbolSelectorJson)
             ? symbolSelectorJson
             : JsonSerializer.Serialize(new RoslynSymbolSelector(Name: symbolName), JsonOptions);
-        RoslynSymbolReadResult result = roslynEditService.GetSymbol(ResolveWatchedPath(path), selector);
+        RoslynSymbolReadResult result;
+        try
+        {
+            result = roslynEditService.GetSymbol(ResolveWatchedPath(path), selector);
+        }
+        catch (InvalidOperationException ex) when (IsRecoverableRoslynGuidanceError(ex))
+        {
+            return new AIMonitorToolErrorResult(true, ex.Message, "Use .cs/.razor.cs for Roslyn symbol tools or text/file workflow tools for markup.", path);
+        }
+
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
             RecordMonitorSessionEvent(sessionId, "get-symbol", result.WatchedFilePath, JsonSerializer.Serialize(result, JsonOptions));
@@ -597,14 +635,13 @@ public sealed class AIMonitorTools
         [Description("Exact old text to replace using ordinal matching.")] string oldText,
         [Description("Replacement text.")] string newText,
         [Description("Required number of matches in the current edit base. Defaults to 1.")] int expectedMatches = 1,
-        [Description("0-based occurrence index. AIMonitor currently requires unique replacement and ignores this unless the exact text API grows span replacement use.")] int occurrenceIndex = 0,
+        [Description("Optional 0-based occurrence index. Leave -1 for unique/global replacement; set 0 or greater to replace one occurrence.")] int occurrenceIndex = -1,
         [Description("Optional SHA-256 hash of the current Working candidate.")] string? expectedFileHash = null,
         [Description("Optional SHA-256 hash of oldText.")] string? expectedOldTextHash = null,
         [Description("Optional durable session handle.")] string? sessionId = null,
         [Description("Optional JSON manifest expressing model intent.")] string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = occurrenceIndex;
         _ = manifestJson;
         if (!string.IsNullOrWhiteSpace(expectedOldTextHash)
             && !ComputeHash(oldText).Equals(expectedOldTextHash, StringComparison.OrdinalIgnoreCase))
@@ -617,7 +654,8 @@ public sealed class AIMonitorTools
             oldText,
             newText,
             expectedMatches,
-            expectedFileHash);
+            expectedFileHash,
+            occurrenceIndex >= 0 ? occurrenceIndex : null);
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
             RecordMonitorSessionEvent(sessionId, "replace-text-in-file", result.WatchedFilePath, JsonSerializer.Serialize(result, JsonOptions));
@@ -628,7 +666,7 @@ public sealed class AIMonitorTools
 
     [McpServerTool]
     [Description("Find exact text in the current Working candidate and return 1-based line/column bounds.")]
-    public AIMonitorTextSpanResult FindTextSpan(
+    public TextSpanResult FindTextSpan(
         [Description("Source file path, absolute or relative to the watched solution folder.")] string path,
         [Description("Exact text to find using ordinal matching.")] string findText,
         [Description("0-based occurrence index when text appears multiple times.")] int occurrenceIndex = 0,
@@ -637,13 +675,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         _ = sessionId;
-        EditSessionStatus status = EnsureSession(ResolveWatchedPath(path));
-        string text = File.ReadAllText(status.WorkingFilePath);
-        ValidateExpectedHash(status.WorkingFilePath, expectedFileHash);
-        int index = FindOccurrence(text, findText, occurrenceIndex);
-        TextPosition start = GetPosition(text, index);
-        TextPosition end = GetPosition(text, index + findText.Length);
-        return new AIMonitorTextSpanResult(status.WatchedFilePath, status.WorkingFilePath, findText, occurrenceIndex, start.Line, start.Column, end.Line, end.Column, ComputeHash(findText));
+        return workflowService.FindTextSpan(ResolveWatchedPath(path), findText, occurrenceIndex, expectedFileHash);
     }
 
     [McpServerTool]
@@ -663,44 +695,32 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         _ = manifestJson;
-        EditSessionStatus status = EnsureSession(ResolveWatchedPath(path));
-        ValidateExpectedHash(status.WorkingFilePath, expectedFileHash);
-        string text = File.ReadAllText(status.WorkingFilePath);
-        int startIndex = GetIndex(text, startLine, startColumn);
-        int endIndex = GetIndex(text, endLine, endColumn);
-        if (endIndex < startIndex)
-        {
-            throw new InvalidOperationException("End span must be after start span.");
-        }
-
-        string oldText = text[startIndex..endIndex];
-        if (expectedOldText is not null && !oldText.Equals(expectedOldText, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("Extracted old span text did not match expectedOldText.");
-        }
-
-        if (!string.IsNullOrWhiteSpace(expectedOldTextHash)
-            && !ComputeHash(oldText).Equals(expectedOldTextHash, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("Extracted old span text hash did not match expectedOldTextHash.");
-        }
-
-        File.WriteAllText(status.WorkingFilePath, text[..startIndex] + newText + text[endIndex..]);
+        EditSessionStatus status = workflowService.ReplaceSpan(
+            ResolveWatchedPath(path),
+            startLine,
+            startColumn,
+            endLine,
+            endColumn,
+            newText,
+            expectedFileHash,
+            expectedOldTextHash,
+            expectedOldText);
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
             RecordMonitorSessionEvent(sessionId, "replace-span-in-file", status.WatchedFilePath, null);
         }
 
-        return workflowService.GetStatus(status.WatchedFilePath);
+        return status;
     }
 
     [McpServerTool]
     [Description("Stage the current Working mirror candidate for review. This creates one immutable staged record from the completed candidate.")]
-    public StagedEditRecord StageCandidateForReview(
+    public AIMonitorStageCandidateResult StageCandidateForReview(
         [Description("Source file path, absolute or relative to the watched solution folder.")] string path,
         [Description("Optional compact ledger summary.")] string? ledgerSummary = null,
         [Description("Optional durable session handle.")] string? sessionId = null,
-        [Description("Optional JSON manifest expressing model intent.")] string? manifestJson = null)
+        [Description("Optional JSON manifest expressing model intent.")] string? manifestJson = null,
+        [Description("Return the full staged record inline for debugging. Defaults to compact response.")] bool verbose = false)
     {
         runtimeState.Touch();
         _ = manifestJson;
@@ -710,7 +730,10 @@ public sealed class AIMonitorTools
             RecordMonitorSessionEvent(sessionId, "stage-candidate-for-review", record.StagedRecordId, JsonSerializer.Serialize(record, JsonOptions));
         }
 
-        return record;
+        return new AIMonitorStageCandidateResult(
+            workflowService.CreateSummary(record),
+            verbose ? record : null,
+            "Candidate staged. Use get_staged_record for full details or launch_staged_diff for review.");
     }
 
     [McpServerTool]
@@ -839,7 +862,8 @@ public sealed class AIMonitorTools
     public ReviewDecisionWithIndexRefreshResult RecordDiffDecision(
         [Description("Staged edit record id returned by stage_candidate_for_review.")] string stagedRecordId,
         [Description("Operator-reported outcome: accepted or rejected.")] string decision,
-        [Description("Expected staged hash for accepted decisions.")] string? expectedStagedHash = null)
+        [Description("Expected staged hash for accepted decisions.")] string? expectedStagedHash = null,
+        [Description("Return the full staged record inline for debugging. Defaults to compact response.")] bool verbose = false)
     {
         runtimeState.Touch();
         StagedEditRecord record = workflowService.RecordDecision(stagedRecordId, decision, expectedStagedHash);
@@ -862,7 +886,9 @@ public sealed class AIMonitorTools
             Classification = record.Classification,
             Status = record.Status,
             Message = record.Message,
-            StagedRecord = record,
+            StagedRecordSummary = workflowService.CreateSummary(record),
+            StagedRecordPath = workflowService.CreateSummary(record).RecordPath,
+            StagedRecord = verbose ? record : null,
             IndexRefresh = indexRefresh,
             NextStep = record.Classification is "accepted" or "accepted-normalized"
                 ? "Index was rebuilt after accept. Run edit refresh before further edits to this watched file."
@@ -875,69 +901,34 @@ public sealed class AIMonitorTools
     public AIMonitorStagedDiffLaunchResult LaunchStagedDiff(
         [Description("Staged edit record id returned by stage_candidate_for_review.")] string stagedRecordId,
         [Description("Explicit diff tool executable path.")] string? diffToolPath = null,
-        [Description("Force launch after an explicit human validation override.")] bool forceValidation = false)
+        [Description("Force launch after an explicit human validation override.")] bool forceValidation = false,
+        [Description("Return the full staged record inline for debugging. Defaults to compact response.")] bool verbose = false)
     {
         runtimeState.Touch();
-        StagedEditRecord record = workflowService.GetStagedRecord(stagedRecordId);
-        PreMergeValidationResult validation = new PreMergeValidationService().Validate(settings, record);
-        string validationPrompt = "";
-        if (validation.IsError && !forceValidation && PreMergeValidationOverridePrompt.CanShow())
-        {
-            forceValidation = PreMergeValidationOverridePrompt.Prompt(validation.Diagnostics);
-            validationPrompt = forceValidation ? "approved" : "cancelled";
-        }
-
-        record = workflowService.RecordPreMergeValidation(record.StagedRecordId, validation, forceValidation);
-
-        logger.Write(
-            validation.IsError ? MonitorLogLevel.Warning : MonitorLogLevel.Information,
+        StagedDiffLaunchWorkflowResult result = new StagedDiffLaunchWorkflow().Launch(
+            settings,
+            logger,
+            workflowService,
+            stagedRecordId,
             "AIMonitor.McpServer",
-            "premerge.validation.completed",
-            validation.Message,
-            new Dictionary<string, string>
-            {
-                ["stagedRecordId"] = record.StagedRecordId,
-                ["watchedFilePath"] = record.WatchedFilePath,
-                ["relativePath"] = record.RelativePath,
-                ["validationStatus"] = validation.Status,
-                ["diagnosticCount"] = validation.DiagnosticCount.ToString(),
-                ["validationWorkspacePath"] = validation.ValidationWorkspacePath,
-                ["forceValidation"] = forceValidation.ToString().ToLowerInvariant(),
-                ["validationPrompt"] = validationPrompt,
-                ["isError"] = validation.IsError.ToString().ToLowerInvariant()
-            });
+            diffToolPath,
+            forceValidation,
+            verbose);
+        return new AIMonitorStagedDiffLaunchResult(
+            result.StagedRecordSummary,
+            result.StagedRecord,
+            result.PreMergeValidation,
+            result.DiffLaunch,
+            result.NextStep);
+    }
 
-        if (validation.IsError && !forceValidation)
-        {
-            StagedEditRecord blocked = workflowService.RecordDiffLaunch(
-                record.StagedRecordId,
-                launched: false,
-                "Pre-merge validation failed. WinMerge launch is blocked unless forceValidation is used after human approval.");
-            return new AIMonitorStagedDiffLaunchResult(
-                blocked,
-                validation,
-                new DiffLaunchResult
-                {
-                    Launched = false,
-                    Tool = "WinMerge",
-                    ToolPath = string.Empty,
-                    ProcessId = 0,
-                    Message = "Pre-merge validation failed. Human approval is required before force-launching WinMerge."
-                });
-        }
-
-        record = workflowService.PrepareReviewFileForLaunch(stagedRecordId);
-        DiffLaunchResult launch = new WinMergeDiffToolLauncher().Launch(new DiffLaunchRequest
-        {
-            OriginalFilePath = string.IsNullOrWhiteSpace(record.ReviewBaselineFilePath)
-                ? record.WatchedFilePath
-                : record.ReviewBaselineFilePath,
-            ProposedFilePath = record.StagedFilePath,
-            ExplicitToolPath = diffToolPath,
-            CandidateToolPaths = settings.WinMergeCandidatePaths
-        });
-        StagedEditRecord updated = workflowService.RecordDiffLaunch(record.StagedRecordId, launch.Launched, launch.Message);
-        return new AIMonitorStagedDiffLaunchResult(updated, validation, launch);
+    [McpServerTool]
+    [Description("Return the full persisted staged edit record by id. Use after compact stage/launch/decision replies when debug detail is needed.")]
+    public StagedEditRecord GetStagedRecord(
+        [Description("Staged edit record id returned by stage_candidate_for_review.")] string stagedRecordId)
+    {
+        runtimeState.Touch();
+        return workflowService.GetStagedRecord(stagedRecordId);
     }
 
     [McpServerTool]
@@ -1136,7 +1127,7 @@ public sealed class AIMonitorTools
 
         if (status.RequiresRefresh)
         {
-            throw new InvalidOperationException("Previous decision was accepted. Run refresh_file before editing or staging this file again.");
+            throw new InvalidOperationException($"Previous decision was accepted for {status.RelativePath}. Run refresh_file for this watched file before editing or staging it again. If the watched solution changed, start a new monitor session and refresh the file from the new watched solution.");
         }
 
         return status;
@@ -1213,6 +1204,44 @@ public sealed class AIMonitorTools
             info.LastWriteTimeUtc);
     }
 
+    private static AIMonitorToolErrorResult? TryCreateIndexedStableSymbolKeyError(string stableSymbolKey)
+    {
+        if (string.IsNullOrWhiteSpace(stableSymbolKey))
+        {
+            return new AIMonitorToolErrorResult(
+                true,
+                "A stable indexed symbol key is required. Use query_solution_index, find_indexed_symbols, or get_indexed_symbol to obtain a symbol:<hash> key.",
+                "symbol:<hash>",
+                stableSymbolKey);
+        }
+
+        if (stableSymbolKey.StartsWith("symbol:", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        if (stableSymbolKey.Contains("::", StringComparison.Ordinal))
+        {
+            return new AIMonitorToolErrorResult(
+                true,
+                "This looks like a Roslyn source-map selector key, not an indexed symbol key. find_indexed_references and find_indexed_callers require the symbol:<hash> key returned by query_solution_index, find_indexed_symbols, or get_indexed_symbol.",
+                "symbol:<hash>",
+                stableSymbolKey);
+        }
+
+        return new AIMonitorToolErrorResult(
+            true,
+            "Indexed reference tools require a stable indexed symbol key in symbol:<hash> form. Use query_solution_index, find_indexed_symbols, or get_indexed_symbol first.",
+            "symbol:<hash>",
+            stableSymbolKey);
+    }
+
+    private static bool IsRecoverableRoslynGuidanceError(InvalidOperationException ex)
+    {
+        return ex.Message.Contains("Razor markup", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("supports C# source files only", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static void ValidateExpectedHash(string path, string? expectedFileHash)
     {
         if (!string.IsNullOrWhiteSpace(expectedFileHash)
@@ -1220,84 +1249,6 @@ public sealed class AIMonitorTools
         {
             throw new InvalidOperationException("Working candidate hash did not match expectedFileHash.");
         }
-    }
-
-    private static int FindOccurrence(string text, string findText, int occurrenceIndex)
-    {
-        if (string.IsNullOrEmpty(findText))
-        {
-            throw new InvalidOperationException("findText must not be empty.");
-        }
-
-        int found = -1;
-        int start = 0;
-        for (int current = 0; current <= occurrenceIndex; current++)
-        {
-            found = text.IndexOf(findText, start, StringComparison.Ordinal);
-            if (found < 0)
-            {
-                throw new InvalidOperationException("Text occurrence was not found.");
-            }
-
-            start = found + findText.Length;
-        }
-
-        return found;
-    }
-
-    private static TextPosition GetPosition(string text, int index)
-    {
-        int line = 1;
-        int column = 1;
-        for (int offset = 0; offset < index && offset < text.Length; offset++)
-        {
-            if (text[offset] == '\n')
-            {
-                line++;
-                column = 1;
-            }
-            else
-            {
-                column++;
-            }
-        }
-
-        return new TextPosition(line, column);
-    }
-
-    private static int GetIndex(string text, int line, int column)
-    {
-        if (line < 1 || column < 1)
-        {
-            throw new InvalidOperationException("Line and column are 1-based.");
-        }
-
-        int currentLine = 1;
-        int currentColumn = 1;
-        for (int index = 0; index < text.Length; index++)
-        {
-            if (currentLine == line && currentColumn == column)
-            {
-                return index;
-            }
-
-            if (text[index] == '\n')
-            {
-                currentLine++;
-                currentColumn = 1;
-            }
-            else
-            {
-                currentColumn++;
-            }
-        }
-
-        if (currentLine == line && currentColumn == column)
-        {
-            return text.Length;
-        }
-
-        throw new InvalidOperationException("Span position was outside the file.");
     }
 
     private static bool LooksLikeCSharpDeclaration(string line)
@@ -1340,8 +1291,6 @@ public sealed class AIMonitorTools
         string clean = new(value.Select(character => invalid.Contains(character) ? '_' : character).ToArray());
         return string.IsNullOrWhiteSpace(clean) ? "item" : clean;
     }
-
-    private sealed record TextPosition(int Line, int Column);
 }
 
 public sealed record AIMonitorMcpStatus(
@@ -1368,6 +1317,12 @@ public sealed record AIMonitorSolutionIndexResult(
     IReadOnlyList<IndexedDocumentRow> Files,
     IReadOnlyList<IndexedSymbolRow> Symbols);
 
+public sealed record AIMonitorToolErrorResult(
+    bool IsError,
+    string Message,
+    string Expected,
+    string? Received);
+
 public sealed record AIMonitorSolutionIndexTree(
     IReadOnlyList<IndexedProjectRow> Projects,
     IReadOnlyList<IndexedDocumentRow> Files,
@@ -1378,10 +1333,17 @@ public sealed record AIMonitorNamespaceTree(
     IReadOnlyList<string> Files,
     int SymbolCount);
 
+public sealed record AIMonitorStageCandidateResult(
+    StagedEditSummary StagedRecordSummary,
+    StagedEditRecord? StagedRecord,
+    string NextStep);
+
 public sealed record AIMonitorStagedDiffLaunchResult(
-    StagedEditRecord StagedRecord,
+    StagedEditSummary StagedRecordSummary,
+    StagedEditRecord? StagedRecord,
     PreMergeValidationResult PreMergeValidation,
-    DiffLaunchResult DiffLaunch);
+    DiffLaunchResult DiffLaunch,
+    string NextStep);
 
 public sealed record AIMonitorSelfCheckResult(
     string RepositoryRoot,
@@ -1462,17 +1424,6 @@ public sealed record AIMonitorFileOutlineResult(
 public sealed record AIMonitorOutlineItem(
     int Line,
     string Text);
-
-public sealed record AIMonitorTextSpanResult(
-    string WatchedFilePath,
-    string WorkingFilePath,
-    string Text,
-    int OccurrenceIndex,
-    int StartLine,
-    int StartColumn,
-    int EndLine,
-    int EndColumn,
-    string TextHash);
 
 public sealed record AIMonitorCompatibilityResult(
     string Status,

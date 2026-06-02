@@ -131,7 +131,8 @@ public sealed class CliIndexQueryTests
         using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
         string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
             ?? throw new InvalidOperationException("Missing staged record id.");
-        string stagedFilePath = stageDocument.RootElement.GetProperty("stagedFilePath").GetString()
+        using JsonDocument stagedRecordDocument = await GetStagedRecordAsync(fixture, stagedRecordId);
+        string stagedFilePath = stagedRecordDocument.RootElement.GetProperty("stagedFilePath").GetString()
             ?? throw new InvalidOperationException("Missing staged file path.");
         Assert.Equal(stagedHash, stageDocument.RootElement.GetProperty("stagedHash").GetString());
 
@@ -226,7 +227,8 @@ public sealed class CliIndexQueryTests
         using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
         string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
             ?? throw new InvalidOperationException("Missing staged record id.");
-        string stagedFilePath = stageDocument.RootElement.GetProperty("stagedFilePath").GetString()
+        using JsonDocument stagedRecordDocument = await GetStagedRecordAsync(fixture, stagedRecordId);
+        string stagedFilePath = stagedRecordDocument.RootElement.GetProperty("stagedFilePath").GetString()
             ?? throw new InvalidOperationException("Missing staged file path.");
         string stagedHash = stageDocument.RootElement.GetProperty("stagedHash").GetString()
             ?? throw new InvalidOperationException("Missing staged hash.");
@@ -288,7 +290,8 @@ public sealed class CliIndexQueryTests
         using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
         string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
             ?? throw new InvalidOperationException("Missing staged record id.");
-        string stagedFilePath = stageDocument.RootElement.GetProperty("stagedFilePath").GetString()
+        using JsonDocument stagedRecordDocument = await GetStagedRecordAsync(fixture, stagedRecordId);
+        string stagedFilePath = stagedRecordDocument.RootElement.GetProperty("stagedFilePath").GetString()
             ?? throw new InvalidOperationException("Missing staged file path.");
         File.Copy(stagedFilePath, fixture.ProgramFilePath, overwrite: true);
 
@@ -411,7 +414,8 @@ public sealed class CliIndexQueryTests
         using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
         string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
             ?? throw new InvalidOperationException("Missing staged record id.");
-        string stagedFilePath = stageDocument.RootElement.GetProperty("stagedFilePath").GetString()
+        using JsonDocument stagedRecordDocument = await GetStagedRecordAsync(fixture, stagedRecordId);
+        string stagedFilePath = stagedRecordDocument.RootElement.GetProperty("stagedFilePath").GetString()
             ?? throw new InvalidOperationException("Missing staged file path.");
         File.Delete(stagedFilePath);
 
@@ -653,7 +657,8 @@ public sealed class CliIndexQueryTests
         using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
         string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
             ?? throw new InvalidOperationException("Missing staged record id.");
-        string stagedFilePath = stageDocument.RootElement.GetProperty("stagedFilePath").GetString()
+        using JsonDocument stagedRecordDocument = await GetStagedRecordAsync(fixture, stagedRecordId);
+        string stagedFilePath = stagedRecordDocument.RootElement.GetProperty("stagedFilePath").GetString()
             ?? throw new InvalidOperationException("Missing staged file path.");
         await File.WriteAllTextAsync(stagedFilePath, "namespace Example { internal static class Program { public static string Value => \"tampered\"; } }");
 
@@ -675,7 +680,7 @@ public sealed class CliIndexQueryTests
         Assert.Equal("staged-hash-mismatch", validation.GetProperty("status").GetString());
         Assert.True(validation.GetProperty("isError").GetBoolean());
         Assert.False(launchDocument.RootElement.GetProperty("diffLaunch").GetProperty("launched").GetBoolean());
-        Assert.Equal("blocked-premerge-validation", launchDocument.RootElement.GetProperty("diffLaunch").GetProperty("status").GetString());
+        Assert.Contains("validation failed", launchDocument.RootElement.GetProperty("diffLaunch").GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -716,13 +721,14 @@ public sealed class CliIndexQueryTests
         using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
         string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
             ?? throw new InvalidOperationException("Missing staged record id.");
-        string stagedFilePath = stageDocument.RootElement.GetProperty("stagedFilePath").GetString()
+        using JsonDocument stagedRecordDocument = await GetStagedRecordAsync(fixture, stagedRecordId);
+        string stagedFilePath = stagedRecordDocument.RootElement.GetProperty("stagedFilePath").GetString()
             ?? throw new InvalidOperationException("Missing staged file path.");
         string stagedHash = stageDocument.RootElement.GetProperty("stagedHash").GetString()
             ?? throw new InvalidOperationException("Missing staged hash.");
-        string reviewBaselineFilePath = stageDocument.RootElement.GetProperty("reviewBaselineFilePath").GetString()
+        string reviewBaselineFilePath = stagedRecordDocument.RootElement.GetProperty("reviewBaselineFilePath").GetString()
             ?? throw new InvalidOperationException("Missing review baseline path.");
-        Assert.True(stageDocument.RootElement.GetProperty("isNewFile").GetBoolean());
+        Assert.True(stagedRecordDocument.RootElement.GetProperty("isNewFile").GetBoolean());
         Assert.True(File.Exists(reviewBaselineFilePath));
         Assert.False(File.Exists(newFilePath));
 
@@ -981,6 +987,22 @@ public sealed class CliIndexQueryTests
         using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(60));
         await process.WaitForExitAsync(timeout.Token);
         return new CliResult(process.ExitCode, await stdout, await stderr);
+    }
+
+    private static async Task<JsonDocument> GetStagedRecordAsync(CliFixture fixture, string stagedRecordId)
+    {
+        CliResult record = await RunCliAsync(
+            "edit",
+            "staged-record",
+            "--staged-record-id",
+            stagedRecordId,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, record.ExitCode);
+        return JsonDocument.Parse(record.StdOut);
     }
 
     private static async Task LaunchDiffAsync(CliFixture fixture, string stagedRecordId)
