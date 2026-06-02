@@ -734,8 +734,14 @@ public sealed class AIMonitorTools
             RecordMonitorSessionEvent(sessionId, "stage-candidate-for-review", record.StagedRecordId, JsonSerializer.Serialize(record, JsonOptions));
         }
 
+        StagedEditSummary summary = workflowService.CreateSummary(record);
         return new AIMonitorStageCandidateResult(
-            workflowService.CreateSummary(record),
+            summary.StagedRecordId,
+            summary.StagedHash,
+            summary.Status,
+            summary.Classification,
+            summary.RecordPath,
+            summary,
             verbose ? record : null,
             "Candidate staged. Use get_staged_record for full details or launch_staged_diff for review.");
     }
@@ -1338,6 +1344,11 @@ public sealed record AIMonitorNamespaceTree(
     int SymbolCount);
 
 public sealed record AIMonitorStageCandidateResult(
+    string StagedRecordId,
+    string StagedHash,
+    string Status,
+    string Classification,
+    string StagedRecordPath,
     StagedEditSummary StagedRecordSummary,
     StagedEditRecord? StagedRecord,
     string NextStep);

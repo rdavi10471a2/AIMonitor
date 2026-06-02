@@ -191,6 +191,9 @@ public sealed class McpServerSmokeTests
         Assert.False(stage.IsError == true);
         string stageJson = ExtractToolText(stage);
         Assert.Contains("stagedRecordId", stageJson, StringComparison.Ordinal);
+        Assert.False(string.IsNullOrWhiteSpace(ExtractJsonString(stageJson, "stagedRecordId")));
+        Assert.False(string.IsNullOrWhiteSpace(ExtractJsonString(stageJson, "stagedHash")));
+        Assert.DoesNotContain("\"stagedRecord\":{", stageJson, StringComparison.Ordinal);
         Assert.DoesNotContain("mcp", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
     }
 
