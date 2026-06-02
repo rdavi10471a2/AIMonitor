@@ -347,6 +347,44 @@ public sealed class McpServerSmokeTests
     }
 
     [Fact]
+    public async Task Mcp_replace_text_occurrence_index_does_not_require_unique_old_text()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+        await File.WriteAllTextAsync(
+            fixture.ProgramFilePath,
+            "namespace Example { internal static class Program { public static string First => \"same\"; public static string Second => \"same\"; } }");
+
+        CallToolResult refresh = await client.CallToolAsync(
+            "refresh_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = fixture.ProgramFilePath
+            });
+        Assert.False(refresh.IsError == true);
+        string workingFilePath = ExtractJsonString(ExtractToolText(refresh), "workingFilePath");
+
+        CallToolResult replace = await client.CallToolAsync(
+            "replace_text_in_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["oldText"] = "\"same\"",
+                ["newText"] = "\"second\"",
+                ["occurrenceIndex"] = 1
+            });
+
+        Assert.False(replace.IsError == true);
+        string replaceJson = ExtractToolText(replace);
+        Assert.Equal(2, ExtractJsonInt(replaceJson, "actualMatches"));
+
+        string workingText = await File.ReadAllTextAsync(workingFilePath);
+        Assert.Contains("First => \"same\"", workingText, StringComparison.Ordinal);
+        Assert.Contains("Second => \"second\"", workingText, StringComparison.Ordinal);
+        Assert.DoesNotContain("second", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Mcp_submit_file_preserves_existing_line_endings()
     {
         McpFixture fixture = CreateFixture();

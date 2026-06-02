@@ -634,8 +634,8 @@ public sealed class AIMonitorTools
         [Description("Source file path, absolute or relative to the watched solution folder.")] string path,
         [Description("Exact old text to replace using ordinal matching.")] string oldText,
         [Description("Replacement text.")] string newText,
-        [Description("Required number of matches in the current edit base. Defaults to 1.")] int expectedMatches = 1,
-        [Description("Optional 0-based occurrence index. Leave -1 for unique/global replacement; set 0 or greater to replace one occurrence.")] int occurrenceIndex = -1,
+        [Description("Required number of matches in the current edit base. Leave -1 for unique replacement when occurrenceIndex is unset, or no total-match assertion when occurrenceIndex is set.")] int expectedMatches = -1,
+        [Description("Optional 0-based occurrence index. Leave -1 for unique/global replacement; set 0 or greater to replace one occurrence without requiring unique oldText.")] int occurrenceIndex = -1,
         [Description("Optional SHA-256 hash of the current Working candidate.")] string? expectedFileHash = null,
         [Description("Optional SHA-256 hash of oldText.")] string? expectedOldTextHash = null,
         [Description("Optional durable session handle.")] string? sessionId = null,
@@ -649,11 +649,15 @@ public sealed class AIMonitorTools
             throw new InvalidOperationException("oldText hash did not match expectedOldTextHash.");
         }
 
+        int? expectedMatchCount = expectedMatches >= 0
+            ? expectedMatches
+            : occurrenceIndex >= 0 ? null : 1;
+
         ReplaceTextResult result = workflowService.ReplaceText(
             ResolveWatchedPath(path),
             oldText,
             newText,
-            expectedMatches,
+            expectedMatchCount,
             expectedFileHash,
             occurrenceIndex >= 0 ? occurrenceIndex : null);
         if (!string.IsNullOrWhiteSpace(sessionId))

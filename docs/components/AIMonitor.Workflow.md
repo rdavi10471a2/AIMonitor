@@ -16,6 +16,7 @@ Own the safe edit workflow: Working candidates, staging, ledgers, hash classific
 - `EditSessionStatus`.
 - `StagedEditRecord` and `StagedEditSummary`.
 - `ReviewDecisionResult`.
+- `PreMergeValidationResult`.
 - Workflow ledgers and runtime review artifacts.
 
 ## Data Flow
@@ -35,6 +36,7 @@ refresh_file/new_file
 
 - Monitor-owned Working files.
 - Staged runtime files.
+- Pre-merge validation copy creation and `dotnet build` execution.
 - Vote-plus-hash accept/reject classification.
 - Dirty/unexpected recovery signals.
 - Line-ending-preserving text operations.

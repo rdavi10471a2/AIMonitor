@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Own runtime boundaries such as pre-merge validation, validation override prompts, and WinMerge launch.
+Own runtime boundaries for launch orchestration, validation override prompts, and WinMerge process launch.
 
 ## Inputs
 
@@ -13,29 +13,29 @@ Own runtime boundaries such as pre-merge validation, validation override prompts
 
 ## Outputs
 
-- `PreMergeValidationResult`.
 - `DiffLaunchResult`.
-- Validation and launch telemetry.
+- Launch and override telemetry.
 
 ## Data Flow
 
 ```text
 StagedEditRecord
   -> StagedDiffLaunchWorkflow
-  -> PreMergeValidationService
+  -> AIMonitor.Workflow.PreMergeValidationService
   -> PreMergeValidationOverridePrompt when needed
   -> WinMergeDiffToolLauncher
 ```
 
 ## Owns
 
-- Build validation copy creation.
-- `dotnet build` validation execution.
+- Launch orchestration around staged records.
 - WinMerge process launch.
 - Human validation override prompt.
 
 ## Does Not Own
 
+- Build validation copy creation.
+- `dotnet build` validation execution.
 - Candidate staging.
 - Decision classification.
 - MCP/CLI command parsing.
