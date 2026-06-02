@@ -65,3 +65,20 @@ public sealed record RoslynSourceMapSymbol(
     IReadOnlyList<string> ParameterNames,
     int Arity,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SyntaxKind = null);
+
+public sealed record RoslynFileOutlineResult(
+    string SourceFilePath,
+    string RelativePath,
+    string ParseStatus,
+    int DiagnosticCount,
+    IReadOnlyList<RoslynFileOutlineItem> Items);
+
+public sealed record RoslynFileOutlineItem(
+    string Kind,
+    string Name,
+    int StartLine,
+    int EndLine,
+    string Signature,
+    string? Namespace,
+    string? ContainingType,
+    string? SyntaxKind);

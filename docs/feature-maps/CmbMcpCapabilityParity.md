@@ -95,8 +95,9 @@ The items below are the hand-verified restore set from the finding. They are saf
 
 - **Owner:** Workflow/Roslyn
 - **Adapter surface:** MCP outline tool
-- **Current status:** Thin
+- **Current status:** Restored
 - **Required proof:** Outline comes from syntax/Roslyn declarations with kind/name/span/signature, not line text heuristics.
+- **Evidence:** `RoslynEditService.GetFileOutline` returns structured Roslyn outline rows; `Mcp_get_file_outline_returns_roslyn_structured_members` proves the MCP tool returns `kind`, `name`, and `signature` fields and ignores comment/string declaration lookalikes.
 
 ### CMB-PARITY-011 — Superseded Staged-Record Lifecycle
 

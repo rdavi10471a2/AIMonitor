@@ -47,6 +47,29 @@ public sealed class RoslynEditService
             mappedFiles);
     }
 
+    public RoslynFileOutlineResult GetFileOutline(string watchedFilePath)
+    {
+        string fullPath = Path.GetFullPath(watchedFilePath);
+        if (!fullPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(CreateUnsupportedRoslynPathMessage(fullPath, "get_file_outline"));
+        }
+
+        string relativePath = paths.GetRelativeWatchedPath(fullPath);
+        SyntaxTree tree = CSharpSyntaxTree.ParseText(File.ReadAllText(fullPath), path: fullPath);
+        CompilationUnitSyntax root = tree.GetCompilationUnitRoot();
+        Diagnostic[] diagnostics = root.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error).ToArray();
+        RoslynFileOutlineItem[] items = diagnostics.Length == 0
+            ? root.DescendantNodes().OfType<MemberDeclarationSyntax>().Where(IsOutlineMember).Select(member => MapOutlineItem(tree, member)).ToArray()
+            : [];
+        return new RoslynFileOutlineResult(
+            fullPath,
+            relativePath,
+            diagnostics.Length == 0 ? "parsed" : "parse-error",
+            diagnostics.Length,
+            items);
+    }
+
     public RoslynSymbolReadResult GetSymbol(string watchedFilePath, string symbolSelectorJson)
     {
         EditSessionStatus status = EnsureSession(watchedFilePath);
@@ -269,6 +292,20 @@ public sealed class RoslynEditService
             GetParameterTypes(member),
             GetParameterNames(member),
             GetArity(member),
+            member.Kind().ToString());
+    }
+
+    private static RoslynFileOutlineItem MapOutlineItem(SyntaxTree tree, MemberDeclarationSyntax member)
+    {
+        FileLinePositionSpan span = tree.GetLineSpan(member.Span);
+        return new RoslynFileOutlineItem(
+            SymbolKind(member),
+            SymbolName(member),
+            span.StartLinePosition.Line + 1,
+            span.EndLinePosition.Line + 1,
+            BuildSignature(member),
+            BuildNamespace(member),
+            BuildContainingType(member),
             member.Kind().ToString());
     }
 

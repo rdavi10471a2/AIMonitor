@@ -140,6 +140,52 @@ public sealed class McpServerSmokeTests
         Assert.Contains("indexed symbol key", ExtractToolText(callers), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task Mcp_get_file_outline_returns_roslyn_structured_members()
+    {
+        McpFixture fixture = CreateFixture();
+        await File.WriteAllTextAsync(
+            fixture.ProgramFilePath,
+            """
+            namespace Example;
+
+            // public void CommentLookalike() { }
+
+            internal static class Program
+            {
+                private const string Text = "public int StringLookalike { get; }";
+
+                public static string Value => "outline";
+
+                public static string GetValue(int count)
+                {
+                    return Value + count.ToString();
+                }
+            }
+            """);
+        await using McpClient client = await CreateClientAsync(fixture);
+
+        CallToolResult outline = await client.CallToolAsync(
+            "get_file_outline",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath
+            });
+
+        Assert.False(outline.IsError == true);
+        string outlineJson = ExtractToolText(outline);
+        Assert.Contains("\"parseStatus\":\"parsed\"", outlineJson, StringComparison.Ordinal);
+        Assert.Contains("\"kind\":\"class\"", outlineJson, StringComparison.Ordinal);
+        Assert.Contains("\"name\":\"Program\"", outlineJson, StringComparison.Ordinal);
+        Assert.Contains("\"kind\":\"property\"", outlineJson, StringComparison.Ordinal);
+        Assert.Contains("\"name\":\"Value\"", outlineJson, StringComparison.Ordinal);
+        Assert.Contains("\"kind\":\"method\"", outlineJson, StringComparison.Ordinal);
+        Assert.Contains("\"name\":\"GetValue\"", outlineJson, StringComparison.Ordinal);
+        Assert.Contains("\"signature\":\"public static string GetValue", outlineJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("CommentLookalike", outlineJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("StringLookalike", outlineJson, StringComparison.Ordinal);
+    }
+
     [Fact(Skip = "MCP stdio bridge connects to the WinForms-owned MCP proxy hub; cover it with ToolSmokeTests live workflows.")]
     public async Task Mcp_bridge_forwards_stdio_to_server_and_records_request_response_telemetry()
     {

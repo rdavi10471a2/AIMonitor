@@ -517,19 +517,13 @@ public sealed class AIMonitorTools
     }
 
     [McpServerTool]
-    [Description("Return a text outline for a watched source file. C# semantic source maps are not yet part of AIMonitor; this returns line-oriented type/member candidates.")]
-    public AIMonitorFileOutlineResult GetFileOutline(
+    [Description("Return a Roslyn-derived outline for a watched C# source file, including kind, name, span, signature, namespace, and containing type.")]
+    public RoslynFileOutlineResult GetFileOutline(
         [Description("Source file path, absolute or relative to the watched solution folder.")] string path)
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
-        string[] lines = File.ReadAllLines(fullPath);
-        IReadOnlyList<AIMonitorOutlineItem> items = lines
-            .Select((line, index) => new { line, lineNumber = index + 1 })
-            .Where(item => LooksLikeCSharpDeclaration(item.line))
-            .Select(item => new AIMonitorOutlineItem(item.lineNumber, item.line.Trim()))
-            .ToArray();
-        return new AIMonitorFileOutlineResult(fullPath, workflowPaths.GetRelativeWatchedPath(fullPath), items);
+        return roslynEditService.GetFileOutline(fullPath);
     }
 
     [McpServerTool]
@@ -1219,20 +1213,6 @@ public sealed class AIMonitorTools
         }
     }
 
-    private static bool LooksLikeCSharpDeclaration(string line)
-    {
-        string trimmed = line.Trim();
-        return trimmed.Contains(" class ", StringComparison.Ordinal)
-            || trimmed.Contains(" interface ", StringComparison.Ordinal)
-            || trimmed.Contains(" struct ", StringComparison.Ordinal)
-            || trimmed.Contains(" record ", StringComparison.Ordinal)
-            || trimmed.Contains(" enum ", StringComparison.Ordinal)
-            || trimmed.Contains(" void ", StringComparison.Ordinal)
-            || trimmed.Contains(" string ", StringComparison.Ordinal)
-            || trimmed.Contains(" int ", StringComparison.Ordinal)
-            || trimmed.Contains(" bool ", StringComparison.Ordinal);
-    }
-
     private static bool IsUnderBuildOrHiddenDirectory(string path)
     {
         string[] parts = Path.GetFullPath(path).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -1388,15 +1368,6 @@ public sealed record AIMonitorFileMatch(
     string Name,
     string Path,
     string RelativePath);
-
-public sealed record AIMonitorFileOutlineResult(
-    string SourceFilePath,
-    string RelativePath,
-    IReadOnlyList<AIMonitorOutlineItem> Items);
-
-public sealed record AIMonitorOutlineItem(
-    int Line,
-    string Text);
 
 public sealed record AIMonitorCompatibilityResult(
     string Status,
