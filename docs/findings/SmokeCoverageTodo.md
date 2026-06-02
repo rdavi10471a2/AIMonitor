@@ -20,11 +20,11 @@ These tests apply to the shared monitor/index/workflow surface regardless of whe
 These tests focus on the Codex CLI workflow and should not depend on Claude MCP/session behavior.
 
 - [x] Add MCP session workflow smoke for full safe edit loop on multiple files with both candidates staged under the same `sessionId`, launched, simulated accepted, and recorded.
-- [ ] Add CLI workflow smoke for multiple staged files where one candidate fails validation and does not silently mutate watched source.
-- [ ] Add CLI workflow smoke for `.razor` full-file edit path through `edit refresh`, Working candidate edit, `edit stage`, `edit launch-diff`, and `edit record-decision`.
+- [x] Add CLI workflow smoke for multiple staged files where one candidate fails validation and does not silently mutate watched source.
+- [x] Add CLI workflow smoke for `.razor` full-file edit path through `edit refresh`, Working candidate edit, `edit stage`, `edit launch-diff`, and `edit record-decision`.
 - [x] Add CLI workflow smoke for new-file review where WinMerge/runtime review is followed by the human/operator creating the future watched file before `record-decision accepted` verifies the staged hash.
-- [ ] Add CLI workflow coverage for `accepted-normalized` as an integration path, not only classifier unit coverage.
-- [ ] Add CLI workflow coverage for `dirty-unexpected` as an integration path, not only classifier unit coverage.
+- [x] Add CLI workflow coverage for `accepted-normalized` as an integration path, not only classifier unit coverage.
+- [x] Add CLI workflow coverage for `dirty-unexpected` as an integration path, not only classifier unit coverage.
 - [ ] Add non-interactive dialog decision seams so validation override approval/cancel behavior can be tested without a real Windows dialog.
 - [x] Add MCP workflow smoke for creating a new file, adding paired members, removing `_removed` members, staging, and rejecting without creating watched source.
 - [x] Add live WinForms-visible MCP smoke for all non-human file/Roslyn edit tools exposed to Claude/Codex surfaces.

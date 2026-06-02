@@ -684,6 +684,94 @@ public sealed class CliIndexQueryTests
     }
 
     [Fact]
+    public async Task Edit_multi_file_staged_candidate_with_compile_error_blocks_without_mutating_watched_source()
+    {
+        CliFixture fixture = CreateFixture();
+        string helperFilePath = Path.Combine(Path.GetDirectoryName(fixture.ProgramFilePath)!, "Helper.cs");
+        await File.WriteAllTextAsync(helperFilePath, "namespace Example { internal static class Helper { public static string Value() => \"old\"; } }");
+        string originalProgramText = await File.ReadAllTextAsync(fixture.ProgramFilePath);
+        string originalHelperText = await File.ReadAllTextAsync(helperFilePath);
+
+        CliResult helperRefresh = await RunCliAsync(
+            "edit",
+            "refresh",
+            "--file",
+            helperFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, helperRefresh.ExitCode);
+        using JsonDocument helperRefreshDocument = JsonDocument.Parse(helperRefresh.StdOut);
+        string helperWorkingPath = helperRefreshDocument.RootElement.GetProperty("workingFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing helper working path.");
+        await File.WriteAllTextAsync(helperWorkingPath, "namespace Example { internal static class Helper { public static string Value() => \"candidate\"; } }");
+
+        CliResult helperStage = await RunCliAsync(
+            "edit",
+            "stage",
+            "--file",
+            helperFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, helperStage.ExitCode);
+
+        CliResult programRefresh = await RunCliAsync(
+            "edit",
+            "refresh",
+            "--file",
+            fixture.ProgramFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, programRefresh.ExitCode);
+        using JsonDocument programRefreshDocument = JsonDocument.Parse(programRefresh.StdOut);
+        string programWorkingPath = programRefreshDocument.RootElement.GetProperty("workingFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing program working path.");
+        await File.WriteAllTextAsync(programWorkingPath, "namespace Example { internal static class Program { public static string Value => Helper.Value() } }");
+
+        CliResult programStage = await RunCliAsync(
+            "edit",
+            "stage",
+            "--file",
+            fixture.ProgramFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, programStage.ExitCode);
+        using JsonDocument programStageDocument = JsonDocument.Parse(programStage.StdOut);
+        string programStagedRecordId = programStageDocument.RootElement.GetProperty("stagedRecordId").GetString()
+            ?? throw new InvalidOperationException("Missing program staged record id.");
+
+        CliResult launch = await RunCliAsync(
+            "edit",
+            "launch-diff",
+            "--staged-record-id",
+            programStagedRecordId,
+            "--diff-tool",
+            GetFakeDiffToolPath(),
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, launch.ExitCode);
+        using JsonDocument launchDocument = JsonDocument.Parse(launch.StdOut);
+        Assert.Equal("failed", launchDocument.RootElement.GetProperty("preMergeValidation").GetProperty("status").GetString());
+        Assert.False(launchDocument.RootElement.GetProperty("diffLaunch").GetProperty("launched").GetBoolean());
+        Assert.Equal(originalProgramText, await File.ReadAllTextAsync(fixture.ProgramFilePath));
+        Assert.Equal(originalHelperText, await File.ReadAllTextAsync(helperFilePath));
+    }
+
+    [Fact]
     public async Task Edit_new_file_accepts_when_watched_file_matches_staged_candidate()
     {
         CliFixture fixture = CreateFixture();
@@ -817,6 +905,193 @@ public sealed class CliIndexQueryTests
         using JsonDocument decisionDocument = JsonDocument.Parse(decision.StdOut);
         Assert.Equal("rejected", decisionDocument.RootElement.GetProperty("classification").GetString());
         Assert.False(File.Exists(newFilePath));
+    }
+
+    [Fact]
+    public async Task Edit_razor_full_file_path_round_trips_through_working_stage_launch_and_accept()
+    {
+        CliFixture fixture = CreateFixture();
+        string razorFilePath = Path.Combine(Path.GetDirectoryName(fixture.ProgramFilePath)!, "Pages", "Index.razor");
+        Directory.CreateDirectory(Path.GetDirectoryName(razorFilePath)!);
+        await File.WriteAllTextAsync(razorFilePath, "@page \"/\"\r\n<h1>Old</h1>\r\n");
+
+        CliResult refresh = await RunCliAsync(
+            "edit",
+            "refresh",
+            "--file",
+            razorFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, refresh.ExitCode);
+        using JsonDocument refreshDocument = JsonDocument.Parse(refresh.StdOut);
+        string workingFilePath = refreshDocument.RootElement.GetProperty("workingFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing working file path.");
+        await File.WriteAllTextAsync(workingFilePath, "@page \"/\"\r\n<h1>New</h1>\r\n");
+
+        CliResult stage = await RunCliAsync(
+            "edit",
+            "stage",
+            "--file",
+            razorFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, stage.ExitCode);
+        using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
+        string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
+            ?? throw new InvalidOperationException("Missing staged record id.");
+        string stagedHash = stageDocument.RootElement.GetProperty("stagedHash").GetString()
+            ?? throw new InvalidOperationException("Missing staged hash.");
+        using JsonDocument stagedRecordDocument = await GetStagedRecordAsync(fixture, stagedRecordId);
+        string stagedFilePath = stagedRecordDocument.RootElement.GetProperty("stagedFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing staged file path.");
+
+        await LaunchDiffAsync(fixture, stagedRecordId);
+        File.Copy(stagedFilePath, razorFilePath, overwrite: true);
+
+        CliResult decision = await RunCliAsync(
+            "edit",
+            "record-decision",
+            "--staged-record-id",
+            stagedRecordId,
+            "--decision",
+            "accepted",
+            "--expected-staged-hash",
+            stagedHash,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, decision.ExitCode);
+        using JsonDocument decisionDocument = JsonDocument.Parse(decision.StdOut);
+        Assert.Equal("accepted", decisionDocument.RootElement.GetProperty("classification").GetString());
+        Assert.Contains("<h1>New</h1>", await File.ReadAllTextAsync(razorFilePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Edit_record_decision_reports_accepted_normalized_when_only_line_endings_differ()
+    {
+        CliFixture fixture = CreateFixture();
+        await File.WriteAllTextAsync(fixture.ProgramFilePath, "namespace Example\r\n{\r\n    internal static class Program { }\r\n}\r\n");
+
+        CliResult refresh = await RunCliAsync(
+            "edit",
+            "refresh",
+            "--file",
+            fixture.ProgramFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, refresh.ExitCode);
+        using JsonDocument refreshDocument = JsonDocument.Parse(refresh.StdOut);
+        string workingFilePath = refreshDocument.RootElement.GetProperty("workingFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing working file path.");
+        await File.WriteAllTextAsync(workingFilePath, "namespace Example\n{\n    internal static class Program { }\n}\n");
+
+        CliResult stage = await RunCliAsync(
+            "edit",
+            "stage",
+            "--file",
+            fixture.ProgramFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, stage.ExitCode);
+        using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
+        string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
+            ?? throw new InvalidOperationException("Missing staged record id.");
+        string stagedHash = stageDocument.RootElement.GetProperty("stagedHash").GetString()
+            ?? throw new InvalidOperationException("Missing staged hash.");
+        await LaunchDiffAsync(fixture, stagedRecordId);
+        await File.WriteAllTextAsync(fixture.ProgramFilePath, "namespace Example\r\n{\r\n    internal static class Program { }\r\n}\r\n");
+
+        CliResult decision = await RunCliAsync(
+            "edit",
+            "record-decision",
+            "--staged-record-id",
+            stagedRecordId,
+            "--decision",
+            "accepted",
+            "--expected-staged-hash",
+            stagedHash,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, decision.ExitCode);
+        using JsonDocument decisionDocument = JsonDocument.Parse(decision.StdOut);
+        Assert.Equal("accepted-normalized", decisionDocument.RootElement.GetProperty("classification").GetString());
+        Assert.Equal("rebuilt", decisionDocument.RootElement.GetProperty("indexRefresh").GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task Edit_record_decision_accept_rejects_dirty_unexpected_watched_source()
+    {
+        CliFixture fixture = CreateFixture();
+
+        CliResult refresh = await RunCliAsync(
+            "edit",
+            "refresh",
+            "--file",
+            fixture.ProgramFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, refresh.ExitCode);
+        using JsonDocument refreshDocument = JsonDocument.Parse(refresh.StdOut);
+        string workingFilePath = refreshDocument.RootElement.GetProperty("workingFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing working file path.");
+        await File.WriteAllTextAsync(workingFilePath, "namespace Example { internal static class Program { public static string Value => \"candidate\"; } }");
+
+        CliResult stage = await RunCliAsync(
+            "edit",
+            "stage",
+            "--file",
+            fixture.ProgramFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, stage.ExitCode);
+        using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
+        string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
+            ?? throw new InvalidOperationException("Missing staged record id.");
+        string stagedHash = stageDocument.RootElement.GetProperty("stagedHash").GetString()
+            ?? throw new InvalidOperationException("Missing staged hash.");
+
+        await LaunchDiffAsync(fixture, stagedRecordId);
+        await File.WriteAllTextAsync(fixture.ProgramFilePath, "namespace Example { internal static class Program { public static string Value => \"unexpected\"; } }");
+
+        CliResult decision = await RunCliAsync(
+            "edit",
+            "record-decision",
+            "--staged-record-id",
+            stagedRecordId,
+            "--decision",
+            "accepted",
+            "--expected-staged-hash",
+            stagedHash,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(1, decision.ExitCode);
+        Assert.Contains("watched source does not match", decision.StdErr, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
