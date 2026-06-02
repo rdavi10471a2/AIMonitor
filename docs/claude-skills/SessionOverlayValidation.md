@@ -4,7 +4,7 @@ Use for coupled multi-file C# edits.
 
 ## Rule
 
-Compose and stage every coupled file in the same monitor session before the first review launch. Pre-merge validation must see the proposed change set before WinMerge review starts, even though WinMerge review is serial.
+Compose and stage every coupled file in the same monitor session before the first review launch. The current implementation validates and reviews one staged candidate at a time, so the session is the operator's grouping and telemetry boundary. First-class all-files-at-once overlay validation is future work.
 
 ## Flow
 
@@ -19,7 +19,7 @@ launch/review file A
 record decision for file A
 launch/review file B
 record decision for file B
-check final IndexRefresh status before relying on solution-index queries
+check each accepted decision's indexRefresh status before relying on solution-index queries
 ```
 
 ## Do Not
@@ -28,7 +28,7 @@ check final IndexRefresh status before relying on solution-index queries
 - Do not treat a clean single-file validation result as enough when another staged file is required for the feature to compile.
 - Do not let empty reference results shrink the session by themselves; cross-check before deciding a change is single-file.
 - Do not continue to later diffs if an earlier staged item is blocked by validation or review-gate state.
-- Do not run manual index refresh tools after each accepted file in a coupled chain; let `record_diff_decision` perform the single rebuild when the chain is complete unless it reports a refresh failure.
+- Do not run manual index refresh tools after each accepted file in a coupled chain; `record_diff_decision` refreshes the monitor-owned index for accepted and accepted-normalized decisions.
 
 ## Unblock
 

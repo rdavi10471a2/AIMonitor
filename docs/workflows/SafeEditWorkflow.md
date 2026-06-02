@@ -1,6 +1,6 @@
 # Safe Edit Workflow
 
-The V2 workflow keeps the V1 safety invariant:
+The AIMonitor workflow keeps the core safety invariant:
 
 ```text
 inspect -> stage -> validate -> stable diff -> accept/reject hash classification -> record -> iterate

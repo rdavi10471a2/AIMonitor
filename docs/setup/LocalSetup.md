@@ -18,4 +18,4 @@
    dotnet test .\AIMonitor.slnx
    ```
 
-V2 exposes one Monitor-facing workflow engine. MCP and CLI adapters should both call into that engine.
+AIMonitor exposes one Monitor-facing workflow engine. MCP and CLI adapters should both call into that engine.

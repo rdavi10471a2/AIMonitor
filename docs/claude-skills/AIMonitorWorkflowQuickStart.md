@@ -68,6 +68,8 @@ Safe editing tools include:
 - `add_field`, `add_property`, `add_method`, `add_constructor`, `add_nested_type`.
 - `submit_file` only for new files, generated files, or deliberate whole-file replacement.
 
+CSS, JSON, config, markup, and other non-C# text assets use the same Working candidate, staging, WinMerge diff, and decision flow. They do not need semantic index rows to be diffable.
+
 Do not edit watched source directly. Do not edit staged runtime files. After staging, further candidate changes must go back through the Working file and be staged again.
 
 ## New File Edit

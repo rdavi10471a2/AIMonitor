@@ -1,6 +1,6 @@
 # MSBuild-First Indexing
 
-V2 starts from MSBuild because filesystem enumeration was not enough.
+AIMonitor starts from MSBuild because filesystem enumeration is not enough.
 
 The MSBuild layer owns:
 
@@ -35,13 +35,13 @@ C# symbol/reference indexing ships first. Razor is part of that C# semantic prov
 
 Legacy combined `.razor.cs` files are treated as Razor input only when the file actually contains Razor syntax such as markup or `@code`. Normal `.razor.cs` code-behind remains ordinary C#.
 
-This is not a full Razor language-server replacement. V2 should not claim that every component parameter, event handler string, or Blazor UI binding is represented as a semantic reference. Those shapes require a dedicated Razor binding layer if they become important. Until then, the monitor relies on MSBuild/C# truth, mapped Razor references, grep-verified smoke tests, and normal build feedback.
+This is not a full Razor language-server replacement. AIMonitor should not claim that every component parameter, event handler string, or Blazor UI binding is represented as a semantic reference. Those shapes require a dedicated Razor binding layer if they become important. Until then, the monitor relies on MSBuild/C# truth, mapped Razor references, grep-verified smoke tests, and normal build feedback.
 
 Other languages should remain visible as projects/documents with diagnostics and project facts, even when they do not yet have semantic rows.
 
 ## Initial Regression
 
-`AIMonitor.MSBuild.Tests` opens a generated SDK-style project through `MSBuildWorkspace`. This is the first heartbeat test for the V2 direction.
+`AIMonitor.MSBuild.Tests` opens a generated SDK-style project through `MSBuildWorkspace`. This is the first heartbeat test for the MSBuild-first direction.
 
 Representative local smoke tests cover:
 

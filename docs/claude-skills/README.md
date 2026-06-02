@@ -1,6 +1,6 @@
 # AIMonitor Claude Mini Skills
 
-These cards are short, model-facing reminders. They should stay small enough to paste into a prompt or load as focused context.
+These cards are short, Claude-facing reminders. They should stay small enough for the Claude Code / VS Code agent host to load as focused context.
 
 Use the AIMonitor workflow docs for current implementation details:
 
@@ -24,8 +24,9 @@ Use the AIMonitor workflow docs for current implementation details:
 
 ## Layering
 
+- `CLAUDE.md` answers: what are Claude's host-specific rules for this repo?
 - Tool descriptions answer: how do I call this tool right now?
 - Mini skills answer: what operating mode am I in?
 - Long docs and fixture corpus answer: why does this rule exist, and what proved it?
 
-Start with `AIMonitorWorkflowQuickStart.md` and `SkillRouter.md`, then load only the cards required by the active task.
+Start with `AIMonitorWorkflowQuickStart.md` and `SkillRouter.md`, then load only the cards required by the active task. Do not use `AGENTS.md` as Claude's primary instruction file; it is the Codex host entry point.

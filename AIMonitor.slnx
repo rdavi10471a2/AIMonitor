@@ -1,4 +1,9 @@
 <Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="README.md" />
+    <File Path="AGENTS.md" />
+    <File Path="CLAUDE.md" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/AIMonitor.App/AIMonitor.App.csproj" />
     <Project Path="src/AIMonitor.McpStdioBridge/AIMonitor.McpStdioBridge.csproj" />
@@ -34,15 +39,30 @@
   <Folder Name="/samples/watched-solutions/">
     <File Path="samples/watched-solutions/README.md" />
   </Folder>
-  <Folder Name="/docs/root/">
-    <File Path="README.md" />
-    <File Path="AGENTS.md" />
-    <File Path="CLAUDE.md" />
-  </Folder>
   <Folder Name="/docs/architecture/">
     <File Path="docs/architecture/DataSubsystem.md" />
     <File Path="docs/architecture/MSBuildFirst.md" />
     <File Path="docs/architecture/V2Architecture.md" />
+  </Folder>
+  <Folder Name="/docs/agent-memory/">
+    <File Path="docs/agent-memory/RestartContext.md" />
+  </Folder>
+  <Folder Name="/docs/system-memory/">
+    <File Path="docs/system-memory/README.md" />
+  </Folder>
+  <Folder Name="/docs/components/">
+    <File Path="docs/components/README.md" />
+    <File Path="docs/components/AIMonitor.App.md" />
+    <File Path="docs/components/AIMonitor.Cli.md" />
+    <File Path="docs/components/AIMonitor.Core.md" />
+    <File Path="docs/components/AIMonitor.Data.md" />
+    <File Path="docs/components/AIMonitor.Indexing.md" />
+    <File Path="docs/components/AIMonitor.Logging.md" />
+    <File Path="docs/components/AIMonitor.McpServer.md" />
+    <File Path="docs/components/AIMonitor.McpStdioBridge.md" />
+    <File Path="docs/components/AIMonitor.MSBuild.md" />
+    <File Path="docs/components/AIMonitor.Runtime.md" />
+    <File Path="docs/components/AIMonitor.Workflow.md" />
   </Folder>
   <Folder Name="/docs/decisions/">
     <File Path="docs/decisions/0001-name-and-scope.md" />

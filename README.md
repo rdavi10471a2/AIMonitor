@@ -1,63 +1,111 @@
 # AIMonitor
 
-AIMonitor is the V2 safe edit monitor for AI-assisted .NET development.
+AIMonitor is a safe edit monitor for AI-assisted .NET development. It gives agents a protected way to inspect, stage, validate, diff, and record edits to a watched solution without letting them silently mutate watched source.
 
-The goal is to keep the proven Monitor workflow while starting from a cleaner architecture:
+It is also a harness around agent work: it gives the agent repeatable tools, memory, validation gates, telemetry, and a human review loop. The important distinction is that the harness is bounded by local project truth and shared workflow services instead of becoming a loose prompt/process convention.
 
-- MSBuild-first project loading.
-- One shared workflow engine for Claude and Codex.
-- MCP as the Claude adapter, not the core API.
-- CLI as the Codex-friendly adapter.
-- Tests, samples, and docs as top-level peers of product source.
-- First-class watched-project support for Blazor/Razor, WinForms, and console apps.
-- A SQLite solution index under each watched solution workspace built from one configured watched solution path.
-- Unified JSON-lines logging under `runtime/logs`.
+The core idea is simple:
 
-## Initial Scope
+```text
+discover -> edit monitor-owned Working files -> stage -> validate -> WinMerge review -> record accept/reject -> refresh index
+```
 
-Primary targets:
+Claude, Codex, and the WinForms app all use the same workflow services. MCP and CLI are adapters, not separate workflow implementations.
 
-- Blazor/Razor component projects.
-- WinForms projects.
-- Console projects.
+## Layered Workflow
 
-Expected to work through normal MSBuild loading when SDKs are installed:
+```text
+Claude Code -> MCP stdio bridge -> WinForms MCP proxy hub -> MCP server -> shared services
+Codex      -> CLI adapter                              -> shared services
+Operator   -> WinForms app                             -> shared services
+```
 
-- ASP.NET/Web API C# project loading and normal C# indexing.
+Shared services own the behavior:
 
-Not a V2 focus:
+- `AIMonitor.Core`: settings, path identity, and common records.
+- `AIMonitor.MSBuild`: MSBuild-loaded solution/project truth.
+- `AIMonitor.Data`: SQLite solution index storage and query surface.
+- `AIMonitor.Indexing`: post-accept index refresh orchestration.
+- `AIMonitor.Workflow`: Working files, staging, ledgers, decisions, hashes, and recovery rules.
+- `AIMonitor.Runtime`: validation, WinMerge launch, process/runtime boundaries.
+- `AIMonitor.Logging`: shared JSON-lines logging and live log pipe.
 
-- ASP.NET routing, middleware, auth-policy, hosting, deployment, or OpenAPI-specific semantic workflows.
-- Full Visual Studio-equivalent Razor UI binding analysis.
+Adapters stay thin:
 
-## Razor Scope
+- `AIMonitor.Cli`: Codex-friendly command surface.
+- `AIMonitor.McpServer`: Claude-facing MCP tools over shared services.
+- `AIMonitor.McpStdioBridge`: stdio-to-WinForms proxy bridge for live Claude sessions.
+- `AIMonitor.App`: operator UI, live MCP proxy hub, solution index view, and monitor status view.
 
-Razor support is intentionally practical rather than absolute. AIMonitor indexes normal C#, clean `.razor.cs` code-behind, and Razor references that map back to user source through compiler/Razor source maps. This is enough for the current monitor workflow when combined with grep-verified smoke tests, builds, and iterative fixes.
+## Safe Edit Rules
 
-Literal component/event binding strings and complete Blazor UI binding semantics are outside the current hard correctness contract. They can be revisited later as a dedicated Razor binding subsystem.
+- Agents do not edit watched source directly.
+- Existing watched files are refreshed into monitor-owned Working candidates.
+- Future watched files use `new_file` / `edit new` and are reviewed against a blank runtime baseline.
+- Candidates are staged before review.
+- `launch_staged_diff` / `edit launch-diff` runs pre-merge validation before WinMerge.
+- WinMerge is the human review/save surface.
+- `record_diff_decision` / `edit record-decision` classifies the watched result by decision plus staged hash.
+- Accepted and accepted-normalized decisions refresh the monitor-owned solution index.
+- After accept, refresh the same watched file before editing it again.
+
+CSS, JSON, config, markup, Razor markup, and other non-C# text assets are diffable through the same protected Working/stage/review/decision flow. They do not need semantic index rows.
+
+## Semantic Scope
+
+AIMonitor is MSBuild-first and language-provider aware. The current semantic provider is C#:
+
+- normal `.cs` files are indexed as C#;
+- clean `.razor.cs` code-behind is indexed as C#;
+- user-authored `.razor` references are indexed only when compiler/Razor source mappings expose user-source spans cleanly.
+
+AIMonitor does not currently promise full Visual Studio-level Razor component/event binding analysis. Use builds, representative smoke tests, source-map facts, and targeted text search as the practical safety net for those cases.
 
 ## Project Layout
 
 ```text
 src/       product code and adapters
-tests/     unit, integration, smoke, and fixtures
-samples/   human-readable watched-solution examples
-docs/      architecture, decisions, findings, workflows, feature maps
+tests/     unit, integration, smoke, fixtures, and corpus coverage
+samples/   committed sample notes; local watched samples are ignored
+docs/      architecture, component memory, workflows, findings, setup, skills
 config/    templates only; local config is ignored
 runtime/   generated monitor state; ignored
 ```
 
-## Configuration Rule
+Root instruction files:
 
-`Monitor:WatchedSolutionPath` is the single authoritative path for the watched solution. MSBuild loading, indexing, MCP, CLI, and the app host should all flow through that setting.
+- `AGENTS.md`: Codex host instructions.
+- `CLAUDE.md`: Claude / Claude Code host instructions.
+- `docs/system-memory/README.md`: authoritative contract memory for how AIMonitor works.
+- `docs/agent-memory/RestartContext.md`: restart and handoff note for agent/plugin/MCP recovery.
+- `docs/components/`: per-component purpose and data-flow memory.
+- `docs/claude-skills/`: focused Claude skill cards.
 
-Use the WinForms `Choose...` button or edit ignored `config/appsettings.json` to switch watched solutions. Do not copy the AIMonitor repo per watched solution; generated state is already isolated under the per-solution runtime workspace.
+## Configuration
 
-Generated monitor logs go under `runtime/logs/aimonitor.ndjson`. Adapters may print human status to their console/UI, but durable operational events should use the shared logger.
+Create `config/appsettings.json` from `config/appsettings.template.json` and set:
 
-The operator app owns the shared logging service. Child controls and subsystems receive an `IMonitorLogger` and send log messages to it; they should not create their own UI log panes or long-lived file handles. The app log view listens to in-process log events while the service writes JSON-lines entries with shared file access.
+```json
+{
+  "Monitor": {
+    "WatchedSolutionPath": "C:\\path\\to\\watched\\solution.sln"
+  }
+}
+```
 
-Generated solution-specific state goes under `runtime/watched-solutions/<solution-name>-<path-hash>/`.
+`Monitor:WatchedSolutionPath` is the single authoritative watched-code identity. MSBuild loading, indexing, MCP tools, CLI commands, and the WinForms app all flow through that setting.
+
+Generated state is isolated under:
+
+```text
+runtime/watched-solutions/<solution-name>-<path-hash>/
+```
+
+Durable monitor events are written to:
+
+```text
+runtime/logs/aimonitor.ndjson
+```
 
 ## Build
 
@@ -71,36 +119,30 @@ dotnet build .\AIMonitor.slnx
 dotnet test .\AIMonitor.slnx
 ```
 
-## Language Corpus Smoke
-
-The old MonitorBaseClaude external corpus now lives under `tests/smoke/AIMonitor.LanguageCorpusSmokeTests`. It runs in report mode by default while V2 grows the C# semantic provider:
+Useful focused checks:
 
 ```powershell
+dotnet test .\tests\integration\AIMonitor.Integration.Tests\AIMonitor.Integration.Tests.csproj
+dotnet run --project .\tests\smoke\AIMonitor.SmokeTests
+dotnet run --project .\tests\smoke\AIMonitor.ToolSmokeTests
 dotnet run --project .\tests\smoke\AIMonitor.LanguageCorpusSmokeTests
 ```
 
-Use `--assert` when the corpus is ready to become a hard gate.
-
-## Local Sample Smoke
-
-Local watched-solution smoke tests can be configured through ignored `config/local-smoke-samples.json`. These samples are not committed; they exist to prove AIMonitor against real local projects such as SchemaStudioWebViewer and generated Blazor detector samples.
-
-The smoke checks should stay representative and grep-verified. Do not turn a production Razor page into an exhaustive UI-binding proof unless the project has a dedicated Razor binding provider.
-
 ## Rebuild Index
-
-Create `config/appsettings.json` from `config/appsettings.template.json`, set `Monitor:WatchedSolutionPath`, then run:
 
 ```powershell
 dotnet run --project .\src\AIMonitor.Cli -- index rebuild
 ```
 
-## Architecture Rule
+## Documentation Memory
 
-The safe edit workflow is not MCP. MCP is one adapter for Claude. Codex gets CLI/process-friendly access to the same engine.
+AIMonitor cannot safely monitor its own edits through the watched-project workflow while it is being changed. The repository therefore uses docs as operational memory:
 
-```text
-Claude -> MCP adapter -> shared workflow engine
-Codex  -> CLI adapter -> shared workflow engine
-App    -> host/UI     -> shared workflow engine
-```
+- `docs/system-memory/README.md` marks the authoritative contract memory.
+- `CLAUDE.md` and `AGENTS.md` are small host entry points.
+- Skill cards are loaded only when needed.
+- Component docs explain ownership and data flow.
+- Findings preserve historical investigations and deferred decisions.
+- Restart context records the current recovery pattern for plugin/MCP/session weirdness.
+
+Do not load every document by default. Start from the relevant host file, route through skills or component docs, then read deeper findings only when the task needs history.

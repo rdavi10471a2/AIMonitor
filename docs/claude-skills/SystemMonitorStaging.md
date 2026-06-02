@@ -42,7 +42,7 @@ The active safety mechanism is monitor-owned Working files, pre-merge validation
 | Replace a known line/column span | `replace_span_in_file` |
 | Create a brand-new file | `submit_file` |
 | Create a brand-new Razor component | Two `submit_file` calls in one session: `.razor` markup + `.razor.cs` partial-class companion. Do not start a new Razor file with inline `@code`. |
-| Migrate legacy inline-`@code` Razor to two-file form | Use `get_file`/`submit_file` carefully in one session for `.razor` and `.razor.cs`; no dedicated split tool exists in AIMonitor V2 yet. |
+| Migrate legacy inline-`@code` Razor to two-file form | Use `get_file`/`submit_file` carefully in one session for `.razor` and `.razor.cs`; no dedicated split tool exists yet. |
 | Regenerate or deliberately replace a whole file | `submit_file` |
 
 Do not use `submit_file` for ordinary member-level edits just because you have the full file in context.

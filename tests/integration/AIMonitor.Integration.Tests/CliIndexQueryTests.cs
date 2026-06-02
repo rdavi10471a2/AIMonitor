@@ -975,6 +975,74 @@ public sealed class CliIndexQueryTests
     }
 
     [Fact]
+    public async Task Edit_css_file_path_round_trips_through_working_stage_launch_and_accept()
+    {
+        CliFixture fixture = CreateFixture();
+        string cssFilePath = Path.Combine(Path.GetDirectoryName(fixture.ProgramFilePath)!, "wwwroot", "site.css");
+        Directory.CreateDirectory(Path.GetDirectoryName(cssFilePath)!);
+        await File.WriteAllTextAsync(cssFilePath, "body {\r\n  color: black;\r\n}\r\n");
+
+        CliResult refresh = await RunCliAsync(
+            "edit",
+            "refresh",
+            "--file",
+            cssFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, refresh.ExitCode);
+        using JsonDocument refreshDocument = JsonDocument.Parse(refresh.StdOut);
+        string workingFilePath = refreshDocument.RootElement.GetProperty("workingFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing working file path.");
+        await File.WriteAllTextAsync(workingFilePath, "body {\r\n  color: #1d4ed8;\r\n}\r\n");
+
+        CliResult stage = await RunCliAsync(
+            "edit",
+            "stage",
+            "--file",
+            cssFilePath,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, stage.ExitCode);
+        using JsonDocument stageDocument = JsonDocument.Parse(stage.StdOut);
+        string stagedRecordId = stageDocument.RootElement.GetProperty("stagedRecordId").GetString()
+            ?? throw new InvalidOperationException("Missing staged record id.");
+        string stagedHash = stageDocument.RootElement.GetProperty("stagedHash").GetString()
+            ?? throw new InvalidOperationException("Missing staged hash.");
+        using JsonDocument stagedRecordDocument = await GetStagedRecordAsync(fixture, stagedRecordId);
+        string stagedFilePath = stagedRecordDocument.RootElement.GetProperty("stagedFilePath").GetString()
+            ?? throw new InvalidOperationException("Missing staged file path.");
+        Assert.EndsWith("site.css", stagedFilePath, StringComparison.OrdinalIgnoreCase);
+
+        await LaunchDiffAsync(fixture, stagedRecordId);
+        File.Copy(stagedFilePath, cssFilePath, overwrite: true);
+
+        CliResult decision = await RunCliAsync(
+            "edit",
+            "record-decision",
+            "--staged-record-id",
+            stagedRecordId,
+            "--decision",
+            "accepted",
+            "--expected-staged-hash",
+            stagedHash,
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, decision.ExitCode);
+        using JsonDocument decisionDocument = JsonDocument.Parse(decision.StdOut);
+        Assert.Equal("accepted", decisionDocument.RootElement.GetProperty("classification").GetString());
+        Assert.Contains("#1d4ed8", await File.ReadAllTextAsync(cssFilePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Edit_record_decision_reports_accepted_normalized_when_only_line_endings_differ()
     {
         CliFixture fixture = CreateFixture();
