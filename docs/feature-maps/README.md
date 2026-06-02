@@ -6,6 +6,8 @@ Some maps include an explicit `Human Notes` section. Preserve that section unles
 
 `CmbMcpCapabilityParity.md` is a contract ledger, not ordinary background documentation. Update it whenever a MonitorBaseClaude capability is restored, intentionally replaced, intentionally deferred, or ruled not applicable.
 
+`CmbMcpParityRestorePlan.md` is the execution plan for restoring or explicitly resolving the missing, degraded-high, and degraded-medium parity items.
+
 Recommended section names:
 
 - Human Notes

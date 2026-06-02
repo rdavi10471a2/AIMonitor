@@ -10,6 +10,8 @@ Do not treat a compatibility-shaped stub, a successful JSON response, or a passi
 
 The verified source finding is `docs/findings/CmbMcpParityGap-2026-06-02.md`.
 
+The implementation plan is `docs/feature-maps/CmbMcpParityRestorePlan.md`.
+
 The architectural rule is:
 
 ```text
