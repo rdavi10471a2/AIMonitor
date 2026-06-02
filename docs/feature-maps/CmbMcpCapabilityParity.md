@@ -24,22 +24,91 @@ MCP is the Claude-facing adapter. It must not contain independent workflow, inde
 
 ## Current Verified Gaps
 
-The table below is the hand-verified restore set from the finding. These are safe to plan against immediately.
+The items below are the hand-verified restore set from the finding. They are safe to plan against immediately.
 
-| ID | Capability | Primary Owner | Adapter Surface | Current Status | Required Proof |
-| --- | --- | --- | --- | --- | --- |
-| CMB-PARITY-001 | Indexed symbol relationships | Indexing/Data | MCP query tools | Missing | Index rows for partial/inherits/implements/overrides plus MCP query returning real relationship rows. |
-| CMB-PARITY-002 | Indexed call sites and true callers | Indexing/Data | MCP query tools | Missing/thin | Call-site table or equivalent persisted caller identity; `find_indexed_callers` cannot infer callers by string-matching reference kind. |
-| CMB-PARITY-003 | Rich indexed references | Indexing/Data | MCP query tools | Thin | References include enough caller/file/hash/partial context for agent navigation, or an explicit accepted replacement. |
-| CMB-PARITY-004 | Real self-check guardrails | Core/Runtime or MCP shared support | MCP `get_self_check` | Stub/misleading | Either run guardrail/collision checks or change tool description/result so it does not claim them. |
-| CMB-PARITY-005 | Index staleness and counts | Indexing/Data | MCP status tools, UI as applicable | Thin | Status exposes stale-file count and useful symbol/reference/call-site/relationship counts, backed by persisted facts. |
-| CMB-PARITY-006 | Scoped index query semantics | Data | MCP query tools | Thin | Folder scope uses path-aware matching and limits are clamped. |
-| CMB-PARITY-007 | Session-scoped staged records | Workflow | MCP workflow tools, possible CLI overlap | Missing | Staged records persist session identity; `list_session_staged_records` returns only that session's records. |
-| CMB-PARITY-008 | Source-map density and budget | Workflow/Roslyn | MCP source-map tool, CLI if exposed | Missing | Modes actually shape payload; over-budget maps report explicit truncation/narrowing. |
-| CMB-PARITY-009 | WinForms/Razor source-map noise filter | Workflow/Roslyn | MCP source-map tool, CLI if exposed | Missing | Generated/designer noise is collapsed with visible elision markers; full/detail override can include generated members. |
-| CMB-PARITY-010 | Roslyn-backed file outline | Workflow/Roslyn | MCP outline tool | Thin | Outline comes from syntax/Roslyn declarations with kind/name/span/signature, not line text heuristics. |
-| CMB-PARITY-011 | Superseded staged-record lifecycle | Workflow | MCP and CLI staging/decision overlap | Missing | Same-file restaging archives or blocks older staged records; accept/reject handles superseded records explicitly. |
-| CMB-PARITY-012 | Real tool manifest and staging guide | Docs/MCP | MCP guidance tools | Thin | Tool manifest and staging guide are composed from current shipped docs/tool contracts, not generic architecture prose. |
+### CMB-PARITY-001 — Indexed Symbol Relationships
+
+- **Owner:** Indexing/Data
+- **Adapter surface:** MCP query tools
+- **Current status:** Missing
+- **Required proof:** Index rows for partial/inherits/implements/overrides plus MCP query returning real relationship rows.
+
+### CMB-PARITY-002 — Indexed Call Sites And True Callers
+
+- **Owner:** Indexing/Data
+- **Adapter surface:** MCP query tools
+- **Current status:** Missing/thin
+- **Required proof:** Call-site table or equivalent persisted caller identity. `find_indexed_callers` cannot infer callers by string-matching reference kind.
+
+### CMB-PARITY-003 — Rich Indexed References
+
+- **Owner:** Indexing/Data
+- **Adapter surface:** MCP query tools
+- **Current status:** Thin
+- **Required proof:** References include enough caller/file/hash/partial context for agent navigation, or an explicit accepted replacement.
+
+### CMB-PARITY-004 — Real Self-Check Guardrails
+
+- **Owner:** Core/Runtime or MCP shared support
+- **Adapter surface:** MCP `get_self_check`
+- **Current status:** Stub/misleading
+- **Required proof:** Either run guardrail/collision checks or change tool description/result so it does not claim them.
+
+### CMB-PARITY-005 — Index Staleness And Counts
+
+- **Owner:** Indexing/Data
+- **Adapter surface:** MCP status tools, UI as applicable
+- **Current status:** Thin
+- **Required proof:** Status exposes stale-file count and useful symbol/reference/call-site/relationship counts, backed by persisted facts.
+
+### CMB-PARITY-006 — Scoped Index Query Semantics
+
+- **Owner:** Data
+- **Adapter surface:** MCP query tools
+- **Current status:** Thin
+- **Required proof:** Folder scope uses path-aware matching and limits are clamped.
+
+### CMB-PARITY-007 — Session-Scoped Staged Records
+
+- **Owner:** Workflow
+- **Adapter surface:** MCP workflow tools, possible CLI overlap
+- **Current status:** Missing
+- **Required proof:** Staged records persist session identity; `list_session_staged_records` returns only that session's records.
+
+### CMB-PARITY-008 — Source-Map Density And Budget
+
+- **Owner:** Workflow/Roslyn
+- **Adapter surface:** MCP source-map tool, CLI if exposed
+- **Current status:** Missing
+- **Required proof:** Modes actually shape payload; over-budget maps report explicit truncation/narrowing.
+
+### CMB-PARITY-009 — WinForms/Razor Source-Map Noise Filter
+
+- **Owner:** Workflow/Roslyn
+- **Adapter surface:** MCP source-map tool, CLI if exposed
+- **Current status:** Missing
+- **Required proof:** Generated/designer noise is collapsed with visible elision markers; full/detail override can include generated members.
+
+### CMB-PARITY-010 — Roslyn-Backed File Outline
+
+- **Owner:** Workflow/Roslyn
+- **Adapter surface:** MCP outline tool
+- **Current status:** Thin
+- **Required proof:** Outline comes from syntax/Roslyn declarations with kind/name/span/signature, not line text heuristics.
+
+### CMB-PARITY-011 — Superseded Staged-Record Lifecycle
+
+- **Owner:** Workflow
+- **Adapter surface:** MCP and CLI staging/decision overlap
+- **Current status:** Missing
+- **Required proof:** Same-file restaging archives or blocks older staged records; accept/reject handles superseded records explicitly.
+
+### CMB-PARITY-012 — Real Tool Manifest And Staging Guide
+
+- **Owner:** Docs/MCP
+- **Adapter surface:** MCP guidance tools
+- **Current status:** Thin
+- **Required proof:** Tool manifest and staging guide are composed from current shipped docs/tool contracts, not generic architecture prose.
 
 ## Larger Inventory Categories
 
