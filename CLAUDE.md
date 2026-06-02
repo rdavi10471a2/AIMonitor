@@ -18,6 +18,7 @@ This file is the Claude/Claude Code entry point. `AGENTS.md` is the Codex host e
 - Prefer tight loops: small plan, bounded edit, focused test, inspect, then continue. Do not force exhaustive up-front plans when the edge cases need discovery.
 - Reason in the cloud; compose locally. Do not write watched source directly.
 - After staging, staged runtime files are immutable review evidence. Further candidate changes go back through the Working file and must be staged again.
+- Diff stability depends on complete local edit context: use source-map/symbol context for semantic edits or the whole Working file for text/whole-file edits before staging.
 
 ## MCP Binding
 

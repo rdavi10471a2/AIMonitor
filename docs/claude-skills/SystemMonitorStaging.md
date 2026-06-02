@@ -12,6 +12,7 @@ The active safety mechanism is monitor-owned Working files, pre-merge validation
 - Use the Solution Index MCP surface for cheap project context before body reads: `get_solution_index_tree`, `query_solution_index`, `find_indexed_symbols`, `get_indexed_symbol`, `find_indexed_references`, `find_indexed_callers`, and `find_indexed_relationships`.
 - If the target file is already known, call `query_solution_index(scope: "file", value: "<relative path>")` first and use the returned symbol row's `StableSymbolKey`. Do not manually compose stable keys.
 - Use the smallest safe edit unit: symbol edit before whole-file replacement.
+- Diff stability depends on complete local edit context. Use source-map/symbol views for semantic C# edits, or the full Working file for text/whole-file edits, before staging.
 - For any file at or above 32KB in a cold session, call `refresh_file` and chunk-read the returned Working file path. Do not use `get_file` for that cold-session entry.
 - For warm-session text edits, do not re-read the file. Use the text already in context with `replace_text_in_file` and `expectedMatches: 1`, or `replace_span_in_file` when exact bounds are already known.
 - Stage candidates, let AIMonitor run pre-merge validation, then use Operator review.
