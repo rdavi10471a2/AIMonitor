@@ -130,6 +130,37 @@ public sealed class SolutionIndexStoreTests
         Assert.Contains(store.ListPackageReferences(), package => package.Include == "New.Package");
     }
 
+    [Fact]
+    public void SaveSnapshot_zero_project_snapshot_does_not_clear_existing_index()
+    {
+        string databasePath = Path.Combine(Path.GetTempPath(), "AIMonitorTests", Guid.NewGuid().ToString("N"), "index.sqlite");
+        SolutionIndexStore store = new(new SolutionIndexDatabase(databasePath));
+
+        store.SaveSnapshot(CreateSnapshot(
+            @"C:\Example\Example.sln",
+            "project:old",
+            "Old",
+            @"C:\Example\Old.csproj",
+            "Old.cs",
+            @"C:\Example\Old.cs",
+            "symbol:old",
+            "OldType",
+            "Old.Package",
+            "old diagnostic"));
+
+        InvalidOperationException ex = Assert.Throws<InvalidOperationException>(() =>
+            store.SaveSnapshot(new MSBuildSolutionSnapshot(
+                @"C:\Example\Example.sln",
+                [],
+                ["degraded load"])));
+
+        Assert.Contains("zero-project snapshot", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(store.ListProjects());
+        Assert.Contains(store.ListDocuments(), document => document.Name == "Old.cs");
+        Assert.Contains(store.ListSymbols(), symbol => symbol.StableKey == "symbol:old");
+        Assert.Equal(1, store.GetSummary().ProjectCount);
+    }
+
     private static MSBuildSolutionSnapshot CreateSnapshot(
         string inputPath,
         string projectKey,

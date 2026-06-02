@@ -280,30 +280,21 @@ public sealed class RoslynEditService
             throw new InvalidOperationException(CreateUnsupportedRoslynPathMessage(fullPath, "Roslyn edit tools"));
         }
 
-        EditSessionStatus status = workflowService.GetStatus(fullPath);
-        if (status.HasSession)
-        {
-            return status;
-        }
-
-        return File.Exists(fullPath)
-            ? workflowService.Refresh(fullPath)
-            : workflowService.NewFile(fullPath);
+        return workflowService.EnsureEditableSession(fullPath);
     }
 
     private RoslynEditResult WriteRoot(string operation, EditSessionStatus status, CompilationUnitSyntax root)
     {
         CompilationUnitSyntax formatted = FormatAnnotatedNodes(root);
-        string existingText = File.Exists(status.WorkingFilePath) ? File.ReadAllText(status.WorkingFilePath) : string.Empty;
-        File.WriteAllText(status.WorkingFilePath, NormalizeLineEndings(formatted.ToFullString(), DetectDominantNewLine(existingText)));
+        EditSessionStatus updatedStatus = workflowService.WriteWorkingCandidate(status.WatchedFilePath, formatted.ToFullString());
         return new RoslynEditResult(
             operation,
-            status.WatchedFilePath,
-            status.WorkingFilePath,
-            status.RelativePath,
+            updatedStatus.WatchedFilePath,
+            updatedStatus.WorkingFilePath,
+            updatedStatus.RelativePath,
             "updated",
             $"{operation} updated the monitor-owned Working candidate.",
-            FileHash.Compute(status.WorkingFilePath));
+            FileHash.Compute(updatedStatus.WorkingFilePath));
     }
 
     private static CompilationUnitSyntax ParseCompilationUnit(string filePath, string relativePath)

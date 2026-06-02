@@ -822,6 +822,9 @@ public sealed class McpServerSmokeTests
         Assert.Equal("accepted", ExtractJsonString(helperDecisionJson, "classification"));
         Assert.Contains("\"indexRefresh\"", helperDecisionJson, StringComparison.Ordinal);
         Assert.Contains("\"status\":\"rebuilt\"", helperDecisionJson, StringComparison.Ordinal);
+        Assert.Equal(
+            "Index was rebuilt after accept. Run edit refresh before further edits to this watched file.",
+            ExtractJsonString(helperDecisionJson, "nextStep"));
 
         CallToolResult programLaunch = await client.CallToolAsync(
             "launch_staged_diff",
@@ -847,6 +850,9 @@ public sealed class McpServerSmokeTests
         Assert.Equal("accepted", ExtractJsonString(programDecisionJson, "classification"));
         Assert.Contains("\"indexRefresh\"", programDecisionJson, StringComparison.Ordinal);
         Assert.Contains("\"status\":\"rebuilt\"", programDecisionJson, StringComparison.Ordinal);
+        Assert.Equal(
+            "Index was rebuilt after accept. Run edit refresh before further edits to this watched file.",
+            ExtractJsonString(programDecisionJson, "nextStep"));
 
         Assert.Contains("accepted-helper", await File.ReadAllTextAsync(helperFilePath), StringComparison.Ordinal);
         Assert.Contains("Helper.Value()", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);

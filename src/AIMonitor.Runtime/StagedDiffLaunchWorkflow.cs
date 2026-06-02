@@ -17,6 +17,8 @@ public sealed class StagedDiffLaunchWorkflow
         bool verbose = false)
     {
         StagedEditRecord record = workflowService.GetStagedRecord(stagedRecordId);
+        WorkflowEditService.EnsureRecordNotDecided(record);
+
         PreMergeValidationResult validation = new PreMergeValidationService().Validate(settings, record);
         string validationPrompt = "";
         if (validation.IsError && !forceValidation && PreMergeValidationOverridePrompt.CanShow())

@@ -36,15 +36,19 @@ refresh_file/new_file
 
 - Monitor-owned Working files.
 - Staged runtime files.
+- The shared editable-session guard used by text, span, and Roslyn typed-edit surfaces.
 - Pre-merge validation copy creation and `dotnet build` execution.
 - Vote-plus-hash accept/reject classification.
+- Terminal staged-record guards.
 - Dirty/unexpected recovery signals.
 - Line-ending-preserving text operations.
+- Per-file index-stale workflow state after accepted decisions.
 
 ## Does Not Own
 
 - WinMerge process launch.
 - Post-accept index rebuild implementation.
+- Post-accept index refresh response shaping.
 - Agent-specific command parsing.
 
 ## Key Tests

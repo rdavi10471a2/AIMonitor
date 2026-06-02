@@ -2,7 +2,6 @@ using AIMonitor.Core;
 using AIMonitor.Data;
 using AIMonitor.Indexing;
 using AIMonitor.Logging;
-using AIMonitor.MSBuild;
 using AIMonitor.Runtime;
 using AIMonitor.Workflow;
 using Microsoft.Extensions.Hosting;
@@ -156,9 +155,7 @@ public sealed class AIMonitorTools
     public async Task<SolutionIndexSummary> RefreshSolutionIndex()
     {
         runtimeState.Touch();
-        SolutionIndexStore store = new(new SolutionIndexDatabase(queryService.DatabasePath));
-        SolutionIndexBuilder builder = new(new MSBuildWorkspaceLoader(), store);
-        return await builder.RebuildAsync(settings);
+        return await new SolutionIndexRebuildService().RebuildAsync(settings);
     }
 
     [McpServerTool]
@@ -880,34 +877,15 @@ public sealed class AIMonitorTools
         [Description("Return the full staged record inline for debugging. Defaults to compact response.")] bool verbose = false)
     {
         runtimeState.Touch();
-        StagedEditRecord record = workflowService.RecordDecision(stagedRecordId, decision, expectedStagedHash);
-        PostAcceptIndexRefreshResult? indexRefresh = null;
-        if (record.Classification is "accepted" or "accepted-normalized")
-        {
-            indexRefresh = new PostAcceptIndexRefreshService().RebuildAfterAcceptedDecision(
-                settings,
-                logger,
-                record,
-                "AIMonitor.McpServer");
-        }
-
-        return new ReviewDecisionWithIndexRefreshResult
-        {
-            StagedRecordId = record.StagedRecordId,
-            WatchedFilePath = record.WatchedFilePath,
-            RelativePath = record.RelativePath,
-            Decision = record.Decision,
-            Classification = record.Classification,
-            Status = record.Status,
-            Message = record.Message,
-            StagedRecordSummary = workflowService.CreateSummary(record),
-            StagedRecordPath = workflowService.CreateSummary(record).RecordPath,
-            StagedRecord = verbose ? record : null,
-            IndexRefresh = indexRefresh,
-            NextStep = record.Classification is "accepted" or "accepted-normalized"
-                ? "Index was rebuilt after accept. Run edit refresh before further edits to this watched file."
-                : "Decision recorded. Do not rely on changed index rows unless an accepted decision rebuilt the index."
-        };
+        return new StagedDecisionWorkflow().Record(
+            settings,
+            logger,
+            workflowService,
+            stagedRecordId,
+            decision,
+            expectedStagedHash,
+            "AIMonitor.McpServer",
+            verbose);
     }
 
     [McpServerTool]
@@ -1133,18 +1111,7 @@ public sealed class AIMonitorTools
 
     private EditSessionStatus EnsureSession(string watchedFilePath)
     {
-        EditSessionStatus status = workflowService.GetStatus(watchedFilePath);
-        if (!status.HasSession)
-        {
-            return workflowService.Refresh(watchedFilePath);
-        }
-
-        if (status.RequiresRefresh)
-        {
-            throw new InvalidOperationException($"Previous decision was accepted for {status.RelativePath}. Run refresh_file for this watched file before editing or staging it again. If the watched solution changed, start a new monitor session and refresh the file from the new watched solution.");
-        }
-
-        return status;
+        return workflowService.EnsureEditableSession(watchedFilePath);
     }
 
     private void SaveSession(AIMonitorSessionState session)
@@ -1186,19 +1153,6 @@ public sealed class AIMonitorTools
                 .OrderByDescending(record => record.CreatedAtUtc, StringComparer.Ordinal)
                 .ToArray()
             : [];
-    }
-
-    private AIMonitorCompatibilityResult SemanticEditNotImplemented(string toolName, string path, string? sessionId, string? manifestJson)
-    {
-        return new AIMonitorCompatibilityResult(
-            "not-implemented",
-            $"{toolName} is not available in the current AIMonitor MCP surface; use submit_file, replace_text_in_file, or replace_span_in_file against the monitor-owned Working candidate.",
-            new Dictionary<string, string?>
-            {
-                ["path"] = path,
-                ["sessionId"] = sessionId,
-                ["manifestJson"] = manifestJson
-            });
     }
 
     private void RecordRoslynSessionEvent(string? sessionId, string eventType, RoslynEditResult result)

@@ -30,13 +30,14 @@ MSBuildSolutionSnapshot
 
 - SQLite schema and row mapping.
 - Read-only query surface.
-- Full snapshot replacement semantics.
+- Full snapshot replacement semantics, including aborting a destructive replacement when a degraded zero-project snapshot would overwrite an existing populated index.
 
 ## Does Not Own
 
 - MSBuild loading.
 - Agent response shaping.
 - Workflow staging or decisions.
+- Index rebuild orchestration.
 
 ## Key Tests
 

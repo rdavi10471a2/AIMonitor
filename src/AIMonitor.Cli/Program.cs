@@ -2,7 +2,6 @@ using AIMonitor.Core;
 using AIMonitor.Data;
 using AIMonitor.Indexing;
 using AIMonitor.Logging;
-using AIMonitor.MSBuild;
 using AIMonitor.Runtime;
 using AIMonitor.Workflow;
 using System.Diagnostics;
@@ -39,6 +38,8 @@ internal static class Program
             Console.WriteLine("  edit stage --file <path> [--ledger-summary <text>] [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  edit launch-diff --staged-record-id <id> [--diff-tool <path>] [--force-validation] [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  edit record-decision --staged-record-id <id> --decision accepted|rejected [--expected-staged-hash <hash>] [--repo-root <path>] [--config <path>]");
+            Console.WriteLine("  edit accept --file <path> --expected-staged-hash <hash> [--repo-root <path>] [--config <path>] (shortcut)");
+            Console.WriteLine("  edit reject --file <path> [--repo-root <path>] [--config <path>] (shortcut)");
             return 0;
         }
 
@@ -243,11 +244,15 @@ internal static class Program
 
     private static object RecordDecision(string[] args, MonitorSettings settings, IMonitorLogger logger, WorkflowEditService service)
     {
-        StagedEditRecord record = service.RecordDecision(
+        return new StagedDecisionWorkflow().Record(
+            settings,
+            logger,
+            service,
             RequireOption(args, "--staged-record-id"),
             RequireOption(args, "--decision"),
-            GetOption(args, "--expected-staged-hash"));
-        return CreateDecisionResponse(settings, logger, service, record, HasOption(args, "--verbose"));
+            GetOption(args, "--expected-staged-hash"),
+            "AIMonitor.Cli",
+            HasOption(args, "--verbose"));
     }
 
     private static object Accept(string[] args, MonitorSettings settings, IMonitorLogger logger, WorkflowEditService service)
@@ -259,46 +264,22 @@ internal static class Program
             throw new InvalidOperationException("No staged record exists for this file. Run edit stage first.");
         }
 
-        service.Accept(file, RequireOption(args, "--expected-hash"));
-        StagedEditRecord record = service.GetStagedRecord(status.LastStagedRecordId);
-        return CreateDecisionResponse(settings, logger, service, record, HasOption(args, "--verbose"));
+        return new StagedDecisionWorkflow().Record(
+            settings,
+            logger,
+            service,
+            status.LastStagedRecordId,
+            "accepted",
+            RequireExpectedStagedHash(args),
+            "AIMonitor.Cli",
+            HasOption(args, "--verbose"));
     }
 
-    private static ReviewDecisionWithIndexRefreshResult CreateDecisionResponse(
-        MonitorSettings settings,
-        IMonitorLogger logger,
-        WorkflowEditService service,
-        StagedEditRecord record,
-        bool verbose)
+    private static string RequireExpectedStagedHash(string[] args)
     {
-        PostAcceptIndexRefreshResult? indexRefresh = null;
-        if (record.Classification is "accepted" or "accepted-normalized")
-        {
-            indexRefresh = new PostAcceptIndexRefreshService().RebuildAfterAcceptedDecision(
-                settings,
-                logger,
-                record,
-                "AIMonitor.Cli");
-        }
-
-        StagedEditSummary summary = service.CreateSummary(record);
-        return new ReviewDecisionWithIndexRefreshResult
-        {
-            StagedRecordId = record.StagedRecordId,
-            WatchedFilePath = record.WatchedFilePath,
-            RelativePath = record.RelativePath,
-            Decision = record.Decision,
-            Classification = record.Classification,
-            Status = record.Status,
-            Message = record.Message,
-            StagedRecordSummary = summary,
-            StagedRecordPath = summary.RecordPath,
-            StagedRecord = verbose ? record : null,
-            IndexRefresh = indexRefresh,
-            NextStep = record.Classification is "accepted" or "accepted-normalized"
-                ? "Index was rebuilt after accept. Run edit refresh before further edits to this watched file."
-                : "Decision recorded. Do not rely on changed index rows unless an accepted decision rebuilt the index."
-        };
+        return GetOption(args, "--expected-staged-hash")
+            ?? GetOption(args, "--expected-hash")
+            ?? throw new InvalidOperationException("--expected-staged-hash is required when recording an accepted decision.");
     }
 
     private static int ExecuteJsonCommand<T>(string[] args, Func<T> command)
@@ -378,9 +359,7 @@ internal static class Program
                     ["databasePath"] = databasePath
                 });
 
-            SolutionIndexStore store = new(new SolutionIndexDatabase(databasePath));
-            SolutionIndexBuilder builder = new(new MSBuildWorkspaceLoader(), store);
-            SolutionIndexSummary summary = await builder.RebuildAsync(settings);
+            SolutionIndexSummary summary = await new SolutionIndexRebuildService().RebuildAsync(settings);
 
             logger.Write(
                 MonitorLogLevel.Information,

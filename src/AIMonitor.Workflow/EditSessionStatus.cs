@@ -18,6 +18,8 @@ public sealed class EditSessionStatus
 
     public bool RequiresRefresh { get; set; }
 
+    public bool IndexStale { get; set; }
+
     public string OriginalHash { get; set; } = string.Empty;
 
     public string StagedHash { get; set; } = string.Empty;

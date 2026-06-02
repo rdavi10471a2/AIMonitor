@@ -31,6 +31,7 @@ public sealed class WorkflowEditService
         }
 
         string workingFilePath = paths.GetWorkingFilePath(fullWatchedPath);
+        EditSessionManifest? previousManifest = LoadManifest(fullWatchedPath);
         Directory.CreateDirectory(Path.GetDirectoryName(workingFilePath) ?? ".");
         File.Copy(fullWatchedPath, workingFilePath, overwrite: true);
 
@@ -42,6 +43,7 @@ public sealed class WorkflowEditService
             OriginalHash = FileHash.Compute(fullWatchedPath),
             OriginalNormalizedHash = FileHash.ComputeNormalizedFile(fullWatchedPath),
             RequiresRefresh = false,
+            IndexStale = previousManifest?.IndexStale ?? false,
             RefreshedAtUtc = DateTimeOffset.UtcNow.ToString("O")
         };
         SaveManifest(fullWatchedPath, manifest);
@@ -96,6 +98,7 @@ public sealed class WorkflowEditService
             WorkingFileExists = File.Exists(workingFilePath),
             IsNewFile = manifest?.IsNewFile ?? false,
             RequiresRefresh = manifest?.RequiresRefresh ?? false,
+            IndexStale = manifest?.IndexStale ?? false,
             OriginalHash = manifest?.OriginalHash ?? string.Empty,
             LastDecision = manifest?.LastDecision ?? string.Empty,
             LastDecisionAtUtc = manifest?.LastDecisionAtUtc ?? string.Empty,
@@ -127,6 +130,13 @@ public sealed class WorkflowEditService
         {
             status.Classification = "refresh-required";
             status.Message = "Previous decision was accepted. Run edit refresh before editing or staging again so hashes and saved line endings reflect watched source.";
+            return status;
+        }
+
+        if (manifest.IndexStale)
+        {
+            status.Classification = "index-stale";
+            status.Message = "The watched file was accepted but the post-accept index rebuild has not completed successfully. Rebuild the solution index before trusting index queries.";
             return status;
         }
 
@@ -187,6 +197,48 @@ public sealed class WorkflowEditService
         status.Classification = accepted.Classification;
         status.Message = accepted.Message;
         return status;
+    }
+
+    public EditSessionStatus EnsureEditableSession(string watchedFilePath)
+    {
+        string fullWatchedPath = Path.GetFullPath(watchedFilePath);
+        EditSessionStatus status = GetStatus(fullWatchedPath);
+        if (!status.HasSession)
+        {
+            return File.Exists(fullWatchedPath)
+                ? Refresh(fullWatchedPath)
+                : NewFile(fullWatchedPath);
+        }
+
+        using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
+        EditSessionManifest manifest = LoadManifest(fullWatchedPath)
+            ?? throw new InvalidOperationException("No edit session exists for this file. Run edit refresh first.");
+        EnsureSessionCanEdit(manifest);
+        if (!File.Exists(manifest.WorkingFilePath))
+        {
+            throw new FileNotFoundException("Working candidate file was not found.", manifest.WorkingFilePath);
+        }
+
+        return GetStatus(fullWatchedPath);
+    }
+
+    public EditSessionStatus WriteWorkingCandidate(string watchedFilePath, string content)
+    {
+        string fullWatchedPath = Path.GetFullPath(watchedFilePath);
+        using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
+        EditSessionManifest manifest = LoadManifest(fullWatchedPath)
+            ?? throw new InvalidOperationException("No edit session exists for this file. Run edit refresh first.");
+        EnsureSessionCanEdit(manifest);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(manifest.WorkingFilePath) ?? ".");
+        string existingText = File.Exists(manifest.WorkingFilePath)
+            ? File.ReadAllText(manifest.WorkingFilePath)
+            : string.Empty;
+        string lineEnding = string.IsNullOrEmpty(existingText)
+            ? DetectDominantLineEnding(content)
+            : DetectDominantLineEnding(existingText);
+        File.WriteAllText(manifest.WorkingFilePath, NormalizeLineEndingsForFile(content, lineEnding));
+        return GetStatus(fullWatchedPath);
     }
 
     public ReplaceTextResult ReplaceText(
@@ -611,6 +663,24 @@ public sealed class WorkflowEditService
         };
     }
 
+    public static void EnsureRecordNotDecided(StagedEditRecord record)
+    {
+        if (IsTerminalDecision(record.Decision) || IsTerminalDecision(record.Classification))
+        {
+            string decision = !string.IsNullOrWhiteSpace(record.Decision)
+                ? record.Decision
+                : record.Classification;
+            throw new InvalidOperationException($"This staged record already has a final decision ({decision}). Refresh and stage a new candidate before launching or recording again.");
+        }
+    }
+
+    private static bool IsTerminalDecision(string value)
+    {
+        return value.Equals("accepted", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("accepted-normalized", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("rejected", StringComparison.OrdinalIgnoreCase);
+    }
+
     public StagedEditRecord RecordDiffLaunch(string stagedRecordId, bool launched, string message)
     {
         StagedEditRecord record = GetStagedRecord(stagedRecordId);
@@ -663,6 +733,7 @@ public sealed class WorkflowEditService
     public StagedEditRecord RecordDecision(string stagedRecordId, string decision, string? expectedStagedHash = null)
     {
         StagedEditRecord record = GetStagedRecord(stagedRecordId);
+        EnsureRecordNotDecided(record);
         if (!File.Exists(record.WatchedFilePath) && !record.IsNewFile)
         {
             throw new FileNotFoundException("Watched file was not found.", record.WatchedFilePath);
@@ -751,11 +822,26 @@ public sealed class WorkflowEditService
                 manifest.LastDecision = decision;
                 manifest.LastDecisionAtUtc = record.DecisionAtUtc;
                 manifest.RequiresRefresh = result.Classification is "accepted" or "accepted-normalized";
+                manifest.IndexStale = result.Classification is "accepted" or "accepted-normalized";
                 SaveManifest(record.WatchedFilePath, manifest);
             }
         }
 
         return record;
+    }
+
+    public void MarkIndexFresh(string watchedFilePath)
+    {
+        string fullWatchedPath = Path.GetFullPath(watchedFilePath);
+        using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
+        EditSessionManifest? manifest = LoadManifest(fullWatchedPath);
+        if (manifest is null || !manifest.IndexStale)
+        {
+            return;
+        }
+
+        manifest.IndexStale = false;
+        SaveManifest(fullWatchedPath, manifest);
     }
 
     private static string GetReviewedFilePath(StagedEditRecord record)
@@ -766,14 +852,20 @@ public sealed class WorkflowEditService
     public EditSessionStatus Accept(string watchedFilePath, string expectedStagedHash)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
-        EditSessionManifest manifest = LoadManifest(fullWatchedPath)
-            ?? throw new InvalidOperationException("No edit session exists for this file. Run edit refresh first.");
-        if (string.IsNullOrWhiteSpace(manifest.LastStagedRecordId))
+        string stagedRecordId;
+        using (IDisposable manifestLock = AcquireManifestLock(fullWatchedPath))
         {
-            throw new InvalidOperationException("No staged record exists for this file. Run edit stage first.");
+            EditSessionManifest manifest = LoadManifest(fullWatchedPath)
+                ?? throw new InvalidOperationException("No edit session exists for this file. Run edit refresh first.");
+            if (string.IsNullOrWhiteSpace(manifest.LastStagedRecordId))
+            {
+                throw new InvalidOperationException("No staged record exists for this file. Run edit stage first.");
+            }
+
+            stagedRecordId = manifest.LastStagedRecordId;
         }
 
-        StagedEditRecord record = GetStagedRecord(manifest.LastStagedRecordId);
+        StagedEditRecord record = GetStagedRecord(stagedRecordId);
         if (!record.StagedHash.Equals(expectedStagedHash, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("Staged record hash does not match --expected-hash.");
@@ -786,14 +878,20 @@ public sealed class WorkflowEditService
     public EditSessionStatus Reject(string watchedFilePath)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
-        EditSessionManifest manifest = LoadManifest(fullWatchedPath)
-            ?? throw new InvalidOperationException("No edit session exists for this file. Run edit refresh first.");
-        if (string.IsNullOrWhiteSpace(manifest.LastStagedRecordId))
+        string stagedRecordId;
+        using (IDisposable manifestLock = AcquireManifestLock(fullWatchedPath))
         {
-            throw new InvalidOperationException("No staged record exists for this file. Run edit stage first.");
+            EditSessionManifest manifest = LoadManifest(fullWatchedPath)
+                ?? throw new InvalidOperationException("No edit session exists for this file. Run edit refresh first.");
+            if (string.IsNullOrWhiteSpace(manifest.LastStagedRecordId))
+            {
+                throw new InvalidOperationException("No staged record exists for this file. Run edit stage first.");
+            }
+
+            stagedRecordId = manifest.LastStagedRecordId;
         }
 
-        RecordDecision(manifest.LastStagedRecordId, "rejected");
+        RecordDecision(stagedRecordId, "rejected");
         return GetStatus(fullWatchedPath);
     }
 
@@ -855,7 +953,7 @@ public sealed class WorkflowEditService
     {
         if (manifest.RequiresRefresh)
         {
-            throw new InvalidOperationException("Previous decision was accepted. Run edit refresh before editing or staging this file again.");
+            throw new InvalidOperationException("Previous decision was accepted. Run edit refresh or refresh_file before editing or staging this file again.");
         }
     }
 

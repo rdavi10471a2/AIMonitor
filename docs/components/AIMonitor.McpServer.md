@@ -35,6 +35,8 @@ Claude MCP tool call
 ## Does Not Own
 
 - Safe edit workflow logic.
+- Record-decision/post-accept index orchestration.
+- Roslyn editable-session guard semantics.
 - Index storage.
 - WinMerge process launch.
 

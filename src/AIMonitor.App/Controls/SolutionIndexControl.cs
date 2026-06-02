@@ -2,8 +2,8 @@ using System.ComponentModel;
 using System.Diagnostics;
 using AIMonitor.Core;
 using AIMonitor.Data;
+using AIMonitor.Indexing;
 using AIMonitor.Logging;
-using AIMonitor.MSBuild;
 
 namespace AIMonitor.App.Controls;
 
@@ -356,8 +356,7 @@ public sealed class SolutionIndexControl : UserControl
         try
         {
             logger?.Write(MonitorLogLevel.Information, "AIMonitor.App", "index.rebuild.started", "WinForms index rebuild started.");
-            SolutionIndexBuilder builder = new(new MSBuildWorkspaceLoader(), store);
-            SolutionIndexSummary summary = await builder.RebuildAsync(settings);
+            SolutionIndexSummary summary = await new SolutionIndexRebuildService().RebuildAsync(settings);
             logger?.Write(MonitorLogLevel.Information, "AIMonitor.App", "index.rebuild.completed", "WinForms index rebuild completed.");
             RefreshFromStore();
             SetStatus($"Indexed {summary.ProjectCount} projects, {summary.DocumentCount} documents, {summary.DiagnosticCount} diagnostics.");

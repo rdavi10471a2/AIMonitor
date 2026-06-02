@@ -16,6 +16,8 @@ public sealed class EditSessionManifest
 
     public bool RequiresRefresh { get; set; }
 
+    public bool IndexStale { get; set; }
+
     public string RefreshedAtUtc { get; set; } = string.Empty;
 
     public string LastDecision { get; set; } = string.Empty;

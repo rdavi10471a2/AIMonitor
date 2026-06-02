@@ -32,9 +32,7 @@ public sealed class PostAcceptIndexRefreshService
 
         try
         {
-            SolutionIndexStore store = new(new SolutionIndexDatabase(databasePath));
-            SolutionIndexBuilder builder = new(new MSBuildWorkspaceLoader(), store);
-            SolutionIndexSummary summary = builder.RebuildAsync(settings).GetAwaiter().GetResult();
+            SolutionIndexSummary summary = new SolutionIndexRebuildService().RebuildAsync(settings).GetAwaiter().GetResult();
             stopwatch.Stop();
             PostAcceptIndexRefreshResult result = new()
             {
@@ -47,6 +45,7 @@ public sealed class PostAcceptIndexRefreshService
                 DurationMs = stopwatch.ElapsedMilliseconds,
                 Message = "Post-accept solution index rebuild completed."
             };
+            new WorkflowEditService(settings).MarkIndexFresh(record.WatchedFilePath);
             logger.Write(
                 MonitorLogLevel.Information,
                 source,

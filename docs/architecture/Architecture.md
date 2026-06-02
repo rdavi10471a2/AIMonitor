@@ -14,11 +14,11 @@ AIMonitor starts from lessons learned in prior safe-edit monitor work:
 | Project | Responsibility |
 | --- | --- |
 | `AIMonitor.Core` | Shared settings, identities, and plain domain records. |
-| `AIMonitor.Data` | SQLite solution index built from the single watched solution path. |
+| `AIMonitor.Data` | SQLite solution index built from the single watched solution path; protects populated indexes from degraded empty snapshot replacement. |
 | `AIMonitor.Logging` | Unified structured log paths and JSON-lines event logging. |
 | `AIMonitor.Workflow` | Candidate staging, review classification, queues, ledgers, and recovery rules. |
 | `AIMonitor.MSBuild` | Solution/project loading, project graph, compile items, target frameworks, and diagnostics. |
-| `AIMonitor.Indexing` | Symbols, references, callers, relationships, and source maps from MSBuild-loaded projects. |
+| `AIMonitor.Indexing` | Solution index rebuild composition, post-accept index refresh, decision response orchestration, and index query/result surfaces. |
 | `AIMonitor.Runtime` | Build, test, process, diff, and external tool execution adapters. |
 | `AIMonitor.McpServer` | Combined MCP tool server hosted behind the WinForms-owned MCP proxy hub for interactive sessions, or launched directly by deterministic server tests. |
 | `AIMonitor.Cli` | Codex-friendly command adapter. |
@@ -31,7 +31,7 @@ The first real capability is loading SDK-style projects through `MSBuildWorkspac
 
 The first persisted capability is rebuilding the monitor-owned solution index from `Monitor:WatchedSolutionPath`.
 
-`AIMonitor.Data` owns the active SQLite solution index and durable monitor stores that exist today. Do not carry empty boundary projects; add new persistence boundaries only when there is real behavior and test coverage to justify them.
+`AIMonitor.Data` owns the active SQLite solution index and durable monitor stores that exist today. `AIMonitor.Indexing` owns rebuild and post-accept refresh orchestration over that store. Do not carry empty boundary projects; add new persistence boundaries only when there is real behavior and test coverage to justify them.
 
 ## Semantic Boundary
 

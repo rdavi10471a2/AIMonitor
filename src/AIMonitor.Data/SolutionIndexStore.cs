@@ -15,6 +15,11 @@ public sealed class SolutionIndexStore
     public SolutionIndexSummary SaveSnapshot(MSBuildSolutionSnapshot snapshot)
     {
         database.EnsureCreated();
+        SolutionIndexSummary previousSummary = GetSummary();
+        if (snapshot.Projects.Count == 0 && previousSummary.ProjectCount > 0)
+        {
+            throw new InvalidOperationException("Refusing to replace an existing solution index with a degraded zero-project snapshot.");
+        }
 
         using SqliteConnection connection = database.OpenConnection();
         using SqliteTransaction transaction = connection.BeginTransaction();

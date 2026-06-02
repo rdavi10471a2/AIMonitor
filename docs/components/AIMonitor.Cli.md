@@ -34,6 +34,7 @@ Codex / shell command
 ## Does Not Own
 
 - Workflow rules.
+- Record-decision/post-accept index orchestration.
 - Index query semantics.
 - WinMerge launch implementation.
 

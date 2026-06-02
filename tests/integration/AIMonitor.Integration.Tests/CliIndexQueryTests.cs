@@ -157,6 +157,9 @@ public sealed class CliIndexQueryTests
         using JsonDocument decisionDocument = JsonDocument.Parse(decision.StdOut);
         Assert.Equal("accepted", decisionDocument.RootElement.GetProperty("classification").GetString());
         Assert.Equal("rebuilt", decisionDocument.RootElement.GetProperty("indexRefresh").GetProperty("status").GetString());
+        Assert.Equal(
+            "Index was rebuilt after accept. Run edit refresh before further edits to this watched file.",
+            decisionDocument.RootElement.GetProperty("nextStep").GetString());
         Assert.Contains("changed", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
 
         CliResult postAcceptStatus = await RunCliAsync(
@@ -241,7 +244,7 @@ public sealed class CliIndexQueryTests
             "accept",
             "--file",
             fixture.ProgramFilePath,
-            "--expected-hash",
+            "--expected-staged-hash",
             stagedHash,
             "--repo-root",
             fixture.RepositoryRoot,
