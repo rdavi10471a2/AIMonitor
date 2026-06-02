@@ -52,14 +52,22 @@ Codex Cloud's own PR-#10 follow-up review caught a **deeper** race than this rev
   lock-window (check-then-write on a single manifest) — and it is. It **missed the wider rebuild-duration race.** Codex's
   review caught it. (Second time the cloud review out-caught this review on the index-stale path; the first was the
   per-file-vs-solution-wide flag clear.)
-- **Triage (decision 0002):** this failure is **invisible-in-diff** (index-state layer; the operator sees nothing at
-  WinMerge), so by our own rule it is a legitimate **must-harden**, not a soft/by-design item — even though it is
-  **low probability** in the intended single-active-agent-per-project model (it requires overlapping a full rebuild with
-  a concurrent same-project accept). Correctly rated low priority; should be fixed before calling stale-index recovery
-  "fully hardened."
-- **Fix shape (from the TODO):** snapshot-based clear — capture stale manifests + a decision marker
-  (`WatchedFilePath` / `LastDecisionAtUtc` / `LastStagedRecordId`) before the rebuild, and after success clear only the
-  manifests whose marker is unchanged; anything that went stale (or changed marker) during the rebuild stays stale.
+- **Triage + reachability (operator-reviewed, corrected):** invisible-in-diff (index-state; nothing shows at WinMerge),
+  so by decision 0002 it is not a soft/by-design item. **But it is reachable only by overlapping a rebuild with a
+  concurrent accept**, and a single agent's post-accept rebuild is synchronous/blocking — so the *only* trigger is the
+  operator manually hitting the App rebuild button / `refresh_solution_index` (a different process) while an agent is
+  mid-accept. That is off the single-active-agent path — a one-in-a-million operator action. **Practical risk:
+  negligible.**
+- **Root-cause reframing — fix the parallelism, not the clear (this corrects an earlier-too-generous endorsement of the
+  marker fix).** `AcquireManifestLock` is a cross-process file lock but **per-file and short-held**, so it makes manifest
+  writes atomic but does **not** serialize a rebuild against an accept — the failure is an *ordering* problem (the
+  committed snapshot predates the accept), which a per-file write-lock cannot catch. So the defect is that rebuild ∥
+  accept is *allowed*, not `MarkAllIndexesFresh`'s logic. Preferred resolutions: **(1) confirm-and-close** — accept the
+  single-active-agent contract and document that a manual rebuild must not overlap a decision (consistent with the
+  LIFECYCLE-5 recalibration and decision 0002); or **(2) serialize** — a solution-wide rebuild lock spanning the whole
+  rebuild + clear that the accept's stale-set also acquires, making overlap structurally impossible. Codex's
+  snapshot-marker patch *tolerates* the parallelism — machinery for a state the single-active-agent model forbids — and
+  is the symptom-fix, not the root-fix. Reframing published to `IndexStaleRebuildRaceTodo-2026-06-02.md`.
 
 ## Optional cleanup nits (low/clarity, diff-visible — not must-harden)
 
