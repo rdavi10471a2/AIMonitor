@@ -337,7 +337,7 @@ public sealed class AIMonitorTools
     }
 
     [McpServerTool]
-    [Description("Return indexed symbol relationship rows for one stable symbol key. AIMonitor V2 currently returns an empty compatibility set until relationship rows are added to the shared index schema.")]
+    [Description("Return indexed symbol relationship rows for one stable symbol key. AIMonitor currently returns an empty compatibility set until relationship rows are added to the shared index schema.")]
     public object FindIndexedRelationships(
         [Description("Stable symbol key returned by query_solution_index, find_indexed_symbols, or get_indexed_symbol.")] string stableSymbolKey,
         [Description("Optional exact relationship kind filter.")] string? relationshipKind = null,
@@ -1030,7 +1030,7 @@ public sealed class AIMonitorTools
         runtimeState.Touch();
         return new AIMonitorCompatibilityResult(
             "not-pruned",
-            "AIMonitor V2 currently keeps workflow history until an explicit UI/operator cleanup flow is implemented.",
+            "AIMonitor currently keeps workflow history until an explicit UI/operator cleanup flow is implemented.",
             new Dictionary<string, string?> { ["retentionDays"] = retentionDays.ToString() });
     }
 
@@ -1178,7 +1178,7 @@ public sealed class AIMonitorTools
     {
         return new AIMonitorCompatibilityResult(
             "not-implemented",
-            $"{toolName} is part of the MonitorBaseClaude semantic edit surface. AIMonitor has not ported that Roslyn edit service yet; use submit_file, replace_text_in_file, or replace_span_in_file against the monitor-owned Working candidate.",
+            $"{toolName} is not available in the current AIMonitor MCP surface; use submit_file, replace_text_in_file, or replace_span_in_file against the monitor-owned Working candidate.",
             new Dictionary<string, string?>
             {
                 ["path"] = path,

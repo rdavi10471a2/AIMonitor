@@ -37,5 +37,5 @@ These earlier smoke areas are Claude/MCP/model specific and should not be ported
 - Claude model/tool-routing smokes.
 - Model routing drills.
 - Legacy source-map budget/tool smokes tied to old Claude MCP responses.
-- Serial human review queue enforcement, unless AIMonitor later adds a Codex queue abstraction. MCP session staging is covered; old Claude queue semantics are not a V2 contract.
+- Serial human review queue enforcement, unless AIMonitor later adds a Codex queue abstraction. MCP session staging is covered; old Claude queue semantics are not a current AIMonitor contract.
 - Ollama-specific routing and fake-router drills.
