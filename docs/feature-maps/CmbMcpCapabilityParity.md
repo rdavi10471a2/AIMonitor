@@ -81,8 +81,9 @@ The items below are the hand-verified restore set from the finding. They are saf
 
 - **Owner:** Workflow
 - **Adapter surface:** MCP workflow tools, possible CLI overlap
-- **Current status:** Missing
+- **Current status:** Initial restore implemented
 - **Required proof:** Staged records persist session identity; `list_session_staged_records` returns only that session's records.
+- **Proof added:** `StagedEditRecord` and `StagedEditSummary` carry `SessionId`; MCP `stage_candidate_for_review` persists the supplied session id through shared Workflow; `list_session_staged_records` filters by persisted session. Workflow tests prove session filtering, and the MCP multi-file smoke proves another session's staged record is excluded.
 
 ### CMB-PARITY-008 — Source-Map Density And Budget
 
@@ -110,8 +111,9 @@ The items below are the hand-verified restore set from the finding. They are saf
 
 - **Owner:** Workflow
 - **Adapter surface:** MCP and CLI staging/decision overlap
-- **Current status:** Missing
+- **Current status:** Initial restore implemented
 - **Required proof:** Same-file restaging archives or blocks older staged records; accept/reject handles superseded records explicitly.
+- **Proof added:** Same-file restaging marks older non-terminal records `superseded` with `SupersededByStagedRecordId` after the replacement staged record is ready. Superseded records are rejected by shared validation, launch, and decision paths. Workflow tests prove old records cannot launch or record decisions.
 
 ### CMB-PARITY-012 — Real Tool Manifest And Staging Guide
 

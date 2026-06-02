@@ -4,11 +4,15 @@ public sealed class StagedEditSummary
 {
     public string StagedRecordId { get; set; } = string.Empty;
 
+    public string SessionId { get; set; } = string.Empty;
+
     public string WatchedFilePath { get; set; } = string.Empty;
 
     public string RelativePath { get; set; } = string.Empty;
 
     public string Status { get; set; } = string.Empty;
+
+    public string SupersededByStagedRecordId { get; set; } = string.Empty;
 
     public string Decision { get; set; } = string.Empty;
 

@@ -111,6 +111,70 @@ public sealed class WorkflowEditServiceSafetyTests
     }
 
     [Fact]
+    public void Restaging_same_file_supersedes_prior_active_record()
+    {
+        WorkflowFixture fixture = CreateFixture();
+        WorkflowEditService service = new(fixture.Settings);
+        EditSessionStatus refresh = service.Refresh(fixture.ProgramFilePath);
+        File.WriteAllText(refresh.WorkingFilePath, "namespace Example { internal static class Program { public static string Value => \"first\"; } }");
+
+        StagedEditRecord first = service.Stage(fixture.ProgramFilePath, sessionId: "session-a");
+        File.WriteAllText(refresh.WorkingFilePath, "namespace Example { internal static class Program { public static string Value => \"second\"; } }");
+
+        StagedEditRecord second = service.Stage(fixture.ProgramFilePath, sessionId: "session-a");
+        StagedEditRecord superseded = service.GetStagedRecord(first.StagedRecordId);
+
+        Assert.Equal("superseded", superseded.Status);
+        Assert.Equal("superseded", superseded.Classification);
+        Assert.Equal(second.StagedRecordId, superseded.SupersededByStagedRecordId);
+        Assert.Equal("staged", second.Status);
+        Assert.Equal("session-a", second.SessionId);
+    }
+
+    [Fact]
+    public void Superseded_record_cannot_launch_or_record_decision()
+    {
+        WorkflowFixture fixture = CreateFixture();
+        WorkflowEditService service = new(fixture.Settings);
+        EditSessionStatus refresh = service.Refresh(fixture.ProgramFilePath);
+        File.WriteAllText(refresh.WorkingFilePath, "namespace Example { internal static class Program { public static string Value => \"first\"; } }");
+        StagedEditRecord first = service.Stage(fixture.ProgramFilePath, sessionId: "session-a");
+        File.WriteAllText(refresh.WorkingFilePath, "namespace Example { internal static class Program { public static string Value => \"second\"; } }");
+        service.Stage(fixture.ProgramFilePath, sessionId: "session-a");
+
+        InvalidOperationException launch = Assert.Throws<InvalidOperationException>(() =>
+            service.RecordDiffLaunch(first.StagedRecordId, launched: true, "old launch"));
+        InvalidOperationException decision = Assert.Throws<InvalidOperationException>(() =>
+            service.RecordDecision(first.StagedRecordId, "rejected"));
+
+        Assert.Contains("superseded", launch.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("superseded", decision.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ListStagedRecords_filters_by_session()
+    {
+        WorkflowFixture fixture = CreateFixture();
+        WorkflowEditService service = new(fixture.Settings);
+        EditSessionStatus refresh = service.Refresh(fixture.ProgramFilePath);
+        File.WriteAllText(refresh.WorkingFilePath, "namespace Example { internal static class Program { public static string Value => \"first\"; } }");
+        StagedEditRecord first = service.Stage(fixture.ProgramFilePath, sessionId: "session-a");
+
+        string secondFile = Path.Combine(Path.GetDirectoryName(fixture.ProgramFilePath)!, "Other.cs");
+        File.WriteAllText(secondFile, "namespace Example { internal static class Other { } }");
+        EditSessionStatus secondRefresh = service.Refresh(secondFile);
+        File.WriteAllText(secondRefresh.WorkingFilePath, "namespace Example { internal static class Other { public static string Value => \"other\"; } }");
+        StagedEditRecord second = service.Stage(secondFile, sessionId: "session-b");
+
+        IReadOnlyList<StagedEditRecord> sessionA = service.ListStagedRecords("session-a");
+        IReadOnlyList<StagedEditRecord> sessionB = service.ListStagedRecords("session-b");
+
+        Assert.Contains(sessionA, record => record.StagedRecordId == first.StagedRecordId);
+        Assert.DoesNotContain(sessionA, record => record.StagedRecordId == second.StagedRecordId);
+        Assert.Contains(sessionB, record => record.StagedRecordId == second.StagedRecordId);
+    }
+
+    [Fact]
     public void Stage_blocks_after_accept_until_refresh()
     {
         WorkflowFixture fixture = CreateFixture();

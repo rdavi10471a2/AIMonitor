@@ -990,6 +990,48 @@ public sealed class McpServerSmokeTests
         Assert.Contains(helperStagedRecordId, sessionRecordsJson, StringComparison.Ordinal);
         Assert.Contains(programStagedRecordId, sessionRecordsJson, StringComparison.Ordinal);
 
+        string outsiderFilePath = Path.Combine(Path.GetDirectoryName(fixture.ProgramFilePath)!, "Outsider.cs");
+        await File.WriteAllTextAsync(
+            outsiderFilePath,
+            "namespace Example { internal static class Outsider { } }");
+        CallToolResult outsiderSession = await client.CallToolAsync(
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["purpose"] = "session isolation"
+            });
+        string outsiderSessionId = ExtractJsonString(ExtractToolText(outsiderSession), "sessionId");
+        CallToolResult outsiderSubmit = await client.CallToolAsync(
+            "submit_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = outsiderFilePath,
+                ["content"] = "namespace Example { internal static class Outsider { public static string Value => \"outside\"; } }",
+                ["sessionId"] = outsiderSessionId
+            });
+        Assert.False(outsiderSubmit.IsError == true);
+        CallToolResult outsiderStage = await client.CallToolAsync(
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = outsiderFilePath,
+                ["ledgerSummary"] = "mcp session outsider",
+                ["sessionId"] = outsiderSessionId
+            });
+        Assert.False(outsiderStage.IsError == true);
+        string outsiderStagedRecordId = ExtractJsonString(ExtractToolText(outsiderStage), "stagedRecordId");
+
+        sessionRecords = await client.CallToolAsync(
+            "list_session_staged_records",
+            new Dictionary<string, object?>
+            {
+                ["sessionId"] = sessionId
+            });
+        sessionRecordsJson = ExtractToolText(sessionRecords);
+        Assert.Contains(helperStagedRecordId, sessionRecordsJson, StringComparison.Ordinal);
+        Assert.Contains(programStagedRecordId, sessionRecordsJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(outsiderStagedRecordId, sessionRecordsJson, StringComparison.Ordinal);
+
         CallToolResult helperLaunch = await client.CallToolAsync(
             "launch_staged_diff",
             new Dictionary<string, object?>

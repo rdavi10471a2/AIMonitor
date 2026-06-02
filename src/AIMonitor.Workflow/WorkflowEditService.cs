@@ -558,7 +558,7 @@ public sealed class WorkflowEditService
         };
     }
 
-    public StagedEditRecord Stage(string watchedFilePath, string? ledgerSummary = null)
+    public StagedEditRecord Stage(string watchedFilePath, string? ledgerSummary = null, string? sessionId = null)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
         using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
@@ -604,6 +604,7 @@ public sealed class WorkflowEditService
         StagedEditRecord record = new()
         {
             StagedRecordId = stagedRecordId,
+            SessionId = sessionId ?? string.Empty,
             WatchedFilePath = fullWatchedPath,
             WorkingFilePath = manifest.WorkingFilePath,
             StagedFilePath = stagedFilePath,
@@ -623,6 +624,7 @@ public sealed class WorkflowEditService
             LastCompareSnapshotPath = compare.ProposedSnapshotPath,
             LastLedgerPath = compare.LedgerPath
         };
+        SupersedeActiveRecordsForFile(fullWatchedPath, stagedRecordId);
         SaveStagedRecord(record);
 
         manifest.LastStagedRecordId = stagedRecordId;
@@ -650,9 +652,11 @@ public sealed class WorkflowEditService
         return new StagedEditSummary
         {
             StagedRecordId = record.StagedRecordId,
+            SessionId = record.SessionId,
             WatchedFilePath = record.WatchedFilePath,
             RelativePath = record.RelativePath,
             Status = record.Status,
+            SupersededByStagedRecordId = record.SupersededByStagedRecordId,
             Decision = record.Decision,
             Classification = record.Classification,
             StagedHash = record.StagedHash,
@@ -665,6 +669,11 @@ public sealed class WorkflowEditService
 
     public static void EnsureRecordNotDecided(StagedEditRecord record)
     {
+        if (IsSuperseded(record))
+        {
+            throw new InvalidOperationException($"This staged record was superseded by {record.SupersededByStagedRecordId}. Use the latest staged record for this file.");
+        }
+
         if (IsTerminalDecision(record.Decision) || IsTerminalDecision(record.Classification))
         {
             string decision = !string.IsNullOrWhiteSpace(record.Decision)
@@ -678,12 +687,21 @@ public sealed class WorkflowEditService
     {
         return value.Equals("accepted", StringComparison.OrdinalIgnoreCase)
             || value.Equals("accepted-normalized", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("rejected", StringComparison.OrdinalIgnoreCase);
+            || value.Equals("rejected", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("superseded", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSuperseded(StagedEditRecord record)
+    {
+        return record.Status.Equals("superseded", StringComparison.OrdinalIgnoreCase)
+            || record.Classification.Equals("superseded", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrWhiteSpace(record.SupersededByStagedRecordId);
     }
 
     public StagedEditRecord RecordDiffLaunch(string stagedRecordId, bool launched, string message)
     {
         StagedEditRecord record = GetStagedRecord(stagedRecordId);
+        EnsureRecordNotDecided(record);
         record.LaunchStatus = launched ? "launched" : "not-launched";
         record.LaunchMessage = message;
         record.LaunchedAtUtc = DateTimeOffset.UtcNow.ToString("O");
@@ -694,6 +712,7 @@ public sealed class WorkflowEditService
     public StagedEditRecord RecordPreMergeValidation(string stagedRecordId, PreMergeValidationResult validation, bool forceApproved)
     {
         StagedEditRecord record = GetStagedRecord(stagedRecordId);
+        EnsureRecordNotDecided(record);
         record.PreMergeValidationStatus = validation.Status;
         record.PreMergeValidationIsError = validation.IsError;
         record.PreMergeValidationForceApproved = validation.IsError && forceApproved;
@@ -706,6 +725,7 @@ public sealed class WorkflowEditService
     public StagedEditRecord PrepareReviewFileForLaunch(string stagedRecordId)
     {
         StagedEditRecord record = GetStagedRecord(stagedRecordId);
+        EnsureRecordNotDecided(record);
         if (!record.IsNewFile)
         {
             return record;
@@ -985,6 +1005,56 @@ public sealed class WorkflowEditService
         string recordPath = paths.GetStagedRecordPath(record.StagedRecordId);
         Directory.CreateDirectory(Path.GetDirectoryName(recordPath) ?? ".");
         File.WriteAllText(recordPath, JsonSerializer.Serialize(record, JsonOptions));
+    }
+
+    public IReadOnlyList<StagedEditRecord> ListStagedRecords(string? sessionId = null)
+    {
+        if (!Directory.Exists(paths.StagedRecordsRoot))
+        {
+            return [];
+        }
+
+        IEnumerable<StagedEditRecord> records = Directory
+            .EnumerateFiles(paths.StagedRecordsRoot, "*.json")
+            .Select(path =>
+            {
+                try
+                {
+                    return JsonSerializer.Deserialize<StagedEditRecord>(File.ReadAllText(path), JsonOptions);
+                }
+                catch (JsonException)
+                {
+                    return null;
+                }
+            })
+            .Where(record => record is not null)
+            .Select(record => record!);
+
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            records = records.Where(record => record.SessionId.Equals(sessionId, StringComparison.Ordinal));
+        }
+
+        return records
+            .OrderByDescending(record => record.CreatedAtUtc, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private void SupersedeActiveRecordsForFile(string fullWatchedPath, string supersededByStagedRecordId)
+    {
+        foreach (StagedEditRecord record in ListStagedRecords()
+            .Where(record => record.WatchedFilePath.Equals(fullWatchedPath, StringComparison.OrdinalIgnoreCase))
+            .Where(record => !IsTerminalDecision(record.Decision))
+            .Where(record => !IsTerminalDecision(record.Classification))
+            .Where(record => !IsSuperseded(record)))
+        {
+            record.Status = "superseded";
+            record.Classification = "superseded";
+            record.SupersededByStagedRecordId = supersededByStagedRecordId;
+            record.SupersededAtUtc = DateTimeOffset.UtcNow.ToString("O");
+            record.Message = "A newer staged candidate for the same watched file superseded this record.";
+            SaveStagedRecord(record);
+        }
     }
 
     private IDisposable AcquireManifestLock(string watchedFilePath)

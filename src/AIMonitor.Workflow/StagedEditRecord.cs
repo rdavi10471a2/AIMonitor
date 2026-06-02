@@ -4,6 +4,8 @@ public sealed class StagedEditRecord
 {
     public string StagedRecordId { get; set; } = string.Empty;
 
+    public string SessionId { get; set; } = string.Empty;
+
     public string WatchedFilePath { get; set; } = string.Empty;
 
     public string WorkingFilePath { get; set; } = string.Empty;
@@ -27,6 +29,10 @@ public sealed class StagedEditRecord
     public string CreatedAtUtc { get; set; } = string.Empty;
 
     public string Status { get; set; } = string.Empty;
+
+    public string SupersededByStagedRecordId { get; set; } = string.Empty;
+
+    public string SupersededAtUtc { get; set; } = string.Empty;
 
     public string Decision { get; set; } = string.Empty;
 

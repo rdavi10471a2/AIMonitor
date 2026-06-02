@@ -386,13 +386,13 @@ public sealed class AIMonitorTools
     }
 
     [McpServerTool]
-    [Description("List staged edit records visible to a durable monitor session. AIMonitor currently reports all runtime staged records because staged records do not yet persist a session id.")]
+    [Description("List staged edit records owned by a durable monitor session.")]
     public IReadOnlyList<StagedEditRecord> ListSessionStagedRecords(
         [Description("Session handle returned by start_monitor_session.")] string sessionId)
     {
         runtimeState.Touch();
         _ = GetMonitorSession(sessionId);
-        return ListStagedRecords();
+        return workflowService.ListStagedRecords(sessionId);
     }
 
     [McpServerTool]
@@ -691,7 +691,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         _ = manifestJson;
-        StagedEditRecord record = workflowService.Stage(ResolveWatchedPath(path), ledgerSummary);
+        StagedEditRecord record = workflowService.Stage(ResolveWatchedPath(path), ledgerSummary, sessionId);
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
             RecordMonitorSessionEvent(sessionId, "stage-candidate-for-review", record.StagedRecordId, JsonSerializer.Serialize(record, JsonOptions));
@@ -1097,18 +1097,6 @@ public sealed class AIMonitorTools
     private string GetSessionPath(string sessionId)
     {
         return Path.Combine(SessionRoot, $"{Sanitize(sessionId)}.json");
-    }
-
-    private IReadOnlyList<StagedEditRecord> ListStagedRecords()
-    {
-        return Directory.Exists(workflowPaths.StagedRecordsRoot)
-            ? Directory.EnumerateFiles(workflowPaths.StagedRecordsRoot, "*.json")
-                .Select(path => JsonSerializer.Deserialize<StagedEditRecord>(File.ReadAllText(path), JsonOptions))
-                .Where(record => record is not null)
-                .Select(record => record!)
-                .OrderByDescending(record => record.CreatedAtUtc, StringComparer.Ordinal)
-                .ToArray()
-            : [];
     }
 
     private void RecordRoslynSessionEvent(string? sessionId, string eventType, RoslynEditResult result)
