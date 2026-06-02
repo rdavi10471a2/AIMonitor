@@ -157,10 +157,13 @@ public sealed class AIMonitorTools
 
     [McpServerTool]
     [Description("Rebuild the monitor-owned SQLite index for the watched solution.")]
-    public async Task<SolutionIndexSummary> RefreshSolutionIndex()
+    public async Task<AIMonitorRefreshIndexResult> RefreshSolutionIndex()
     {
         runtimeState.Touch();
-        return await new SolutionIndexRebuildService().RebuildAsync(settings);
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        SolutionIndexSummary summary = await new SolutionIndexRebuildService().RebuildAsync(settings);
+        stopwatch.Stop();
+        return new AIMonitorRefreshIndexResult(summary, queryService.GetMonitorStatus(), stopwatch.ElapsedMilliseconds);
     }
 
     [McpServerTool]
@@ -169,11 +172,15 @@ public sealed class AIMonitorTools
         [Description("Watched C# file path, absolute or relative to the watched solution folder.")] string path)
     {
         runtimeState.Touch();
-        SolutionIndexSummary summary = await RefreshSolutionIndex();
+        AIMonitorRefreshIndexResult refresh = await RefreshSolutionIndex();
+        IndexedFileDetailResult detail = queryService.GetFileDetail(path);
         return new AIMonitorRefreshIndexFileResult(
-            summary,
-            queryService.ListDocuments(filePath: ResolveWatchedPath(path)).ToArray(),
-            queryService.ListSymbols(filePath: ResolveWatchedPath(path)).ToArray());
+            refresh.Summary,
+            refresh.Status,
+            refresh.ElapsedMilliseconds,
+            detail,
+            detail.Files,
+            detail.Symbols);
     }
 
     [McpServerTool]
@@ -238,26 +245,14 @@ public sealed class AIMonitorTools
 
     [McpServerTool]
     [Description("Find indexed C# symbols by name text, optional kind, and optional exact namespace using the monitor-owned watched solution index.")]
-    public IReadOnlyList<IndexedSymbolRow> FindIndexedSymbols(
+    public IndexedSymbolSearchResult FindIndexedSymbols(
         [Description("Symbol name text to search for.")] string text,
         [Description("Optional exact symbol kind, such as class, method, property, field, constructor, enum, delegate, interface, struct, or record.")] string? kind = null,
         [Description("Optional exact namespace filter.")] string? namespaceName = null,
         [Description("Maximum symbols to return.")] int maxResults = 100)
     {
         runtimeState.Touch();
-        IEnumerable<IndexedSymbolRow> symbols = queryService.ListSymbols()
-            .Where(symbol => symbol.Name.Contains(text, StringComparison.OrdinalIgnoreCase));
-        if (!string.IsNullOrWhiteSpace(kind))
-        {
-            symbols = symbols.Where(symbol => symbol.Kind.Equals(kind, StringComparison.OrdinalIgnoreCase));
-        }
-
-        if (!string.IsNullOrWhiteSpace(namespaceName))
-        {
-            symbols = symbols.Where(symbol => symbol.Namespace.Equals(namespaceName, StringComparison.Ordinal));
-        }
-
-        return symbols.Take(maxResults).ToArray();
+        return queryService.FindSymbols(text, kind, namespaceName, maxResults);
     }
 
     [McpServerTool]
@@ -271,7 +266,9 @@ public sealed class AIMonitorTools
             return error;
         }
 
-        return queryService.ListSymbols().FirstOrDefault(symbol => symbol.StableKey.Equals(stableSymbolKey, StringComparison.Ordinal));
+        return queryService.FindSymbols(string.Empty, maxResults: 50000)
+            .Symbols
+            .FirstOrDefault(symbol => symbol.Symbol.StableKey.Equals(stableSymbolKey, StringComparison.Ordinal));
     }
 
     [McpServerTool]
@@ -1278,8 +1275,16 @@ public sealed record AIMonitorSelfCheckResult(
 
 public sealed record AIMonitorRefreshIndexFileResult(
     SolutionIndexSummary Summary,
+    MonitorStatusResult Status,
+    long ElapsedMilliseconds,
+    IndexedFileDetailResult Detail,
     IReadOnlyList<IndexedDocumentRow> Files,
     IReadOnlyList<IndexedSymbolRow> Symbols);
+
+public sealed record AIMonitorRefreshIndexResult(
+    SolutionIndexSummary Summary,
+    MonitorStatusResult Status,
+    long ElapsedMilliseconds);
 
 public sealed record AIMonitorRefreshFileAndIndexResult(
     EditSessionStatus Refresh,

@@ -1,5 +1,6 @@
 using AIMonitor.Core;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace AIMonitor.Data;
 
@@ -158,6 +159,33 @@ public sealed class SolutionIndexQueryService
         return rows.ToList();
     }
 
+    public IndexedSymbolSearchResult FindSymbols(
+        string text,
+        string? kind = null,
+        string? namespaceName = null,
+        int maxResults = 100)
+    {
+        IEnumerable<IndexedSymbolRow> symbols = ListSymbols()
+            .Where(symbol => symbol.Name.Contains(text, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(kind))
+        {
+            symbols = symbols.Where(symbol => symbol.Kind.Equals(kind, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(namespaceName))
+        {
+            symbols = symbols.Where(symbol => symbol.Namespace.Equals(namespaceName, StringComparison.Ordinal));
+        }
+
+        IndexedSymbolRow[] matchedSymbols = symbols.ToArray();
+        (int clampedLimit, bool limitClamped) = ClampLimit(maxResults, MaxSymbolLimit);
+        return new IndexedSymbolSearchResult(
+            matchedSymbols.Take(clampedLimit).Select(ToQueryItem).ToArray(),
+            matchedSymbols.Length,
+            clampedLimit,
+            limitClamped);
+    }
+
     public IReadOnlyList<IndexedReferenceRow> ListReferences(string? stableKey = null)
     {
         return store.ListReferences(stableKey);
@@ -188,6 +216,40 @@ public sealed class SolutionIndexQueryService
             .ToList();
     }
 
+    public IndexedFileDetailResult GetFileDetail(string path)
+    {
+        string fullPath = ResolveWatchedPath(path);
+        IReadOnlyList<IndexedDocumentRow> files = ListDocuments(filePath: fullPath);
+        IReadOnlyList<IndexedSymbolRow> symbols = ListSymbols(filePath: fullPath);
+        IReadOnlyList<IndexedReferenceRow> references = ListReferencesInFile(fullPath);
+        bool fileExists = File.Exists(fullPath);
+        string currentHash = fileExists ? ComputeFileHash(fullPath) : string.Empty;
+        long length = fileExists ? new FileInfo(fullPath).Length : 0;
+        DateTime lastWriteTimeUtc = fileExists ? File.GetLastWriteTimeUtc(fullPath) : DateTime.MinValue;
+        bool isIndexed = files.Count > 0;
+        bool isStale = isIndexed && files.Any(file =>
+            !string.IsNullOrWhiteSpace(file.ContentHash)
+            && !file.ContentHash.Equals(currentHash, StringComparison.OrdinalIgnoreCase));
+        string parseStatus = !fileExists
+            ? "missing"
+            : isIndexed ? "indexed" : "not-indexed";
+
+        return new IndexedFileDetailResult(
+            path,
+            fullPath,
+            fileExists,
+            length,
+            lastWriteTimeUtc,
+            currentHash,
+            parseStatus,
+            isIndexed,
+            isStale,
+            null,
+            files,
+            symbols,
+            references);
+    }
+
     public IReadOnlyList<IndexedPackageReferenceRow> ListPackageReferences()
     {
         return store.ListPackageReferences();
@@ -206,8 +268,19 @@ public sealed class SolutionIndexQueryService
         }
 
         using FileStream stream = File.OpenRead(document.FilePath);
-        string currentHash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        string currentHash = ComputeHash(stream);
         return !currentHash.Equals(document.ContentHash, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ComputeFileHash(string filePath)
+    {
+        using FileStream stream = File.OpenRead(filePath);
+        return ComputeHash(stream);
+    }
+
+    private static string ComputeHash(Stream stream)
+    {
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
     private string ResolveWatchedPath(string path)
@@ -249,5 +322,18 @@ public sealed class SolutionIndexQueryService
     {
         int clamped = Math.Clamp(requested, 0, maximum);
         return (clamped, clamped != requested);
+    }
+
+    private IndexedSymbolQueryItem ToQueryItem(IndexedSymbolRow symbol)
+    {
+        string relativePath = Path.GetRelativePath(settings.WatchedProjectFolder, symbol.FilePath);
+        string selectorHintJson = JsonSerializer.Serialize(new
+        {
+            containingNamespace = symbol.Namespace,
+            containingType = symbol.ContainingType,
+            memberKind = symbol.Kind,
+            name = symbol.Name
+        }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return new IndexedSymbolQueryItem(symbol, relativePath, selectorHintJson);
     }
 }

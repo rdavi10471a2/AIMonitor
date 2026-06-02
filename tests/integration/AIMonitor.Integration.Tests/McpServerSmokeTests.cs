@@ -122,6 +122,21 @@ public sealed class McpServerSmokeTests
         string symbolsJson = ExtractToolText(symbols);
         Assert.Contains(fixture.ProgramSymbolStableKey, symbolsJson, StringComparison.Ordinal);
         Assert.Contains("Program.cs", symbolsJson, StringComparison.Ordinal);
+        Assert.Equal(1, ExtractJsonInt(symbolsJson, "totalSymbolCount"));
+        Assert.Equal(100, ExtractJsonInt(symbolsJson, "maxResults"));
+        Assert.Contains("selectorHintJson", symbolsJson, StringComparison.Ordinal);
+
+        CallToolResult clampedSymbols = await client.CallToolAsync(
+            "find_indexed_symbols",
+            new Dictionary<string, object?>
+            {
+                ["text"] = "Program",
+                ["maxResults"] = 1000000
+            });
+        Assert.False(clampedSymbols.IsError == true);
+        string clampedSymbolsJson = ExtractToolText(clampedSymbols);
+        Assert.Equal(50000, ExtractJsonInt(clampedSymbolsJson, "maxResults"));
+        Assert.True(ExtractJsonBool(clampedSymbolsJson, "limitClamped"));
 
         string logPath = Path.Combine(fixture.RuntimeRoot, "logs", "aimonitor.ndjson");
         Assert.True(File.Exists(logPath));
@@ -288,6 +303,33 @@ public sealed class McpServerSmokeTests
         Assert.Contains("\"relationshipKind\":\"partial_declaration\"", relationshipsJson, StringComparison.Ordinal);
         Assert.Contains("\"sourceStableKey\":\"symbol:program\"", relationshipsJson, StringComparison.Ordinal);
         Assert.Contains("\"targetStableKey\":\"symbol:program\"", relationshipsJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Mcp_refresh_solution_index_file_returns_timing_and_per_file_detail()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+
+        CallToolResult refresh = await client.CallToolAsync(
+            "refresh_solution_index_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath
+            });
+
+        Assert.False(refresh.IsError == true);
+        string refreshJson = ExtractToolText(refresh);
+        Assert.Contains("\"summary\"", refreshJson, StringComparison.Ordinal);
+        Assert.Contains("\"status\"", refreshJson, StringComparison.Ordinal);
+        Assert.Contains("\"detail\"", refreshJson, StringComparison.Ordinal);
+        Assert.Contains("\"sha256\"", refreshJson, StringComparison.Ordinal);
+        Assert.Equal(1, ExtractJsonInt(refreshJson, "projectCount"));
+        Assert.Equal(1, ExtractJsonInt(refreshJson, "documentCount"));
+        Assert.True(ExtractJsonInt(refreshJson, "elapsedMilliseconds") >= 0);
+        Assert.Equal("indexed", ExtractJsonString(refreshJson, "parseStatus"));
+        Assert.True(ExtractJsonBool(refreshJson, "isIndexed"));
+        Assert.False(ExtractJsonBool(refreshJson, "isStale"));
     }
 
     [Fact(Skip = "MCP stdio bridge connects to the WinForms-owned MCP proxy hub; cover it with ToolSmokeTests live workflows.")]
