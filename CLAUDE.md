@@ -15,6 +15,7 @@ This file is the Claude/Claude Code entry point. `AGENTS.md` is the Codex host e
 - Treat `docs/system-memory/README.md` as the authoritative system-memory contract for AIMonitor behavior.
 - Use `docs/agent-memory/RestartContext.md` after plugin, MCP, or context restarts.
 - Use `docs/components/` for component ownership and data-flow questions.
+- For MCP, Roslyn, Workflow, or Indexing parity work, read `docs/feature-maps/CmbMcpCapabilityParity.md`. Do not treat compatibility-shaped stubs or valid JSON response shapes as proof that prior MonitorBaseClaude behavior was faithfully restored.
 - Prefer tight loops: small plan, bounded edit, focused test, inspect, then continue. Do not force exhaustive up-front plans when the edge cases need discovery.
 - Reason in the cloud; compose locally. Do not write watched source directly.
 - After staging, staged runtime files are immutable review evidence. Further candidate changes go back through the Working file and must be staged again.

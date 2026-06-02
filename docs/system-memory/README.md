@@ -16,6 +16,7 @@ If a code change affects any item below, update the matching memory doc and add 
 - accepted, accepted-normalized, rejected, dirty-unexpected, and refresh-required classifications;
 - index rebuild and query semantics;
 - MCP/CLI/WinForms telemetry;
+- CMB MCP capability parity and any intentional divergence from prior MonitorBaseClaude behavior;
 - Claude/Codex host instructions;
 - component ownership or data flow.
 
@@ -28,6 +29,7 @@ Do not rely on conversation memory for these contracts. Put the durable rule in 
 - `CLAUDE.md`: Claude / Claude Code host contract.
 - `docs/agent-memory/RestartContext.md`: restart and handoff recovery memory.
 - `docs/components/README.md`: component ownership and data-flow index.
+- `docs/feature-maps/CmbMcpCapabilityParity.md`: parity ledger for MonitorBaseClaude MCP behavior that AIMonitor is expected to preserve, replace, or explicitly decline.
 - `docs/claude-skills/README.md`: Claude skill-card routing.
 
 ## Component Memory
@@ -59,6 +61,8 @@ discover
 Adapters may expose different commands or tool names, but they must route through shared services where behavior overlaps.
 
 Record-decision orchestration is shared. CLI and MCP may expose different arguments, but the accepted/rejected decision, conditional post-accept index rebuild, index-refresh payload, and next-step guidance are assembled by the shared indexing workflow.
+
+MCP parity is a contract surface. When a CMB/MonitorBaseClaude capability still applies, restore it in the shared owner first, then expose it through MCP or CLI only where the adapter overlaps that behavior. A compatibility-shaped empty response is not parity unless it is documented as an intentional operator-approved difference.
 
 Post-accept index refresh is part of the safety boundary. Accepted or accepted-normalized decisions mark the file's workflow session as index-stale until a rebuild succeeds. If a rebuild fails, the decision may still be durable, but the operator/agent must not trust index rows until `refresh_solution_index` or an equivalent rebuild succeeds. A successful full rebuild clears stale workflow flags for the watched workspace so the documented recovery path is self-healing.
 
@@ -100,9 +104,10 @@ Before changing a boundary:
 1. Read the relevant host file: `AGENTS.md` for Codex work, `CLAUDE.md` for Claude work.
 2. Read the relevant component note in `docs/components/`.
 3. Read the relevant workflow or skill card.
-4. Make the code change through the shared service layer when behavior overlaps adapters.
-5. Add or update regression coverage.
-6. Update this memory surface if the contract changed.
+4. For MCP/Roslyn/index/workflow surface changes, check `docs/feature-maps/CmbMcpCapabilityParity.md` and update the parity status if the change restores, replaces, or intentionally declines prior behavior.
+5. Make the code change through the shared service layer when behavior overlaps adapters.
+6. Add or update regression coverage.
+7. Update this memory surface if the contract changed.
 
 If a finding contradicts system memory, treat it as a bug in either the code or the memory. Resolve the mismatch before moving on.
 
