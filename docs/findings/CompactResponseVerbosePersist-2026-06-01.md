@@ -1,5 +1,5 @@
 ---
-status: new
+status: addressed
 type: finding
 created: 2026-06-01
 scope: MCP/CLI response payload size vs debuggability — persist-verbose, return-compact
@@ -8,6 +8,18 @@ related: SafeEditWorkflowEvaluation-2026-06-01.md (priority #3), WorkflowCostAnd
 ---
 
 ## Summary
+
+## Resolution update - 2026-06-01
+
+Implemented for staged edit workflow replies:
+
+- `stage_candidate_for_review`, `launch_staged_diff`, `record_diff_decision`, and the matching CLI edit commands return
+  compact staged summaries by default.
+- Full `StagedEditRecord` payloads remain persisted under runtime workflow storage.
+- Full inline records are opt-in with `verbose: true` / `--verbose`.
+- Fetch-back is explicit through MCP `get_staged_record(stagedRecordId)` and CLI
+  `edit staged-record --staged-record-id <id>`.
+- Integration tests now cover compact default responses plus explicit staged-record fetch-back for path-heavy assertions.
 
 Today the workflow adapters echo the **entire `StagedEditRecord`** (all paths, both hashes, ledger path, compare ids,
 launch status, messages) on every `stage_candidate_for_review`, `launch_staged_diff`, and `record_diff_decision` reply —

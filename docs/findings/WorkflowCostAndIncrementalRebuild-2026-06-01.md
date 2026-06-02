@@ -19,6 +19,11 @@ Investigation update - 2026-06-01:
 - The next correct implementation should add an indexing/validation orchestration layer that can compute affected
   projects/files, reuse validation workspaces, and upsert only safe slices while falling back to full rebuild when the
   affected set is uncertain.
+- Later 2026-06-01 workflow fixes addressed the token-cost side with compact staged responses and explicit fetch-back.
+  The latency side remains backlog by design.
+- Later 2026-06-01 workflow fixes also normalized MCP `submit_file` content to the Working file's existing line endings,
+  reducing avoidable LF/CRLF churn. `accepted-normalized` remains a valid decision classification and now has CLI
+  integration coverage.
 
 A two-cycle safe-edit workflow test (one new file, one existing-file symbol edit) surfaced two cost problems that
 are latency/token issues, not correctness issues. Both edits validated clean (full-solution build, 0 diagnostics) and

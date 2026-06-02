@@ -221,7 +221,7 @@ public sealed class RoslynEditService
         {
             return targetPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
                 ? [targetPath]
-                : throw new InvalidOperationException("get_source_map currently supports C# source files only.");
+                : throw new InvalidOperationException(CreateUnsupportedRoslynPathMessage(targetPath, "get_source_map"));
         }
 
         if (Directory.Exists(targetPath))
@@ -277,7 +277,7 @@ public sealed class RoslynEditService
         string fullPath = Path.GetFullPath(watchedFilePath);
         if (!fullPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("Roslyn edit tools currently support C# source files only.");
+            throw new InvalidOperationException(CreateUnsupportedRoslynPathMessage(fullPath, "Roslyn edit tools"));
         }
 
         EditSessionStatus status = workflowService.GetStatus(fullPath);
@@ -489,6 +489,17 @@ public sealed class RoslynEditService
         return normalized is "auto" or "file" or "folder" or "namespace" or "project"
             ? normalized
             : throw new InvalidOperationException("Source map scope must be auto, file, folder, namespace, or project.");
+    }
+
+    private static string CreateUnsupportedRoslynPathMessage(string path, string toolName)
+    {
+        string extension = Path.GetExtension(path);
+        if (extension.Equals(".razor", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"{toolName} uses the C# Roslyn workflow surface and cannot read or edit Razor markup directly. Use a .razor.cs code-behind file for Roslyn symbol tools, or use get_file/submit_file/replace_text_in_file/replace_span_in_file against the monitor-owned Working candidate for markup edits.";
+        }
+
+        return $"{toolName} currently supports C# source files only. Use a .cs file for Roslyn symbol tools, or use the text/file workflow tools for {extension} files.";
     }
 
     private static string NormalizeMode(string? mode)

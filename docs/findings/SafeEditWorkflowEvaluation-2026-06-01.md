@@ -33,6 +33,24 @@ own the gate, go incremental, and tighten sharp edges — not a redesign.
 
 ## Friction (all observed live)
 
+## Resolution update - 2026-06-01
+
+Addressed after this evaluation:
+
+- Stale edit sessions now return clearer recovery guidance that names refresh/start-session expectations.
+- Per-file workflow manifests use advisory locks around read-modify-write paths.
+- `submit_file` preserves the Working candidate's dominant line endings, reducing accidental normalized-only accepts.
+- Wrong indexed key shapes now produce visible guidance instead of silent empty reference/caller results.
+- Razor markup passed to Roslyn source-map/symbol tools now returns visible guidance to use `.razor.cs` or text/file tools.
+- Engine-owned pre-merge validation is shared by CLI and MCP launch paths.
+- Compact staged responses plus explicit staged-record fetch-back reduce repeated transcript payloads.
+
+Still deferred by design:
+
+- Dependency-aware/incremental build and index.
+- MCP elicitation.
+- First-class coupled multi-file accept/validation as one unit.
+
 1. **Stale session after solution switch.** `new_file` errored until a fresh `start_monitor_session` was created; the old
    handle was bound to the previous watched solution. Error was opaque ("An error occurred invoking 'new_file'").
 2. **No manifest lock.** Parallel `new_file` calls errored; had to serialize. Matches the "non-atomic / last-writer-wins"

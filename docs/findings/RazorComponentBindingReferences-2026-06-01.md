@@ -126,6 +126,6 @@ test) vs. on the author's setup, and whether a `dotnet restore`/SDK Razor-genera
 
 - Probe-key gotcha worth documenting for agents: `find_indexed_references`/`find_indexed_callers` require the
   `symbol:<hash>` stable keys from `find_indexed_symbols`/`query_solution_index`/`get_indexed_symbol`; the `::`-path
-  selector keys from `get_source_map` silently return `[]`.
+  selector keys from `get_source_map` now return a visible MCP guidance payload instead of silently returning `[]`.
 - Declarations are unaffected — the partial type and code-behind members index fine from both files
   (`BuildRazorDeclarationsAsync` maps generated declaration spans back correctly).

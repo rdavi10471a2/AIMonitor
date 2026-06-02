@@ -1,10 +1,10 @@
 # Feature Maps
 
-Feature maps hold human intent and AI-maintained dataflow notes outside source code.
+Feature maps hold workflow intent and AI-maintained dataflow notes outside source code.
 
-Human-owned sections must be preserved unless explicitly requested.
+Some maps include an explicit `Human Notes` section. Preserve that section unless the operator asks to change it. Maps without that section are ordinary documentation until a human-owned section is added.
 
-Recommended sections:
+Recommended section names:
 
 - Human Notes
 - AI-Maintained Map

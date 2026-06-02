@@ -16,11 +16,12 @@ Confirm task type from `get_workflow_status` output or the user's task descripti
 - Adding, replacing, or removing C# symbols: `FormattingOracle.md`
 - Async/signature/API caller propagation: `AsyncPropagation.md`
 - Human-guided companion partial extraction: `PartialClassRefactor.md`
-- New Razor component authoring (markup + companion partial class): see CLAUDE.md "Razor Files" — start in two-file form, do not author with inline `@code`.
+- New Razor component authoring: see the `CLAUDE.md` Razor boundary; start in two-file form with markup plus a companion partial class, not inline `@code`.
 - Live tool-traffic verification or debugging: `TroubleshootingDashboard.md`
 
 ## Layering
 
+- `CLAUDE.md` answers: what are Claude's host-specific rules for this repo?
 - Tool descriptions answer: how do I call this tool right now?
 - Mini skills answer: what operating mode am I in?
 - Long docs and fixture corpus answer: why does this rule exist, and what proved it?

@@ -12,12 +12,16 @@ The active safety mechanism is monitor-owned Working files, pre-merge validation
 - Use the Solution Index MCP surface for cheap project context before body reads: `get_solution_index_tree`, `query_solution_index`, `find_indexed_symbols`, `get_indexed_symbol`, `find_indexed_references`, `find_indexed_callers`, and `find_indexed_relationships`.
 - If the target file is already known, call `query_solution_index(scope: "file", value: "<relative path>")` first and use the returned symbol row's `StableSymbolKey`. Do not manually compose stable keys.
 - Use the smallest safe edit unit: symbol edit before whole-file replacement.
+- Diff stability depends on complete local edit context. Use source-map/symbol views for semantic C# edits, the full Working file for text/whole-file edits, or bounded exact replacements constrained by the smallest safe edit rule, before staging.
 - For any file at or above 32KB in a cold session, call `refresh_file` and chunk-read the returned Working file path. Do not use `get_file` for that cold-session entry.
 - For warm-session text edits, do not re-read the file. Use the text already in context with `replace_text_in_file` and `expectedMatches: 1`, or `replace_span_in_file` when exact bounds are already known.
 - Stage candidates, let AIMonitor run pre-merge validation, then use Operator review.
-- For coupled multi-file C# edits, stage every required file in one monitor session before the first review launch so validation sees the proposed change set.
+- For coupled multi-file C# edits, keep every required file in one monitor session and review the files deliberately as a
+  chain. Current pre-merge validation is per staged candidate; first-class all-files-at-once overlay validation is still
+  future work.
 - Record the Operator decision with `record_diff_decision`.
-- After `record_diff_decision`, check the returned `IndexRefresh` status. Accepted single-file edits refresh the monitor-owned solution index immediately; multi-file sessions rebuild the index once the accepted chain is complete.
+- After each accepted `record_diff_decision`, check the returned `IndexRefresh` status. Accepted decisions refresh the
+  monitor-owned solution index immediately; do not assume a separate batch rebuild for a multi-file session.
 - Stop on `dirty-unexpected`; recovery is explicit refresh/rebase/restage or Operator reconcile.
 - A Working candidate persists across sessions when the watched-source baseline hash is unchanged. If the first edit in a new pass inherits prior in-progress candidate content, either continue deliberately or discard the Working mirror/state before starting a clean test.
 - Cached source-map or solution-index selectors are advisory only. Before `submit_symbol`, `remove_symbol`, or related submit/remove operations, refresh the file selector map with live `get_source_map(scope: "file", mode: "selector")` or verify the file with `check_file_hash`, then call `get_symbol`.
@@ -39,7 +43,7 @@ The active safety mechanism is monitor-owned Working files, pre-merge validation
 | Replace a known line/column span | `replace_span_in_file` |
 | Create a brand-new file | `submit_file` |
 | Create a brand-new Razor component | Two `submit_file` calls in one session: `.razor` markup + `.razor.cs` partial-class companion. Do not start a new Razor file with inline `@code`. |
-| Migrate legacy inline-`@code` Razor to two-file form | Use `get_file`/`submit_file` carefully in one session for `.razor` and `.razor.cs`; no dedicated split tool exists in AIMonitor V2 yet. |
+| Migrate legacy inline-`@code` Razor to two-file form | Use `get_file`/`submit_file` carefully in one session for `.razor` and `.razor.cs`; no dedicated split tool exists yet. |
 | Regenerate or deliberately replace a whole file | `submit_file` |
 
 Do not use `submit_file` for ordinary member-level edits just because you have the full file in context.
@@ -81,7 +85,7 @@ launch/review file A
 record decision for file A
 launch/review file B
 record decision for file B
-check final IndexRefresh status after the chain completes
+check each accepted decision's IndexRefresh status before doing index-dependent follow-up
 ```
 
 For coupled edits, briefly name why the files must validate together before review.

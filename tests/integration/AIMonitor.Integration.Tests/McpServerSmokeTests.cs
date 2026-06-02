@@ -110,6 +110,36 @@ public sealed class McpServerSmokeTests
         Assert.Contains("find_indexed_symbols", logText, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Mcp_index_reference_tools_reject_source_map_selector_keys()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+
+        string selectorKey = "Program.cs::Example::Program::method::GetValue()";
+        CallToolResult references = await client.CallToolAsync(
+            "find_indexed_references",
+            new Dictionary<string, object?>
+            {
+                ["stableSymbolKey"] = selectorKey
+            });
+
+        Assert.False(references.IsError == true);
+        Assert.True(ExtractJsonBool(ExtractToolText(references), "isError"));
+        Assert.Contains("source-map selector key", ExtractToolText(references), StringComparison.OrdinalIgnoreCase);
+
+        CallToolResult callers = await client.CallToolAsync(
+            "find_indexed_callers",
+            new Dictionary<string, object?>
+            {
+                ["stableSymbolKey"] = selectorKey
+            });
+
+        Assert.False(callers.IsError == true);
+        Assert.True(ExtractJsonBool(ExtractToolText(callers), "isError"));
+        Assert.Contains("indexed symbol key", ExtractToolText(callers), StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact(Skip = "MCP stdio bridge connects to the WinForms-owned MCP proxy hub; cover it with ToolSmokeTests live workflows.")]
     public async Task Mcp_bridge_forwards_stdio_to_server_and_records_request_response_telemetry()
     {
@@ -161,6 +191,9 @@ public sealed class McpServerSmokeTests
         Assert.False(stage.IsError == true);
         string stageJson = ExtractToolText(stage);
         Assert.Contains("stagedRecordId", stageJson, StringComparison.Ordinal);
+        Assert.False(string.IsNullOrWhiteSpace(ExtractJsonString(stageJson, "stagedRecordId")));
+        Assert.False(string.IsNullOrWhiteSpace(ExtractJsonString(stageJson, "stagedHash")));
+        Assert.DoesNotContain("\"stagedRecord\":{", stageJson, StringComparison.Ordinal);
         Assert.DoesNotContain("mcp", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
     }
 
@@ -244,6 +277,30 @@ public sealed class McpServerSmokeTests
     }
 
     [Fact]
+    public async Task Mcp_roslyn_source_map_reports_actionable_razor_markup_boundary()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+        string razorPath = Path.Combine(Path.GetDirectoryName(fixture.ProgramFilePath)!, "Pages", "Index.razor");
+        Directory.CreateDirectory(Path.GetDirectoryName(razorPath)!);
+        await File.WriteAllTextAsync(razorPath, "@page \"/\"\n<h1>Hello</h1>\n");
+
+        CallToolResult sourceMap = await client.CallToolAsync(
+            "get_source_map",
+            new Dictionary<string, object?>
+            {
+                ["path"] = razorPath,
+                ["scope"] = "file"
+            });
+
+        Assert.False(sourceMap.IsError == true);
+        Assert.True(ExtractJsonBool(ExtractToolText(sourceMap), "isError"));
+        string sourceMapError = ExtractToolText(sourceMap);
+        Assert.Contains("cannot read or edit Razor markup directly", sourceMapError, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("replace_text_in_file", sourceMapError, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Mcp_replace_text_preserves_line_endings_and_rejects_stale_hashes()
     {
         McpFixture fixture = CreateFixture();
@@ -290,6 +347,44 @@ public sealed class McpServerSmokeTests
         Assert.Contains("public static int Count => 1;", workingText, StringComparison.Ordinal);
         Assert.Equal(0, CountBareLf(workingText));
         Assert.DoesNotContain("Count => 1", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Mcp_replace_text_occurrence_index_does_not_require_unique_old_text()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+        await File.WriteAllTextAsync(
+            fixture.ProgramFilePath,
+            "namespace Example { internal static class Program { public static string First => \"same\"; public static string Second => \"same\"; } }");
+
+        CallToolResult refresh = await client.CallToolAsync(
+            "refresh_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = fixture.ProgramFilePath
+            });
+        Assert.False(refresh.IsError == true);
+        string workingFilePath = ExtractJsonString(ExtractToolText(refresh), "workingFilePath");
+
+        CallToolResult replace = await client.CallToolAsync(
+            "replace_text_in_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["oldText"] = "\"same\"",
+                ["newText"] = "\"second\"",
+                ["occurrenceIndex"] = 1
+            });
+
+        Assert.False(replace.IsError == true);
+        string replaceJson = ExtractToolText(replace);
+        Assert.Equal(2, ExtractJsonInt(replaceJson, "actualMatches"));
+
+        string workingText = await File.ReadAllTextAsync(workingFilePath);
+        Assert.Contains("First => \"same\"", workingText, StringComparison.Ordinal);
+        Assert.Contains("Second => \"second\"", workingText, StringComparison.Ordinal);
+        Assert.DoesNotContain("second", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -370,6 +465,44 @@ public sealed class McpServerSmokeTests
     }
 
     [Fact]
+    public async Task Mcp_span_tools_auto_refresh_when_no_working_session_exists()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+        await File.WriteAllTextAsync(
+            fixture.ProgramFilePath,
+            "namespace Example { internal static class Program { public static string Value => \"fresh-span\"; } }");
+
+        CallToolResult span = await client.CallToolAsync(
+            "find_text_span",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["findText"] = "fresh-span"
+            });
+        Assert.False(span.IsError == true);
+        string spanJson = ExtractToolText(span);
+        string workingFilePath = ExtractJsonString(spanJson, "workingFilePath");
+
+        CallToolResult replace = await client.CallToolAsync(
+            "replace_span_in_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["startLine"] = ExtractJsonInt(spanJson, "startLine"),
+                ["startColumn"] = ExtractJsonInt(spanJson, "startColumn"),
+                ["endLine"] = ExtractJsonInt(spanJson, "endLine"),
+                ["endColumn"] = ExtractJsonInt(spanJson, "endColumn"),
+                ["newText"] = "fresh-replaced",
+                ["expectedOldTextHash"] = ExtractJsonString(spanJson, "textHash"),
+                ["expectedOldText"] = "fresh-span"
+            });
+        Assert.False(replace.IsError == true);
+        Assert.Contains("fresh-replaced", await File.ReadAllTextAsync(workingFilePath), StringComparison.Ordinal);
+        Assert.DoesNotContain("fresh-replaced", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Mcp_new_file_stage_and_reject_leaves_watched_source_absent()
     {
         McpFixture fixture = CreateFixture();
@@ -399,8 +532,9 @@ public sealed class McpServerSmokeTests
             });
         Assert.False(stage.IsError == true);
         string stageJson = ExtractToolText(stage);
-        Assert.True(ExtractJsonBool(stageJson, "isNewFile"));
-        string reviewBaselineFilePath = ExtractJsonString(stageJson, "reviewBaselineFilePath");
+        string stagedRecordJson = await GetStagedRecordJsonAsync(client, ExtractJsonString(stageJson, "stagedRecordId"));
+        Assert.True(ExtractJsonBool(stagedRecordJson, "isNewFile"));
+        string reviewBaselineFilePath = ExtractJsonString(stagedRecordJson, "reviewBaselineFilePath");
         Assert.True(File.Exists(reviewBaselineFilePath));
         Assert.Equal(string.Empty, await File.ReadAllTextAsync(reviewBaselineFilePath));
 
@@ -563,7 +697,8 @@ public sealed class McpServerSmokeTests
             });
         Assert.False(stage.IsError == true);
         string stageJson = ExtractToolText(stage);
-        string stagedFilePath = ExtractJsonString(stageJson, "stagedFilePath");
+        string stagedRecordJson = await GetStagedRecordJsonAsync(client, ExtractJsonString(stageJson, "stagedRecordId"));
+        string stagedFilePath = ExtractJsonString(stagedRecordJson, "stagedFilePath");
         string stagedText = await File.ReadAllTextAsync(stagedFilePath);
         Assert.Contains("KeepProperty2", stagedText, StringComparison.Ordinal);
         Assert.DoesNotContain("_removed", stagedText, StringComparison.Ordinal);
@@ -632,7 +767,8 @@ public sealed class McpServerSmokeTests
             });
         Assert.False(helperStage.IsError == true);
         string helperStageJson = ExtractToolText(helperStage);
-        string helperStagedFilePath = ExtractJsonString(helperStageJson, "stagedFilePath");
+        string helperStagedRecordJson = await GetStagedRecordJsonAsync(client, ExtractJsonString(helperStageJson, "stagedRecordId"));
+        string helperStagedFilePath = ExtractJsonString(helperStagedRecordJson, "stagedFilePath");
         string helperStagedHash = ExtractJsonString(helperStageJson, "stagedHash");
         string helperStagedRecordId = ExtractJsonString(helperStageJson, "stagedRecordId");
 
@@ -646,7 +782,8 @@ public sealed class McpServerSmokeTests
             });
         Assert.False(programStage.IsError == true);
         string programStageJson = ExtractToolText(programStage);
-        string programStagedFilePath = ExtractJsonString(programStageJson, "stagedFilePath");
+        string programStagedRecordJson = await GetStagedRecordJsonAsync(client, ExtractJsonString(programStageJson, "stagedRecordId"));
+        string programStagedFilePath = ExtractJsonString(programStagedRecordJson, "stagedFilePath");
         string programStagedHash = ExtractJsonString(programStageJson, "stagedHash");
         string programStagedRecordId = ExtractJsonString(programStageJson, "stagedRecordId");
 
@@ -984,7 +1121,8 @@ public sealed class McpServerSmokeTests
             });
         Assert.False(stage.IsError == true);
         string stageJson = ExtractToolText(stage);
-        File.Copy(ExtractJsonString(stageJson, "stagedFilePath"), fixture.ProgramFilePath, overwrite: true);
+        string stagedRecordJson = await GetStagedRecordJsonAsync(client, ExtractJsonString(stageJson, "stagedRecordId"));
+        File.Copy(ExtractJsonString(stagedRecordJson, "stagedFilePath"), fixture.ProgramFilePath, overwrite: true);
 
         CallToolResult decision = await client.CallToolAsync(
             "record_diff_decision",
@@ -1021,7 +1159,8 @@ public sealed class McpServerSmokeTests
         string stageJson = ExtractToolText(stage);
         string stagedRecordId = ExtractJsonString(stageJson, "stagedRecordId");
         string stagedHash = ExtractJsonString(stageJson, "stagedHash");
-        string stagedFilePath = ExtractJsonString(stageJson, "stagedFilePath");
+        string stagedRecordJson = await GetStagedRecordJsonAsync(client, stagedRecordId);
+        string stagedFilePath = ExtractJsonString(stagedRecordJson, "stagedFilePath");
 
         CallToolResult launch = await client.CallToolAsync(
             "launch_staged_diff",
@@ -1211,6 +1350,18 @@ public sealed class McpServerSmokeTests
         }
 
         throw new InvalidOperationException("MCP tool result did not include text content.");
+    }
+
+    private static async Task<string> GetStagedRecordJsonAsync(McpClient client, string stagedRecordId)
+    {
+        CallToolResult record = await client.CallToolAsync(
+            "get_staged_record",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = stagedRecordId
+            });
+        Assert.False(record.IsError == true, ExtractToolText(record));
+        return ExtractToolText(record);
     }
 
     private static string ExtractJsonString(string json, string propertyName)

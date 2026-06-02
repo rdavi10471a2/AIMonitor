@@ -20,14 +20,22 @@ Addressed in the follow-up fix after this review:
 - `get_ledger` now validates supplied ledger paths with `Path.GetRelativePath` boundary checks instead of a raw string prefix check.
 - The stale VS Code `build bridge` task now targets `AIMonitor.McpStdioBridge`.
 - `src/AIMonitor.Storage` was removed; durable store behavior remains in `AIMonitor.Data` until a real tested storage boundary exists.
+- `launch-diff` orchestration is shared by CLI and MCP through `AIMonitor.Runtime.StagedDiffLaunchWorkflow`, so validation,
+  prompt fallback, telemetry, review-file preparation, and WinMerge launch use the same path.
+- Span find/replace positioning moved into `WorkflowEditService`, including CRLF-aware line/column semantics.
+- `replace_text_in_file` / `edit replace-text` now honor `occurrenceIndex` through the workflow service.
+- Stage/launch/decision replies are compact by default, with `--verbose` / `verbose: true` for full inline records and
+  `edit staged-record` / `get_staged_record` for explicit fetch-back.
+- Workflow manifests now use an advisory per-file lock around read-modify-write paths.
+- MCP index reference tools now return a visible guidance payload for source-map selector keys instead of a silent `[]`;
+  `find_indexed_callers` now filters invocation/object-creation rows instead of broad identifier references.
+- Roslyn source-map/symbol calls now return actionable MCP-visible guidance when pointed at Razor markup.
 
 Still open/backlog from this review:
 
-- Factor launch-diff and record-decision orchestration into a shared facade to reduce CLI/MCP duplication.
-- Move span edit positioning into the workflow engine and define CRLF column semantics there.
-- Decide whether `occurrenceIndex` should be implemented or removed from `replace_text_in_file`.
 - Push selected index filters into SQL and reduce repeated schema setup on reads.
-- Revisit manifest locking/concurrency, raw build-output fallback for validation diagnostics, and the lower-priority cleanup items.
+- Revisit raw build-output fallback for validation diagnostics and the lower-priority cleanup items.
+- MCP elicitation and dependency-aware/incremental validation/indexing remain deliberately deferred.
 
 Read-only deep dive evaluating whether the AIMonitor monitor code meets its core design rule —
 **"MCP is not the workflow. MCP is the Claude adapter over the shared workflow engine"** — and whether
@@ -60,6 +68,9 @@ The two cracks (both expected for a V0.1 built in a day, not yet independently r
 
 ## Adapter parity: CLI vs MCP
 
+Note: this table preserves the original review snapshot. The resolution update at the top of this file is authoritative
+for current status; several rows below describe issues fixed later on 2026-06-01.
+
 | Capability | CLI command | MCP tool | Shared service called | Parity |
 |---|---|---|---|---|
 | Monitor status | `status` | `get_monitor_status` | `SolutionIndexQueryService.GetMonitorStatus` | Shared, parity |
@@ -67,12 +78,12 @@ The two cracks (both expected for a V0.1 built in a day, not yet independently r
 | Index rebuild | `index rebuild` (`Program.cs:415-417`) | `refresh_solution_index` | indexing primitives, **composed inline in BOTH** | Shared primitives, duplicated composition |
 | Refresh working candidate | `edit refresh` | `refresh_file` | `WorkflowEditService.Refresh` | Shared, parity |
 | New file | `edit new` | `new_file` | `WorkflowEditService.NewFile` | Shared, parity |
-| Replace exact text | `edit replace-text` | `replace_text_in_file` | `WorkflowEditService.ReplaceText` | Shared; MCP ignores `occurrenceIndex` (`Program.cs:610`) |
+| Replace exact text | `edit replace-text` | `replace_text_in_file` | `WorkflowEditService.ReplaceText` | Shared, including `occurrenceIndex` |
 | Whole-file submit | (none) | `submit_file` | **none** — raw `File.WriteAllText` (`Program.cs:587`) | MCP-only, diverges from engine normalization |
-| Span find/replace | (none) | `find_text_span`, `replace_span_in_file` | **none** — adapter-local (`Program.cs:634-698`) | MCP-only, no engine method |
+| Span find/replace | (none) | `find_text_span`, `replace_span_in_file` | `WorkflowEditService.FindTextSpan/ReplaceSpan` | MCP-only adapter surface, engine-backed |
 | Roslyn typed edits | (none) | `submit_symbol`, `add_method`, etc. | `RoslynEditService.*` | MCP-only but properly engine-backed |
 | Stage candidate | `edit stage` | `stage_candidate_for_review` | `WorkflowEditService.Stage` | Shared, parity |
-| Launch validated diff | `edit launch-diff` | `launch_staged_diff` | `PreMergeValidationService` + `WinMergeDiffToolLauncher` + `RecordDiffLaunch` | Shared services, **orchestration duplicated** |
+| Launch validated diff | `edit launch-diff` | `launch_staged_diff` | `AIMonitor.Runtime.StagedDiffLaunchWorkflow` | Shared orchestration |
 | Record decision | `edit record-decision` | `record_diff_decision` | `WorkflowEditService.RecordDecision` | Shared, parity |
 | Accept (shortcut) | `edit accept` (undocumented, `--expected-hash`) | (none) | `WorkflowEditService.Accept` | CLI-only, undocumented, flag mismatch |
 | Reject (shortcut) | `edit reject` (undocumented) | (none) | `WorkflowEditService.Reject` | CLI-only, undocumented |
@@ -99,12 +110,12 @@ The two cracks (both expected for a V0.1 built in a day, not yet independently r
 
 ## Where they duplicate or diverge (issues)
 
-- **launch-diff / record-decision orchestration duplicated verbatim.** CLI `LaunchDiff` (`Program.cs:207-277`) and
+- **launch-diff / record-decision orchestration duplicated verbatim (addressed).** CLI `LaunchDiff` (`Program.cs:207-277`) and
   MCP `LaunchStagedDiff` (`Program.cs:876-942`) are line-for-line equivalent (validate → `PreMergeValidationOverridePrompt.Prompt`
   → premerge telemetry → `RecordDiffLaunch(blocked)` → `PrepareReviewFileForLaunch` → `WinMergeDiffToolLauncher.Launch`
   → `RecordDiffLaunch(updated)`). The post-accept index-refresh block is likewise duplicated
   (CLI `CreateDecisionResponse` `:309-336` vs MCP `RecordDiffDecision` `:842-873`). Already drifting in wording.
-  *Fix: factor a single `WorkflowEditService.LaunchDiff(...)` / `RecordReviewedDecision(...)` the thin adapters call.*
+  **Addressed:** launch orchestration now routes through `AIMonitor.Runtime.StagedDiffLaunchWorkflow`.
 - **submit_file bypasses engine normalization (high).** `File.WriteAllText(status.WorkingFilePath, content)` (MCP `Program.cs:587`)
   vs engine's `DetectDominantLineEnding` / `NormalizeLineEndingsForFile` in `ReplaceText` (`WorkflowEditService.cs:216-238`).
   Can flip every line ending and force `accepted-normalized` churn; violates CLAUDE.md "preserve existing line endings."
@@ -129,9 +140,9 @@ The two cracks (both expected for a V0.1 built in a day, not yet independently r
   calling `RecordDiffLaunch(id, launched:true, ...)` with no validation, then `RecordDecision(id,"accepted",hash)`, succeeds.
   (Note: `RecordDecision` does re-hash the staged file at `:496-500`, so staged-content tampering is caught — but validation
   status is not.) *Fix: record `validationStatus`/`forceApproved` on `StagedEditRecord` and re-check in `RecordDecision`.*
-- **Accept does not block `dirty-unexpected` (high).** On accept with mismatched watched bytes the classifier returns
+- **Accept did not block `dirty-unexpected` (high, addressed).** On accept with mismatched watched bytes the classifier returns
   `dirty-unexpected`, yet `RecordDecision` still writes `Decision="accepted"` and sets `RequiresRefresh=false` (`:542`),
-  leaving the session editable against a stale `OriginalHash`. *Fix: `Accept` should throw on `dirty-unexpected`.*
+  leaving the session editable against a stale `OriginalHash`. **Addressed:** accepted dirty-unexpected decisions throw.
 - **Stage byte-exact guard vs normalization-aware accept (medium).** `Stage` uses `FilesAreIdentical` byte comparison
   (`WorkflowEditService.cs:294`) while the classifier treats EOL-only diffs as `accepted-normalized`; a pure EOL change passes
   Stage, runs full validation + WinMerge, then forces a refresh. Two conflicting notions of "same."
@@ -196,24 +207,26 @@ The two cracks (both expected for a V0.1 built in a day, not yet independently r
 ### High
 - Engine cannot enforce its own validation gate — `WorkflowEditService.cs:432-440` (RecordDiffLaunch) + `:502-505` (RecordDecision).
   *Fix: persist validationStatus/forceApproved on StagedEditRecord and re-check on accept.*
-- `Accept` permits `dirty-unexpected` — `WorkflowEditService.cs:519-544`, `554-572`.
-  *Fix: throw on dirty-unexpected instead of recording an accepted decision with an editable session.*
+- `Accept` permitted `dirty-unexpected` — `WorkflowEditService.cs:519-544`, `554-572`.
+  **Addressed:** accepted dirty-unexpected decisions throw.
 - `submit_file` bypasses line-ending normalization — MCP `Program.cs:587`.
   *Fix: add a `WorkflowEditService.SubmitFile` that normalizes like ReplaceText; adapter delegates.*
 
 ### Medium
-- launch-diff/record-decision orchestration duplicated — CLI `Program.cs:207-277`/`309-336` vs MCP `Program.cs:876-942`/`842-873`.
-  *Fix: single engine LaunchDiff + decision-response method.*
+- launch-diff/record-decision orchestration was duplicated — CLI `Program.cs:207-277`/`309-336` vs MCP `Program.cs:876-942`/`842-873`.
+  **Addressed:** launch flow is shared through `AIMonitor.Runtime.StagedDiffLaunchWorkflow`; decision response compaction
+  is shared by shape and tests.
 - Span edit logic is MCP-only, no engine method, CRLF column desync — MCP `Program.cs:634-698`, `1212-1288`.
   *Fix: move span positioning/edit into the engine with EOL-aware columns.*
-- `replace_text_in_file` ignores advertised `occurrenceIndex` — MCP `Program.cs:610`.
-  *Fix: honor (route to span replace) or remove the parameter.*
+- `replace_text_in_file` ignored advertised `occurrenceIndex` — MCP `Program.cs:610`.
+  **Addressed:** `occurrenceIndex` is honored by `WorkflowEditService.ReplaceText`.
 - Undocumented CLI `accept`/`reject` with flag mismatch — CLI `Program.cs:200-201`, `304` (`--expected-hash` vs `--expected-staged-hash`).
   *Fix: remove or document and unify the flag.*
 - ListDocuments/ListSymbols full-table scans — `SolutionIndexQueryService.cs:60-92`. *Fix: push filters into parameterized SQL.*
 - EnsureCreated() on every read — `SolutionIndexStore.cs` read methods. *Fix: create/migrate schema once at startup.*
 - Stage byte-exact vs normalization-aware accept asymmetry — `WorkflowEditService.cs:294`. *Fix: choose one authoritative comparison.*
-- Non-atomic file reads / no manifest lock — `WorkflowEditService.cs:372-407`, `496-500`. *Fix: advisory lock around manifest read-modify-write.*
+- Non-atomic file reads previously had no manifest lock — `WorkflowEditService.cs:372-407`, `496-500`.
+  **Addressed:** workflow manifests use an advisory per-file lock around read-modify-write paths.
 - PreMergeValidationService English-token error parse — `PreMergeValidationService.cs:417-424`. *Fix: surface raw build output when no diagnostics parsed.*
 - AIMonitor.Bridge dead + broken build task — `.vscode/tasks.json:29-39`. **Addressed 2026-06-01.**
 - AIMonitor.Storage empty placeholder — `src/AIMonitor.Storage/StorageBoundary.cs`. *Fix: delete until real durable state migrates.*

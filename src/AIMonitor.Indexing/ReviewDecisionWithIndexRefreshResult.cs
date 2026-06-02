@@ -18,6 +18,10 @@ public sealed class ReviewDecisionWithIndexRefreshResult
 
     public string Message { get; set; } = string.Empty;
 
+    public StagedEditSummary? StagedRecordSummary { get; set; }
+
+    public string StagedRecordPath { get; set; } = string.Empty;
+
     public StagedEditRecord? StagedRecord { get; set; }
 
     public PostAcceptIndexRefreshResult? IndexRefresh { get; set; }

@@ -2,7 +2,7 @@
 
 ## Decision
 
-Use `AIMonitor` as the neutral V2 name.
+Use `AIMonitor` as the neutral product name.
 
 ## Rationale
 
@@ -10,10 +10,10 @@ The monitor is no longer Claude-specific. Claude uses MCP; Codex should use CLI/
 
 ## Scope
 
-V2 targets local .NET watched projects, initially:
+AIMonitor targets local .NET watched projects, initially:
 
 - Blazor/Razor;
 - WinForms;
 - console.
 
-ASP.NET/Web API projects are expected to load as normal SDK-style C# projects when required SDKs are installed, but ASP.NET-specific semantic workflows are not a V2 focus.
+ASP.NET/Web API projects are expected to load as normal SDK-style C# projects when required SDKs are installed, but ASP.NET-specific semantic workflows are not a current focus.

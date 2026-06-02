@@ -1,63 +1,80 @@
-# AIMonitor Claude Rules
+# AIMonitor Claude Instructions
 
-Claude should treat this repository as the V2 implementation of an AI safe edit monitor.
+Claude should treat this repository as the implementation of AIMonitor, an AI safe edit monitor.
 
-Use the project structure:
+This file is the Claude/Claude Code entry point. `AGENTS.md` is the Codex host entry point. The two files share the same architecture and safety invariants, but each should stay tuned for its own agent host.
 
-- `src/` for product code.
-- `tests/` for tracked regression/unit/integration/smoke tests.
-- `samples/` for watched-project examples.
-- `docs/` for architecture, findings, decisions, workflows, and feature maps.
+## Core Rules
 
-The core design rule:
+- Keep product code under `src/`, tests under `tests/`, samples under `samples/`, and documentation under `docs/`.
+- MCP is not the workflow. MCP is Claude's adapter over shared Core, Workflow, MSBuild, Indexing, and Runtime services.
+- Prefer MSBuild-loaded project truth over directory guessing.
+- Add tests beside workflow behavior when changing behavior.
+- Keep generated runtime state under `runtime/`, not in watched projects.
+- Do not describe AIMonitor as C#-only. C# is the first semantic provider; MSBuild project/document loading is language-neutral.
+- Treat `docs/system-memory/README.md` as the authoritative system-memory contract for AIMonitor behavior.
+- Use `docs/agent-memory/RestartContext.md` after plugin, MCP, or context restarts.
+- Use `docs/components/` for component ownership and data-flow questions.
+- Prefer tight loops: small plan, bounded edit, focused test, inspect, then continue. Do not force exhaustive up-front plans when the edge cases need discovery.
+- Reason in the cloud; compose locally. Do not write watched source directly.
+- After staging, staged runtime files are immutable review evidence. Further candidate changes go back through the Working file and must be staged again.
+- Diff stability depends on complete local edit context: use source-map/symbol context for semantic edits, the whole Working file for text/whole-file edits, or bounded exact replacements constrained by the smallest safe edit rule before staging.
 
-> MCP is not the workflow. MCP is the Claude adapter over the shared workflow engine.
+## MCP Binding
 
-Claude Code MCP bindings should launch `AIMonitor.McpStdioBridge`, not `AIMonitor.McpServer` directly. The stdio bridge is intentionally thin: it connects Claude's MCP stdio stream to the WinForms-owned MCP proxy hub. WinForms receives live MCP traffic first, records request/response telemetry, and relays to the combined MCP server behind it.
+Claude Code should launch `AIMonitor.McpStdioBridge`, not `AIMonitor.McpServer` directly. The bridge sends Claude's MCP stdio stream through the WinForms-owned MCP proxy hub so the Monitor Status tab sees live request/response telemetry before requests reach the combined MCP server.
 
-Until the Claude Code launcher working directory is verified live, prefer the `dotnet <absolute-path-to-AIMonitor.McpStdioBridge.dll>` binding shape in local MCP config. The repo template uses relative paths for portability, but an installed user binding should use absolute paths for the bridge DLL, `--repo-root`, and `--config`.
+Use an installed MCP config with absolute paths so Claude Code does not depend on an implicit launcher working directory:
 
-Prefer MSBuild project truth over directory enumeration. When adding behavior, add tests beside it.
+```text
+dotnet <absolute path>\src\AIMonitor.McpStdioBridge\bin\Debug\net10.0\AIMonitor.McpStdioBridge.dll --repo-root <absolute AIMonitor repo> --config <absolute AIMonitor config>
+```
 
-Do not hide data row/result classes inside repository classes. Schema-shaped POCOs get their own files so persisted/query data stays visible in reviews.
+## Watched-Source Safety
 
-Treat MSBuild project/document loading as language-neutral. C# is the first semantic indexing provider because it is the current product focus; do not describe the whole architecture as C#-only.
+Never edit watched source directly. For watched-project edits:
 
-Prefer workflow smoke/regression tests for monitor behavior. Tiny unit tests are acceptable when they pin a narrow contract that would be noisy in a smoke test.
+1. Start or reuse the intended monitor session.
+2. Use `refresh_file` for existing files or `new_file` for future watched files.
+3. Edit only the monitor-owned Working candidate with AIMonitor MCP tools.
+4. Stage with `stage_candidate_for_review`.
+5. Launch review with `launch_staged_diff`.
+6. Let the operator review/save in WinMerge.
+7. Record the operator decision with `record_diff_decision`.
+8. For accepted or accepted-normalized decisions, check `indexRefresh.status` before relying on solution-index rows.
 
-Codex parity starts with the CLI workflow edit loop. For watched-project edits, Codex should use `edit refresh` to create a monitor-owned working candidate, edit that candidate, then use `edit stage`, `edit launch-diff`, and `edit record-decision`. `edit replace-text` is primarily a Codex-safe local command path for exact replacements; Claude may keep using its MCP/editor surface when that surface already preserves stable local edits. Claude/Codex may make multiple tool calls against the Working file before staging. Once `edit stage` records a candidate hash, further candidate changes must be made in the Working file and staged again before review or accept; staged runtime files are review artifacts, not the editing surface. Agents should preserve existing line endings when editing Working files directly; for new files, follow `.editorconfig` or the nearest existing project file. `edit launch-diff` runs the full pre-merge validation gate before WinMerge. If validation fails, the user must explicitly approve the validation override dialog before WinMerge opens. If no interactive dialog is available, the agent must ask the user in chat and rerun with `--force-validation` only after explicit approval. Do not describe direct watched-source patching or silent candidate copying as the clean path.
+After an accepted or accepted-normalized decision, call `refresh_file` before editing that same watched file again.
 
-For new watched-project files, use `edit new --file <future-watched-path>`. This creates an empty monitor-owned Working candidate and later stages against a blank runtime review baseline. `edit launch-diff` opens WinMerge against monitor-owned runtime files for new-file review. The human/operator must save or create the future watched source file before `edit record-decision --decision accepted --expected-staged-hash <hash>` can classify the accept. `record-decision` verifies the reviewed watched content and staged hash; it must not create or copy the watched source file itself. Rejected new-file decisions leave the watched source absent.
+New-file review does not create watched source automatically. The operator must create/save the future watched file through WinMerge before an accepted decision can be classified.
 
-After `edit record-decision` returns an accepted or accepted-normalized outcome, the next operation on that watched file must be `edit refresh`. Accepted decisions must include the staged hash expected by the operator. The refresh captures the watched-source bytes that WinMerge or the editor actually saved, including hashes and line endings. `accepted-normalized` is a successful accept with line-ending or equivalent normalization; do not treat it as dirty.
+If pre-merge validation fails, `launch_staged_diff` must not be treated as a warning. Use the Host dialog result. If no dialog is available, stop and ask the operator in chat before using `forceValidation`. Proceed only after an explicit approval such as "yes, launch anyway" or "force validation approved" for that staged record. Silence, ambiguity, or approval for a different file/session is not enough.
 
-Accepted decisions rebuild the monitor-owned solution index and emit telemetry. Check the returned `indexRefresh` status before relying on fresh index rows.
+## Skills
 
-Runtime workflow history, staged records, validation copies, logs, and index artifacts belong under `runtime/`. Prefer explicit cleanup/prune commands or UI buttons over automatic pruning on every run; clean partial test artifacts deliberately by exact path.
+Use the focused cards in `docs/claude-skills/` instead of loading all documentation.
 
-## Claude Skill Cards
-
-Claude should read the focused AIMonitor skill cards from `docs/claude-skills/` when operating this repo or an AIMonitor watched project. These are not Markdown includes; they are required context files to open before editing. Start with:
+Start with:
 
 - `docs/claude-skills/AIMonitorWorkflowQuickStart.md`
 - `docs/claude-skills/SkillRouter.md`
 
-For C# edits, treat the source-map tools as first-class precision tools, not optional fallback:
+Then load the smallest relevant card:
 
-- use the solution index for broad discovery;
-- use `get_source_map`, `get_symbol`, and `submit_symbol` for precise symbol replacement;
-- use the typed Roslyn edit tools for additions/removals when they fit;
-- use text/span tools for exact non-symbol edits;
-- use `submit_file` for new files, generated files, or deliberate whole-file replacement.
+- Semantic discovery: `RoslynFirstNavigation.md`
+- Watched-source staging: `SystemMonitorStaging.md`
+- Coupled multi-file edits: `SessionOverlayValidation.md`
+- WinMerge and validation gates: `ReviewQueueAndGates.md`
+- Formatting/newline-safe edits: `FormattingOracle.md`
+- Async or signature propagation: `AsyncPropagation.md`
+- Companion partial refactors: `PartialClassRefactor.md`
+- Live telemetry checks: `TroubleshootingDashboard.md`
 
-Do not load every skill card by default. Route to the smallest card needed for the current task, then use live MCP tool descriptions for exact argument names.
+Use live MCP tool descriptions for exact argument names.
 
-## Razor Guidance
+## Razor Boundary
 
-For Blazor/Razor projects, AIMonitor V2 indexes the parts it can defend:
+AIMonitor indexes the Razor facts it can defend: normal C# files, clean `.razor.cs` code-behind, and Razor/compiler source-mapped references when those mappings point back to user-authored source. Do not promise full Visual Studio-level Razor binding semantics for markup strings, component parameters, or event handlers.
 
-- C# symbols and references from normal `.cs` files.
-- Clean `.razor.cs` code-behind as normal C#.
-- `.razor` and legacy mixed `.razor.cs` references when Razor/compiler source mappings point back to user-authored source.
+## Text Assets
 
-Do not assume AIMonitor currently models every Razor markup binding, component parameter, or event handler string exactly like Visual Studio. If a task needs that level of precision, use build/compiler feedback plus grep and focused smoke tests. Add only representative hard assertions for known-good mapped cases.
+CSS, JSON, config, markup, and other non-C# text assets do not need semantic indexing to be safely edited. They still use the same protected workflow: `refresh_file` or `new_file`, edit the Working candidate with text/file tools such as `replace_text_in_file`, `replace_span_in_file`, or `submit_file`, then `stage_candidate_for_review`, `launch_staged_diff`, WinMerge review, and `record_diff_decision`.
