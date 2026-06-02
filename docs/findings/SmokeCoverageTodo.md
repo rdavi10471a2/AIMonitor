@@ -1,6 +1,6 @@
 # Smoke Coverage TODO
 
-This list tracks standalone smoke and workflow coverage that should be ported or adapted from the MonitorBaseClaude/MonitorBaseClaudeTests lineage into AIMonitor.
+This list tracks standalone smoke and workflow coverage that should be ported or adapted from earlier safe-edit monitor test suites into AIMonitor.
 
 ## Common Surface
 
@@ -8,11 +8,11 @@ These tests apply to the shared monitor/index/workflow surface regardless of whe
 
 - [x] Extend `AIMonitor.LanguageCorpusSmokeTests` to assert `expectedCallerCount` from corpus `expected.json`.
 - [x] Extend `AIMonitor.LanguageCorpusSmokeTests` to assert `expectedRelationshipKinds` from corpus `expected.json`.
-- [x] Add a fixture index matrix smoke equivalent to MonitorBaseClaude `--fixture-index-matrix`, using a generated disposable C# fixture and an independent Roslyn comparator.
-- [x] Add a WebViewer file-by-file smoke equivalent to MonitorBaseClaude `--webviewer-file-by-file`, comparing selected real files against index and grep sanity counts.
+- [x] Add a fixture index matrix smoke equivalent to the earlier `--fixture-index-matrix` workflow, using a generated disposable C# fixture and an independent Roslyn comparator.
+- [x] Add a WebViewer file-by-file smoke equivalent to the earlier `--webviewer-file-by-file` workflow, comparing selected real files against index and grep sanity counts.
 - [x] Keep current local watched-solution smoke coverage for Razor/code-behind indexing and representative real-project references.
 - [x] Add or preserve smoke summaries under `runtime/smoke/...` so failures leave reviewable artifacts.
-- [x] Port the MonitorBaseClaudeTests external language corpus: 42 known-answer cases covering calls, construction, members, metadata, multi-project-shaped sources, operators, project-system global usings, resources, and types.
+- [x] Port the earlier external language corpus: 42 known-answer cases covering calls, construction, members, metadata, multi-project-shaped sources, operators, project-system global usings, resources, and types.
 - [x] Add live WinForms-visible MCP smoke coverage for normal status/index calls through the stdio bridge and WinForms-owned proxy hub.
 
 ## Codex-Specific Surface
@@ -32,7 +32,7 @@ These tests focus on the Codex CLI workflow and should not depend on Claude MCP/
 
 ## Not Directly Applicable
 
-These MonitorBaseClaude-era smoke areas are Claude/MCP/model specific and should not be ported directly unless AIMonitor grows the same surface.
+These earlier smoke areas are Claude/MCP/model specific and should not be ported directly unless AIMonitor grows the same surface.
 
 - Claude model/tool-routing smokes.
 - Model routing drills.

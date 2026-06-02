@@ -1,6 +1,6 @@
 # AIMonitor Architecture
 
-AIMonitor starts from the lessons of MonitorBaseClaude:
+AIMonitor starts from lessons learned in prior safe-edit monitor work:
 
 - one Claude-facing monitor path;
 - one authoritative watched solution path;

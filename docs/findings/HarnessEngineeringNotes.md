@@ -14,7 +14,7 @@
 
 The strongest near-term idea is not the exact command structure, but the discipline of making workflow cards explicit, small, and testable.
 
-For AIMonitor, the CMB skill cards should be moved into this repo and referenced from `CLAUDE.md`. They should describe the monitor workflow as the public Claude contract:
+For AIMonitor, the skill-card patterns from prior Claude workflow work should live in this repo and be referenced from `CLAUDE.md`. They should describe the monitor workflow as the public Claude contract:
 
 - find/read context through solution index and source-map tools;
 - refresh watched files before editing;
