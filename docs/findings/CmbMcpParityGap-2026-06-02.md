@@ -80,3 +80,106 @@ The synthesis framing of the parent diff (`docs/findings/` workflow output) over
 validation headline wrong; this finding is the **hand-verified** correction. Verify any individual item against the code
 before acting — the facts above were each checked, but the original report's other unverified rows should not be trusted
 on framing alone.
+
+---
+
+# APPENDIX — Full machine-generated inventory (UNVERIFIED)
+
+> **READ THIS FIRST.** Everything below this line is the raw output of the multi-agent parity diff. It was **NOT
+> hand-verified** (only the 12 items in the table above were). The synthesis is known to have **inflated severities and
+> got at least one HIGH headline factually wrong** (the "no semantic validation" item — AIMonitor *does* compile before
+> diff+accept; see "Verification correction" above). So: **treat every row here as a lead to confirm, not a fact.**
+> Verify against the code before implementing. Host-extras dropped per operator scope. Items the diff itself flagged as
+> *intentional* AIMonitor design are marked [INTENTIONAL].
+
+## A. MISSING (no AIMonitor equivalent) — MCP scope
+
+- **Overlay (semantic) compile on every typed edit** — [DOWNGRADED: see correction above]. CMB ran a candidate
+  `CSharpCompilation` per typed edit. AIMonitor relies on the full pre-merge build instead. Real delta = *early per-edit
+  feedback only*; low/medium nicety, not a safety gap. `MonitorWorkflowService.cs:895,2852-2911`.
+- **Superseded-record handling** [HIGH] — `Working/Staged/Superseded` archive + queue lifecycle; staging a new candidate
+  archived prior same-file staged records. `MonitorWorkflowService.cs:2245-2319`. (Hand-verified absent — see #11 above.)
+- **`get_source_map` SuggestedNarrowing** [MED] — over-budget narrowing hints. `MonitorWorkflowService.cs:3495-3507`.
+- **`get_source_map` SuggestedNextCalls** [MED] — workflow-chaining navigation guidance. `:3509-3548`.
+- **`get_source_map` AI-attribute noise filter** [MED] — `ShouldSkipSourceMapAttribute` + `Attributes`/`HasAttributes`
+  (surface real attributes, strip `AIChange`/`AIHistory`). `:3762-3796`.
+- **Review-chain blocking across a multi-file session** [MED] — all-or-coordinated review gating + deferred multi-file
+  index refresh (`review-chain-blocked`). Depends on SessionId-on-records first. `:1377-1393,1495-1542`.
+
+## B. DEGRADED — HIGH (raw, unverified)
+
+- **Per-edit syntax/overlay validation on text/span/submit writes** — [DOWNGRADED per correction; pre-merge build covers
+  semantics]. text/span/whole-file just `File.WriteAllText`, no per-edit check. `WorkflowEditService.cs:299,398-404`.
+- **`get_self_check` guardrail evaluation** — constant string, no `Guardrails`/collision detection; description still
+  claims "safety guardrails". `Program.cs:136-151`. (Hand-verified — #4.)
+- **`get_solution_index_status`** — no `StaleFileCount` (no `last_write_time`, hash stored never compared) +
+  `Symbol/Reference/CallSite/RelationshipCount`. `Program.cs:185-191`. (Hand-verified — #5.)
+- **`find_indexed_references`** — no caller identity/partial fanout/`FileHash`. `Program.cs:302-315`. (Hand-verified — #3.)
+- **`find_indexed_callers`** — no `call_sites` table; substring-fakes via `reference_kind`. `Program.cs:317-334`. (Hand-verified — #2.)
+- **`find_indexed_relationships`** — explicit empty stub. `Program.cs:336-355`. (Hand-verified — #1.)
+- **`get_source_map` token budget/truncation** — `EstimatedTokenProxy`/`BudgetLimit`/`WasTruncated` absent. (Hand-verified — #8; work-order exists.)
+- **`get_source_map` per-mode field shaping** — `mode` never reaches `MapFile`/`MapSymbol`; all modes return full payload. (Hand-verified — #8.)
+- **`get_file_outline`** — line heuristic, not Roslyn. `Program.cs:519-533,1222-1234`. (Hand-verified — #10.)
+- **`record_diff_decision`** — no superseded short-circuit; no persisted blocking queue status; `note`/`sessionId` params
+  dropped; response lacks `BlocksFurtherEdits`/`QueueStatus`. (Adds stronger accept preconditions.) `Program.cs:871-889`.
+- **Dirty-unexpected blocking state machine** — computes `dirty-unexpected` + refuses accept, but does not persist a
+  blocking queue status or block subsequent `stage`. `WorkflowEditService.cs:805-815`.
+- **`list_session_staged_records`** — not session-scoped; returns all records. `Program.cs:420-428`. (Hand-verified — #7.)
+- **`get_monitor_run`** — searches only last 500; case-SENSITIVE; recorder self-trims to 500. `Program.cs:966-975`.
+- **`prune_monitor_history`** — [INTENTIONAL no-op per CLAUDE.md] but CMB's archival engine (zip/ledger-prune/retention)
+  has no equivalent behind any operator flow. `Program.cs:1017-1027`.
+- **`get_staging_guide`** — 491-byte `SafeEditWorkflow.md` vs CMB ~10.6KB composed. `Program.cs:1040-1049`. (Hand-verified — #12.)
+
+## C. DEGRADED — MEDIUM (raw, unverified)
+
+- `MonitorStatusResult` missing `Symbol/Reference/CallSite/Relationship/StaleFileCount`. `MonitorStatusResult.cs:3-22`.
+- `RefreshSolutionIndex` — no `StartedAt/FinishedAt/DurationMs` + indexed counts. `Program.cs:153-159`.
+- `get_solution_index` — no `Math.Clamp` on limits; drops `Scope/Value/IndexMissing` envelope + row metadata
+  (`SignatureHash/TextSpan/SelectorJson/SourceAnchor/Accessibility/IsGenerated/IsPartial`, file `Sha256/Length/LastWriteTime/ParseStatus`). `Program.cs:193-204`.
+- `query_solution_index` — no clamp; folder match is loose `Contains` substring; drops envelope; unknown scope throws. `Program.cs:225-262`. (folder-substring hand-verified — #6.)
+- `find_indexed_symbols` — no clamp; thin row (missing `FileHash/SymbolTextHash/columns/TextSpan*/SourceAnchor/SelectorJson/Accessibility/IsGenerated/IsPartial`); insertion-order. `Program.cs:266-286`.
+- `get_indexed_symbol` — same thin row; drops `SelectorJson` (the advertised bridge to get_symbol/submit_symbol). `Program.cs:288-300`.
+- `get_source_map` 'auto' resolution — `NormalizeMode` returns `auto` literally; purpose mislabels as audit-debug. `RoslynEditService.cs:496-510`.
+- `get_source_map` file-level fields — drops `Sha256/Length`, structured `DiagnosticsSummary`, `WatchedProjectAlias/Folder`; zeroes symbols on any parse error. `RoslynEditModels.cs:43-50`.
+- `get_symbol` — reads the Working candidate, not committed watched source (reflects in-progress edits). `RoslynEditService.cs:50-66`.
+- `replace_text_in_file` — `occurrenceIndex` set ⇒ no total-match assertion (CMB always asserted); adds replace-all + line-ending normalize/retry; result lacks validation/`OperationCount`/`CandidateStatePath`. `Program.cs:630-666`.
+- `replace_span_in_file` — no per-edit validation; adds `newText` line-ending normalize CMB didn't. `Program.cs:684-712`.
+- `submit_file` — no validation; `sessionId`/`manifestJson` not threaded into the write (side-log only). `Program.cs:611-626`.
+- `find_text_span` — drops `OccurrenceCount` (model can't learn total matches before choosing). `TextSpanResult.cs:1-22`.
+- Typed-edit result record — missing `OperationCount`, structured `SyntaxValidation`/`OverlayValidation`, `BaselineHash`, candidate-state path, `ObservedRootKey`, structured `ErrorCode/Message`. `RoslynEditModels.cs:5-12`.
+- Structured syntax-validation diagnostics — throws one concatenated string, no id/line/col; none on success. `RoslynEditService.cs:304-327`.
+- `manifestJson` persistence + `OperationCount` — all typed-edit wrappers `_ = manifestJson` and discard it. `Program.cs:755-866`.
+- `check_file_hash` durable model — no per-file session state; reconstructs "previous" by scanning events; lost `FetchCount/LastFetchedAt/AccessKind/RelativeSourcePath/SessionId`. `Program.cs:475-499`.
+- Session file-fetch tracking — no `RecordFileFetch`/`AccessKind`/`EnsureSession` upsert; ad-hoc events. `Program.cs:465-468,1158-1164`.
+- `stage_candidate_for_review` — no stage-time overlay validation; no supersede; no blocked-dirty-unexpected gate; record has no `SessionId`; throws on identical content (no `no-op-staged`). `Program.cs:721-748`. [diff verdict was `rejected` on the supersede/validation sub-claim — CONFIRM.]
+- `launch_staged_diff` — no superseded short-circuit; no review-chain blocking; no persisted blocked-overlay status on cancel. `Program.cs:891-915`.
+- `refresh_solution_index_file` — returns a LIST of files vs single; drops per-file `DiagnosticCount` + `Sha256/Length/LastWriteTimeUtc/ParseStatus/IsStale`. `Program.cs:161-172`.
+- `list_monitor_runs` — raw dicts (no typed entry/`Operation`); no ordering; no clamp; recorder never writes `operation`. `Program.cs:950-964`.
+- `get_tool_manifest` — returns `SharedAdapterSurface.md` arch prose, not a per-tool manifest. `Program.cs:1029-1038`. (Hand-verified — #12.)
+
+## D. DEGRADED — LOW (raw, unverified)
+
+- `get_self_check` result fields — drops `SourceImplementationRoot/LegacyMonitorRoot` + `Guardrails`. `Program.cs:1321-1332`.
+- `get_monitor_status` — drops `McpServerRootExists/LegacyMonitorRootExists` (adds index counts + DB path/exists). `Program.cs:102-118`.
+- `get_solution_index_tree` — embedded `Status` (incl `StaleFileCount`) gone; no `(global)` bucket for empty-namespace. `Program.cs:206-223`.
+- `get_source_map` symbol metadata — drops `HasDocumentation/BaseTypes/IsStatic/IsAsync/IsOverride/IsVirtual/IsPartial` (Modifiers partly compensates). `RoslynEditModels.cs:52-67`.
+- Per-parameter `[Description]` on typed-edit tools — tool-level only; selector-JSON schema hint + examples gone. `Program.cs:752,807`.
+- `start_monitor_session` — no seed `session-started` event; no watched-path anchoring. `Program.cs:359-371`.
+- `list_monitor_sessions` — drops `WatchedSolutionPath` + `FileCount`. `Program.cs:375-386`.
+- `get_monitor_session` — doesn't bump last-accessed on read. `Program.cs:390-396`.
+- `compare_file` — no `refresh-state-stale` guard; host launches WinMerge (arch shift). `Program.cs:926-948`.
+- NewFileBaselines — [INTENTIONAL] per-run baseline, no auto-copy on accept (operator saves; record-decision verifies). `WorkflowEditService.cs:706-731`.
+- `list_ledgers` — `TopDirectoryOnly` (CMB recursed); no clamp; drops `RelativePath`. `Program.cs:977-992`.
+- `get_ledger` — drops `TextLength`. `Program.cs:994-1015`.
+- `get_smoke_test_catalog` — returns `SmokeCoverageTodo.md` (~4KB TODO) vs ~9KB structured catalog. `Program.cs:1051-1060`.
+- `list_watched_projects` — single hardcoded entry; no multi-project enumeration. `Program.cs:1062-1074`. (Only matters if multi-project is added.)
+
+## E. RENAMED (no real capability loss)
+
+- `new_file` — AIMonitor surfaces new-file creation as a first-class tool (reverse gap; net positive).
+- `get_staged_record` / `get_edit_status` — internal CMB reads promoted to explicit tools.
+- `McpHubBridge` → `AIMonitor.McpStdioBridge` — functionally equivalent pipe bridge.
+
+*(Source: `cmb-vs-aimonitor-mcp-parity` workflow, run 2026-06-02. Full per-item evidence including CMB file:line was in
+the run output; the AIMonitor-side anchors above are sufficient to confirm each. The 12 items in the main table are the
+hand-verified subset.)*
