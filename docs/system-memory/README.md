@@ -82,10 +82,10 @@ Diff stability depends on complete local edit context.
 Before staging, the agent must have the full relevant edit surface in context at the right level:
 
 - for Claude semantic C# edits, this can be the solution index plus source-map/symbol view and narrow MCP edit tools;
-- for Codex or text-heavy edits, this is often the whole monitor-owned Working file edited locally;
+- for Codex or text-heavy edits, this can be the whole monitor-owned Working file edited locally, or a bounded grep/text-style replacement constrained by the smallest safe edit rule;
 - for coupled changes, every related file should be composed into the same monitor session before review.
 
-The workflow does not try to prove that the agent understood everything. Instead, it forces enough local structure or bytes into the edit loop that the candidate is coherent, then validates, reviews, and classifies the result. Stable diffs come from coherent local candidates, not scattered partial patches.
+The workflow does not try to prove that the agent understood everything. Instead, it forces enough local structure, bytes, or tightly bounded exact-match context into the edit loop that the candidate is coherent, then validates, reviews, and classifies the result. Stable diffs come from coherent local candidates and smallest-safe edits, not scattered partial patches.
 
 ## Change Protocol
 
