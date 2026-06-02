@@ -32,7 +32,7 @@ Do not promise Visual Studio-level Razor binding analysis. The current reliable 
 - normal C# and clean `.razor.cs` code-behind are indexed as C#;
 - user-authored `.razor` references are indexed only when compiler/Razor source mappings expose a source symbol cleanly;
 - legacy mixed `.razor.cs` files are treated as Razor input only when Razor syntax is present and Razor source mappings exist;
-- literal component/event binding strings and full Blazor UI binding semantics are not a hard correctness contract yet.
+- component parameters, event handlers, implicit markup-to-code relationships, and other full Blazor markup binding semantics are grep/source-map assisted evidence, not a complete semantic contract.
 
 Use grep-verified smoke tests for representative Razor cases instead of trying to prove every markup binding on a production page.
 

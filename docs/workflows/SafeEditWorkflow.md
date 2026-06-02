@@ -6,7 +6,7 @@ The AIMonitor workflow keeps the core safety invariant:
 inspect -> stage -> validate -> stable diff -> accept/reject hash classification -> record -> iterate
 ```
 
-Line-by-line human review is not the only safety mechanism. The workflow also relies on:
+WinMerge review is the human decision gate. AIMonitor makes that gate safer and more manageable by surrounding it with:
 
 - small edit surfaces;
 - compiler/build/runtime feedback;

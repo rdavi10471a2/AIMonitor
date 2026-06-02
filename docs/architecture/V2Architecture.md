@@ -42,7 +42,7 @@ For C# and Razor work:
 - regular C# and clean `.razor.cs` code-behind are C# provider inputs;
 - user `.razor` files are indexed only through reliable Razor/compiler source mappings;
 - legacy mixed `.razor.cs` files are accepted only when Razor syntax and source mappings prove they are Razor input;
-- full Blazor UI binding semantics are not part of the current index contract.
+- component parameters, event handlers, implicit markup-to-code relationships, and other full Blazor markup binding semantics are grep/source-map assisted evidence, not a complete semantic contract.
 
 This boundary is intentional. The current monitor workflow is already useful with MSBuild truth, C# symbols/references, representative Razor mappings, grep-verified smoke tests, and compiler/build feedback. A future Razor binding provider can extend the model without rewriting the core architecture.
 
