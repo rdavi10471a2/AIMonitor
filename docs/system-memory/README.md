@@ -60,7 +60,7 @@ Adapters may expose different commands or tool names, but they must route throug
 
 Record-decision orchestration is shared. CLI and MCP may expose different arguments, but the accepted/rejected decision, conditional post-accept index rebuild, index-refresh payload, and next-step guidance are assembled by the shared indexing workflow.
 
-Post-accept index refresh is part of the safety boundary. Accepted or accepted-normalized decisions mark the file's workflow session as index-stale until a rebuild succeeds. If a rebuild fails, the decision may still be durable, but the operator/agent must not trust index rows until `refresh_solution_index` or an equivalent rebuild succeeds.
+Post-accept index refresh is part of the safety boundary. Accepted or accepted-normalized decisions mark the file's workflow session as index-stale until a rebuild succeeds. If a rebuild fails, the decision may still be durable, but the operator/agent must not trust index rows until `refresh_solution_index` or an equivalent rebuild succeeds. A successful full rebuild clears stale workflow flags for the watched workspace so the documented recovery path is self-healing.
 
 Index rebuilds must not destroy a useful index with a degraded empty load. A zero-project snapshot is allowed only when there was no populated index to preserve; otherwise the swap aborts before clearing existing rows and surfaces a failed refresh.
 

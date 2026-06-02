@@ -17,6 +17,7 @@ Coordinate solution-index rebuilds and post-decision index refresh responses.
 - `ReviewDecisionWithIndexRefreshResult`.
 - Rebuilt monitor-owned solution index.
 - Telemetry describing post-accept refresh status.
+- Cleared workflow index-stale flags after successful full rebuilds.
 
 ## Data Flow
 
@@ -26,6 +27,7 @@ record decision accepted
   -> PostAcceptIndexRefreshService
   -> SolutionIndexRebuildService
   -> SolutionIndexStore.SaveSnapshot
+  -> clear stale workflow flags after successful rebuild
   -> indexRefresh result
 ```
 
@@ -35,6 +37,7 @@ record decision accepted
 - Solution index rebuild composition.
 - Post-accept rebuild orchestration.
 - Index refresh result shape.
+- Successful rebuild recovery for stale workflow flags.
 
 ## Does Not Own
 

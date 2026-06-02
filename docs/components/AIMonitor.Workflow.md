@@ -43,6 +43,7 @@ refresh_file/new_file
 - Dirty/unexpected recovery signals.
 - Line-ending-preserving text operations.
 - Per-file index-stale workflow state after accepted decisions.
+- Clearing stale workflow flags when Indexing reports a successful full rebuild.
 
 ## Does Not Own
 
