@@ -137,6 +137,7 @@ Tests:
 Progress:
 
 - 2026-06-02: Initial storage/schema, shared query, and MCP exposure restored for call sites and symbol relationships. Focused data tests and MCP smoke prove `find_indexed_callers` and `find_indexed_relationships` return shared index rows instead of compatibility stubs.
+- 2026-06-02: Status counts, stale-file detection, path-aware scoped query, query clamps/envelope fields, and richer indexed reference rows restored in shared Data services. Data tests prove stale detection and sibling-folder exclusion; direct MCP server smokes prove status/query/reference fields are exposed.
 
 ## Phase 2 - Session-Scoped Staging And Record Lifecycle
 

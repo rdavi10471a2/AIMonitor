@@ -50,8 +50,9 @@ The items below are the hand-verified restore set from the finding. They are saf
 
 - **Owner:** Indexing/Data
 - **Adapter surface:** MCP query tools
-- **Current status:** Thin
+- **Current status:** Initial restore implemented
 - **Required proof:** References include enough caller/file/hash/partial context for agent navigation, or an explicit accepted replacement.
+- **Proof added:** `IndexedReferenceRow` now includes target symbol metadata, containing caller symbol metadata when defensible from indexed spans, and indexed file content hash. Data tests and direct MCP server smokes verify the richer shape.
 
 ### CMB-PARITY-004 — Real Self-Check Guardrails
 
@@ -64,15 +65,17 @@ The items below are the hand-verified restore set from the finding. They are saf
 
 - **Owner:** Indexing/Data
 - **Adapter surface:** MCP status tools, UI as applicable
-- **Current status:** Thin
+- **Current status:** Initial restore implemented
 - **Required proof:** Status exposes stale-file count and useful symbol/reference/call-site/relationship counts, backed by persisted facts.
+- **Proof added:** `MonitorStatusResult` exposes symbol/reference/call-site/relationship/stale-file counts. Data tests mutate watched bytes after indexing to prove stale count changes, and direct MCP server smoke verifies the fields are visible through status tools.
 
 ### CMB-PARITY-006 — Scoped Index Query Semantics
 
 - **Owner:** Data
 - **Adapter surface:** MCP query tools
-- **Current status:** Thin
+- **Current status:** Initial restore implemented
 - **Required proof:** Folder scope uses path-aware matching and limits are clamped.
+- **Proof added:** Shared `SolutionIndexQueryService.QueryIndex` owns scope filtering and clamps. Data tests prove `Features/Orders` does not over-match `Features/OrdersExtra`; direct MCP server smoke verifies clamp/envelope fields.
 
 ### CMB-PARITY-007 — Session-Scoped Staged Records
 

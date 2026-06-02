@@ -7,4 +7,10 @@ public sealed record IndexedReferenceRow(
     int Line,
     int Column,
     string ReferenceKind,
-    string Snippet);
+    string Snippet,
+    string TargetName = "",
+    string TargetKind = "",
+    string CallerStableKey = "",
+    string CallerName = "",
+    string CallerKind = "",
+    string FileContentHash = "");

@@ -114,6 +114,11 @@ public sealed class AIMonitorTools
             indexStatus.DatabaseExists,
             indexStatus.ProjectCount,
             indexStatus.DocumentCount,
+            indexStatus.SymbolCount,
+            indexStatus.ReferenceCount,
+            indexStatus.CallSiteCount,
+            indexStatus.RelationshipCount,
+            indexStatus.StaleFileCount,
             indexStatus.DiagnosticCount);
     }
 
@@ -192,15 +197,12 @@ public sealed class AIMonitorTools
 
     [McpServerTool]
     [Description("Return the monitor-owned watched solution index as compact JSON with indexed files and symbols. Use maxFiles/maxSymbols to budget the payload.")]
-    public AIMonitorSolutionIndexResult GetSolutionIndex(
+    public SolutionIndexQueryResult GetSolutionIndex(
         [Description("Maximum files to return.")] int maxFiles = 5000,
         [Description("Maximum symbols to return.")] int maxSymbols = 50000)
     {
         runtimeState.Touch();
-        return new AIMonitorSolutionIndexResult(
-            queryService.GetMonitorStatus(),
-            queryService.ListDocuments().Take(maxFiles).ToArray(),
-            queryService.ListSymbols().Take(maxSymbols).ToArray());
+        return queryService.QueryIndex(maxFiles: maxFiles, maxSymbols: maxSymbols);
     }
 
     [McpServerTool]
@@ -224,41 +226,14 @@ public sealed class AIMonitorTools
 
     [McpServerTool]
     [Description("Query the monitor-owned watched solution index by scope. Scopes: solution, namespace, folder, file.")]
-    public AIMonitorSolutionIndexResult QuerySolutionIndex(
+    public SolutionIndexQueryResult QuerySolutionIndex(
         [Description("Index scope: solution, namespace, folder, or file.")] string scope = "solution",
         [Description("Namespace text, folder path, or file path for scoped queries. Omit for solution scope.")] string? value = null,
         [Description("Maximum files to return.")] int maxFiles = 200,
         [Description("Maximum symbols to return.")] int maxSymbols = 500)
     {
         runtimeState.Touch();
-        IEnumerable<IndexedDocumentRow> documents = queryService.ListDocuments();
-        IEnumerable<IndexedSymbolRow> symbols = queryService.ListSymbols();
-        string normalizedScope = scope.ToLowerInvariant();
-        if (normalizedScope == "file" && !string.IsNullOrWhiteSpace(value))
-        {
-            documents = documents.Where(row => PathMatches(row.FilePath, value));
-            symbols = symbols.Where(row => PathMatches(row.FilePath, value));
-        }
-        else if (normalizedScope == "folder" && !string.IsNullOrWhiteSpace(value))
-        {
-            documents = documents.Where(row => row.FilePath.Contains(value, StringComparison.OrdinalIgnoreCase));
-            symbols = symbols.Where(row => row.FilePath.Contains(value, StringComparison.OrdinalIgnoreCase));
-        }
-        else if (normalizedScope == "namespace" && !string.IsNullOrWhiteSpace(value))
-        {
-            symbols = symbols.Where(row => row.Namespace.Equals(value, StringComparison.Ordinal));
-            HashSet<string> files = symbols.Select(row => row.FilePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            documents = documents.Where(row => files.Contains(row.FilePath));
-        }
-        else if (normalizedScope != "solution")
-        {
-            throw new ArgumentException("Scope must be solution, namespace, folder, or file.", nameof(scope));
-        }
-
-        return new AIMonitorSolutionIndexResult(
-            queryService.GetMonitorStatus(),
-            documents.Take(maxFiles).ToArray(),
-            symbols.Take(maxSymbols).ToArray());
+        return queryService.QueryIndex(scope, value, maxFiles, maxSymbols);
     }
 
     [McpServerTool]
@@ -1077,12 +1052,6 @@ public sealed class AIMonitorTools
         return new AIMonitorServerShutdownResult(Environment.ProcessId, DateTimeOffset.UtcNow, string.IsNullOrWhiteSpace(reason) ? "shutdown_server requested" : reason);
     }
 
-    private static bool PathMatches(string candidate, string value)
-    {
-        return candidate.Equals(value, StringComparison.OrdinalIgnoreCase)
-            || candidate.EndsWith(value, StringComparison.OrdinalIgnoreCase);
-    }
-
     private string SessionRoot => Path.Combine(MonitorWorkspacePaths.GetWatchedSolutionWorkspaceRoot(settings), "workflow", "sessions");
 
     private string ResolveWatchedPath(string path)
@@ -1246,6 +1215,11 @@ public sealed record AIMonitorMcpStatus(
     bool DatabaseExists,
     int ProjectCount,
     int DocumentCount,
+    int SymbolCount,
+    int ReferenceCount,
+    int CallSiteCount,
+    int RelationshipCount,
+    int StaleFileCount,
     int DiagnosticCount);
 
 public sealed record AIMonitorWorkflowStatus(
@@ -1255,11 +1229,6 @@ public sealed record AIMonitorWorkflowStatus(
     string WorkingRoot,
     string? ResolvedDiffToolPath,
     IReadOnlyList<string> WinMergeCandidatePaths);
-
-public sealed record AIMonitorSolutionIndexResult(
-    MonitorStatusResult Status,
-    IReadOnlyList<IndexedDocumentRow> Files,
-    IReadOnlyList<IndexedSymbolRow> Symbols);
 
 public sealed record AIMonitorToolErrorResult(
     bool IsError,

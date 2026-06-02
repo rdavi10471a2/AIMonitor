@@ -89,7 +89,28 @@ public sealed class McpServerSmokeTests
 
         CallToolResult status = await client.CallToolAsync("get_monitor_status");
         Assert.False(status.IsError == true);
-        Assert.Contains("projectCount", Serialize(status), StringComparison.Ordinal);
+        string statusJson = ExtractToolText(status);
+        Assert.Equal(1, ExtractJsonInt(statusJson, "projectCount"));
+        Assert.Equal(1, ExtractJsonInt(statusJson, "symbolCount"));
+        Assert.Equal(1, ExtractJsonInt(statusJson, "referenceCount"));
+        Assert.Equal(0, ExtractJsonInt(statusJson, "staleFileCount"));
+
+        CallToolResult scoped = await client.CallToolAsync(
+            "query_solution_index",
+            new Dictionary<string, object?>
+            {
+                ["scope"] = "folder",
+                ["value"] = ".",
+                ["maxFiles"] = 1000000,
+                ["maxSymbols"] = 1000000
+            });
+        Assert.False(scoped.IsError == true);
+        string scopedJson = ExtractToolText(scoped);
+        Assert.Equal(1, ExtractJsonInt(scopedJson, "totalFileCount"));
+        Assert.Equal(1, ExtractJsonInt(scopedJson, "totalSymbolCount"));
+        Assert.Equal(5000, ExtractJsonInt(scopedJson, "maxFiles"));
+        Assert.Equal(50000, ExtractJsonInt(scopedJson, "maxSymbols"));
+        Assert.True(ExtractJsonBool(scopedJson, "limitsClamped"));
 
         CallToolResult symbols = await client.CallToolAsync(
             "find_indexed_symbols",
@@ -241,6 +262,20 @@ public sealed class McpServerSmokeTests
         Assert.Contains("\"callerStableKey\":\"" + callerStableKey + "\"", callersJson, StringComparison.Ordinal);
         Assert.Contains("\"callerName\":\"Caller\"", callersJson, StringComparison.Ordinal);
         Assert.Contains("\"callKind\":\"InvocationExpression\"", callersJson, StringComparison.Ordinal);
+
+        CallToolResult references = await client.CallToolAsync(
+            "find_indexed_references",
+            new Dictionary<string, object?>
+            {
+                ["stableSymbolKey"] = targetStableKey
+            });
+        Assert.False(references.IsError == true);
+        string referencesJson = ExtractToolText(references);
+        Assert.Contains("\"targetName\":\"Target\"", referencesJson, StringComparison.Ordinal);
+        Assert.Contains("\"targetKind\":\"Method\"", referencesJson, StringComparison.Ordinal);
+        Assert.Contains("\"callerStableKey\":\"" + callerStableKey + "\"", referencesJson, StringComparison.Ordinal);
+        Assert.Contains("\"callerName\":\"Caller\"", referencesJson, StringComparison.Ordinal);
+        Assert.Contains("\"fileContentHash\"", referencesJson, StringComparison.Ordinal);
 
         CallToolResult relationships = await client.CallToolAsync(
             "find_indexed_relationships",

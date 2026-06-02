@@ -18,5 +18,15 @@ public sealed class MonitorStatusResult
 
     public int DocumentCount { get; set; }
 
+    public int SymbolCount { get; set; }
+
+    public int ReferenceCount { get; set; }
+
+    public int CallSiteCount { get; set; }
+
+    public int RelationshipCount { get; set; }
+
+    public int StaleFileCount { get; set; }
+
     public int DiagnosticCount { get; set; }
 }

@@ -1,6 +1,7 @@
 using AIMonitor.Core;
 using AIMonitor.Data;
 using AIMonitor.MSBuild;
+using System.Security.Cryptography;
 
 namespace AIMonitor.Data.Tests;
 
@@ -24,13 +25,33 @@ public sealed class SolutionIndexQueryServiceTests
         Assert.Equal(settings.WatchedSolutionPath, status.WatchedSolutionPath);
         Assert.Equal(databasePath, status.DatabasePath);
         Assert.Equal(0, status.ProjectCount);
+        Assert.Equal(0, status.SymbolCount);
+        Assert.Equal(0, status.ReferenceCount);
+        Assert.Equal(0, status.CallSiteCount);
+        Assert.Equal(0, status.RelationshipCount);
+        Assert.Equal(0, status.StaleFileCount);
     }
 
     [Fact]
-    public void Query_methods_filter_documents_symbols_and_file_references()
+    public void Query_methods_filter_documents_symbols_references_and_status_counts()
     {
         string tempRoot = CreateTempRoot();
         string filePath = Path.Combine(tempRoot, "Watched", "Program.cs");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        File.WriteAllText(filePath, """
+            namespace Example
+            {
+                internal static class Program
+                {
+                    static void Target() { }
+
+                    static void Caller()
+                    {
+                        Target();
+                    }
+                }
+            }
+            """);
         MonitorSettings settings = MonitorSettings.Create(
             tempRoot,
             Path.Combine(tempRoot, "Watched", "Example.sln"),
@@ -42,12 +63,68 @@ public sealed class SolutionIndexQueryServiceTests
         IReadOnlyList<IndexedDocumentRow> documents = service.ListDocuments(filePath: filePath);
         IReadOnlyList<IndexedSymbolRow> symbols = service.ListSymbols(filePath, "Program");
         IReadOnlyList<IndexedReferenceRow> references = service.ListReferencesInFile(filePath);
+        MonitorStatusResult status = service.GetMonitorStatus();
 
         Assert.Single(documents);
-        Assert.Equal(string.Empty, documents[0].ContentHash);
+        Assert.False(string.IsNullOrWhiteSpace(documents[0].ContentHash));
         Assert.Single(symbols);
-        Assert.Single(references);
-        Assert.Equal("symbol:program", references[0].TargetStableKey);
+        Assert.Equal(3, references.Count);
+        Assert.Equal("symbol:program", Assert.Single(references, reference => reference.ReferenceKind == "IdentifierName").TargetStableKey);
+        IndexedReferenceRow invocation = Assert.Single(references, reference => reference.ReferenceKind == "InvocationExpression");
+        Assert.Equal("Target", invocation.TargetName);
+        Assert.Equal("Method", invocation.TargetKind);
+        Assert.Equal("symbol:caller", invocation.CallerStableKey);
+        Assert.Equal("Caller", invocation.CallerName);
+        Assert.Equal("Method", invocation.CallerKind);
+        Assert.Equal(documents[0].ContentHash, invocation.FileContentHash);
+        Assert.Equal(1, status.ProjectCount);
+        Assert.Equal(1, status.DocumentCount);
+        Assert.Equal(3, status.SymbolCount);
+        Assert.Equal(3, status.ReferenceCount);
+        Assert.Equal(1, status.CallSiteCount);
+        Assert.Equal(1, status.RelationshipCount);
+        Assert.Equal(0, status.StaleFileCount);
+
+        File.AppendAllText(filePath, Environment.NewLine + "// stale");
+
+        Assert.Equal(1, service.GetMonitorStatus().StaleFileCount);
+    }
+
+    [Fact]
+    public void QueryIndex_uses_path_aware_folder_scope_and_clamps_limits()
+    {
+        string tempRoot = CreateTempRoot();
+        string watchedRoot = Path.Combine(tempRoot, "Watched");
+        string targetFilePath = Path.Combine(watchedRoot, "Features", "Orders", "OrderView.cs");
+        string siblingFilePath = Path.Combine(watchedRoot, "Features", "OrdersExtra", "OtherView.cs");
+        Directory.CreateDirectory(Path.GetDirectoryName(targetFilePath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(siblingFilePath)!);
+        File.WriteAllText(targetFilePath, "namespace Example.Features.Orders { internal sealed class OrderView { } }");
+        File.WriteAllText(siblingFilePath, "namespace Example.Features.OrdersExtra { internal sealed class OtherView { } }");
+        MonitorSettings settings = MonitorSettings.Create(
+            tempRoot,
+            Path.Combine(watchedRoot, "Example.sln"),
+            Path.Combine(tempRoot, "runtime"));
+        SolutionIndexStore store = new(new SolutionIndexDatabase(MonitorDataPaths.GetDefaultIndexDatabasePath(settings)));
+        store.SaveSnapshot(new MSBuildSolutionSnapshot(
+            settings.WatchedSolutionPath,
+            [
+                CreateProjectSnapshot(settings.WatchedSolutionPath, targetFilePath, "symbol:order-view", "OrderView", "Example.Features.Orders", "document:order"),
+                CreateProjectSnapshot(settings.WatchedSolutionPath, siblingFilePath, "symbol:other-view", "OtherView", "Example.Features.OrdersExtra", "document:other")
+            ],
+            []));
+        SolutionIndexQueryService service = SolutionIndexQueryService.Create(settings);
+
+        SolutionIndexQueryResult result = service.QueryIndex("folder", Path.Combine("Features", "Orders"), maxFiles: 1000000, maxSymbols: -1);
+
+        Assert.Single(result.Files);
+        Assert.Equal(targetFilePath, result.Files[0].FilePath);
+        Assert.Equal(1, result.TotalFileCount);
+        Assert.Equal(1, result.TotalSymbolCount);
+        Assert.Equal(5000, result.MaxFiles);
+        Assert.Equal(0, result.MaxSymbols);
+        Assert.True(result.LimitsClamped);
+        Assert.Empty(result.Symbols);
     }
 
     private static MSBuildSolutionSnapshot CreateSnapshot(string solutionPath, string filePath)
@@ -70,7 +147,7 @@ public sealed class SolutionIndexQueryServiceTests
                     "enable",
                     "latest",
                     [
-                        new MSBuildDocumentSnapshot("document:program", "Program.cs", filePath, [])
+                        new MSBuildDocumentSnapshot("document:program", "Program.cs", filePath, [], ComputeFileHash(filePath))
                     ],
                     [
                         new MSBuildSymbolSnapshot(
@@ -80,17 +157,51 @@ public sealed class SolutionIndexQueryServiceTests
                             "Example",
                             "",
                             filePath,
-                            1,
-                            1,
-                            "Example.Program")
+                            3,
+                            10,
+                            "Example.Program"),
+                        new MSBuildSymbolSnapshot(
+                            "symbol:caller",
+                            "Caller",
+                            "Method",
+                            "Example",
+                            "Program",
+                            filePath,
+                            7,
+                            10,
+                            "Example.Program.Caller()"),
+                        new MSBuildSymbolSnapshot(
+                            "symbol:target",
+                            "Target",
+                            "Method",
+                            "Example",
+                            "Program",
+                            filePath,
+                            5,
+                            5,
+                            "Example.Program.Target()")
                     ],
                     [
                         new MSBuildReferenceSnapshot(
                             "symbol:program",
                             filePath,
-                            1,
-                            45,
+                            3,
+                            27,
                             "IdentifierName",
+                            "Program"),
+                        new MSBuildReferenceSnapshot(
+                            "symbol:target",
+                            filePath,
+                            9,
+                            25,
+                            "InvocationExpression",
+                            "Target()"),
+                        new MSBuildReferenceSnapshot(
+                            "symbol:program",
+                            filePath,
+                            3,
+                            5,
+                            "partial_declaration",
                             "Program")
                     ],
                     [],
@@ -103,8 +214,47 @@ public sealed class SolutionIndexQueryServiceTests
             []);
     }
 
+    private static MSBuildProjectSnapshot CreateProjectSnapshot(
+        string solutionPath,
+        string filePath,
+        string symbolKey,
+        string symbolName,
+        string namespaceName,
+        string documentKey)
+    {
+        return new MSBuildProjectSnapshot(
+            "project:" + symbolName,
+            symbolName,
+            Path.Combine(Path.GetDirectoryName(solutionPath)!, symbolName + ".csproj"),
+            "C#",
+            "net10.0",
+            "",
+            "Exe",
+            "Microsoft.NET.Sdk",
+            symbolName,
+            namespaceName,
+            "enable",
+            "enable",
+            "latest",
+            [new MSBuildDocumentSnapshot(documentKey, Path.GetFileName(filePath), filePath, [], ComputeFileHash(filePath))],
+            [new MSBuildSymbolSnapshot(symbolKey, symbolName, "NamedType", namespaceName, "", filePath, 1, 1, namespaceName + "." + symbolName)],
+            [new MSBuildReferenceSnapshot(symbolKey, filePath, 1, 1, "IdentifierName", symbolName)],
+            [],
+            [],
+            [],
+            [],
+            [],
+            []);
+    }
+
     private static string CreateTempRoot()
     {
         return Path.Combine(Path.GetTempPath(), "AIMonitorDataTests", Guid.NewGuid().ToString("N"));
+    }
+
+    private static string ComputeFileHash(string filePath)
+    {
+        using FileStream stream = File.OpenRead(filePath);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 }

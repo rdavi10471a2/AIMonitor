@@ -151,17 +151,63 @@ public sealed class SolutionIndexStore
             ? """
               select projects.project_path, symbol_references.target_stable_key,
                      symbol_references.file_path, symbol_references.line, symbol_references.column,
-                     symbol_references.reference_kind, symbol_references.snippet
+                     symbol_references.reference_kind, symbol_references.snippet,
+                     coalesce(target_symbols.name, '') as target_name,
+                     coalesce(target_symbols.kind, '') as target_kind,
+                     coalesce(caller_symbols.stable_key, '') as caller_stable_key,
+                     coalesce(caller_symbols.name, '') as caller_name,
+                     coalesce(caller_symbols.kind, '') as caller_kind,
+                     coalesce(documents.content_hash, '') as file_content_hash
               from symbol_references
               inner join projects on projects.id = symbol_references.project_id
+              left join symbols as target_symbols
+                     on target_symbols.project_id = symbol_references.project_id
+                    and target_symbols.stable_key = symbol_references.target_stable_key
+              left join documents
+                     on documents.project_id = symbol_references.project_id
+                    and documents.file_path = symbol_references.file_path
+              left join symbols as caller_symbols
+                     on caller_symbols.id = (
+                         select contained_symbols.id
+                         from symbols as contained_symbols
+                         where contained_symbols.project_id = symbol_references.project_id
+                           and contained_symbols.file_path = symbol_references.file_path
+                           and contained_symbols.start_line <= symbol_references.line
+                           and contained_symbols.end_line >= symbol_references.line
+                         order by contained_symbols.start_line desc, contained_symbols.end_line asc
+                         limit 1
+                     )
               order by symbol_references.file_path, symbol_references.line, symbol_references.column;
               """
             : """
               select projects.project_path, symbol_references.target_stable_key,
                      symbol_references.file_path, symbol_references.line, symbol_references.column,
-                     symbol_references.reference_kind, symbol_references.snippet
+                     symbol_references.reference_kind, symbol_references.snippet,
+                     coalesce(target_symbols.name, '') as target_name,
+                     coalesce(target_symbols.kind, '') as target_kind,
+                     coalesce(caller_symbols.stable_key, '') as caller_stable_key,
+                     coalesce(caller_symbols.name, '') as caller_name,
+                     coalesce(caller_symbols.kind, '') as caller_kind,
+                     coalesce(documents.content_hash, '') as file_content_hash
               from symbol_references
               inner join projects on projects.id = symbol_references.project_id
+              left join symbols as target_symbols
+                     on target_symbols.project_id = symbol_references.project_id
+                    and target_symbols.stable_key = symbol_references.target_stable_key
+              left join documents
+                     on documents.project_id = symbol_references.project_id
+                    and documents.file_path = symbol_references.file_path
+              left join symbols as caller_symbols
+                     on caller_symbols.id = (
+                         select contained_symbols.id
+                         from symbols as contained_symbols
+                         where contained_symbols.project_id = symbol_references.project_id
+                           and contained_symbols.file_path = symbol_references.file_path
+                           and contained_symbols.start_line <= symbol_references.line
+                           and contained_symbols.end_line >= symbol_references.line
+                         order by contained_symbols.start_line desc, contained_symbols.end_line asc
+                         limit 1
+                     )
               where symbol_references.target_stable_key = $stableKey
               order by symbol_references.file_path, symbol_references.line, symbol_references.column;
               """;
@@ -181,7 +227,13 @@ public sealed class SolutionIndexStore
                 reader.GetInt32(3),
                 reader.GetInt32(4),
                 reader.GetString(5),
-                reader.GetString(6)));
+                reader.GetString(6),
+                reader.GetString(7),
+                reader.GetString(8),
+                reader.GetString(9),
+                reader.GetString(10),
+                reader.GetString(11),
+                reader.GetString(12)));
         }
 
         return rows;
