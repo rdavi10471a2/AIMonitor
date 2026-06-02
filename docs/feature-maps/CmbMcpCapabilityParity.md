@@ -32,15 +32,19 @@ The items below are the hand-verified restore set from the finding. They are saf
 
 - **Owner:** Indexing/Data
 - **Adapter surface:** MCP query tools
-- **Current status:** Missing
+- **Current status:** Initial restore implemented
 - **Required proof:** Index rows for partial/inherits/implements/overrides plus MCP query returning real relationship rows.
+- **Proof added:** Data fixture persists `symbol_relationships` rows from relationship-shaped Roslyn/MSBuild references, and MCP smoke proves `find_indexed_relationships` returns those rows instead of an empty compatibility payload.
+- **Remaining Phase 1 work:** Broaden corpus coverage for inherits/implements/overrides and decide whether inverse relationship rows are persisted or query-projected.
 
 ### CMB-PARITY-002 — Indexed Call Sites And True Callers
 
 - **Owner:** Indexing/Data
 - **Adapter surface:** MCP query tools
-- **Current status:** Missing/thin
+- **Current status:** Initial restore implemented
 - **Required proof:** Call-site table or equivalent persisted caller identity. `find_indexed_callers` cannot infer callers by string-matching reference kind.
+- **Proof added:** Data fixture persists `call_sites` rows with caller symbol identity and target stable key, and MCP smoke proves `find_indexed_callers` returns caller identity from shared index storage.
+- **Remaining Phase 1 work:** Broaden corpus coverage for object creation and additional invocation forms.
 
 ### CMB-PARITY-003 — Rich Indexed References
 

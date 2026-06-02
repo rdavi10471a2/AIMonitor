@@ -41,7 +41,27 @@ public sealed class SolutionIndexStoreTests
                             @"C:\Example\Program.cs",
                             3,
                             8,
-                            "Example.Program")
+                            "Example.Program"),
+                        new MSBuildSymbolSnapshot(
+                            "symbol:get-value",
+                            "GetValue",
+                            "Method",
+                            "Example",
+                            "Program",
+                            @"C:\Example\Program.cs",
+                            5,
+                            7,
+                            "Example.Program.GetValue()"),
+                        new MSBuildSymbolSnapshot(
+                            "symbol:target-method",
+                            "TargetMethod",
+                            "Method",
+                            "Example",
+                            "Program",
+                            @"C:\Example\Program.cs",
+                            10,
+                            12,
+                            "Example.Program.TargetMethod()")
                     ],
                     [
                         new MSBuildReferenceSnapshot(
@@ -50,6 +70,20 @@ public sealed class SolutionIndexStoreTests
                             5,
                             13,
                             "IdentifierName",
+                            "Program"),
+                        new MSBuildReferenceSnapshot(
+                            "symbol:target-method",
+                            @"C:\Example\Program.cs",
+                            6,
+                            20,
+                            "InvocationExpression",
+                            "TargetMethod()"),
+                        new MSBuildReferenceSnapshot(
+                            @"C:/Example/Program.cs::NamedType::Example.Program::3",
+                            @"C:\Example\Program.cs",
+                            3,
+                            1,
+                            "partial_declaration",
                             "Program")
                     ],
                     [],
@@ -66,6 +100,8 @@ public sealed class SolutionIndexStoreTests
         IReadOnlyList<IndexedProjectRow> projects = store.ListProjects();
         IReadOnlyList<IndexedSymbolRow> symbols = store.ListSymbols();
         IReadOnlyList<IndexedReferenceRow> references = store.ListReferences(symbols[0].StableKey);
+        IReadOnlyList<IndexedCallSiteRow> callSites = store.ListCallSites("symbol:target-method");
+        IReadOnlyList<IndexedRelationshipRow> relationships = store.ListRelationships(symbols[0].StableKey);
         IReadOnlyList<IndexedPackageReferenceRow> packages = store.ListPackageReferences();
 
         Assert.Equal(1, summary.ProjectCount);
@@ -77,8 +113,17 @@ public sealed class SolutionIndexStoreTests
         Assert.Single(projects);
         Assert.Equal("project:test", projects[0].StableKey);
         Assert.Equal("net10.0", projects[0].TargetFramework);
-        Assert.Single(symbols);
-        Assert.Single(references);
+        Assert.Equal(3, symbols.Count);
+        Assert.Contains(references, reference => reference.ReferenceKind == "IdentifierName");
+        Assert.Contains(references, reference => reference.ReferenceKind == "partial_declaration");
+        IndexedCallSiteRow callSite = Assert.Single(callSites);
+        Assert.Equal("symbol:get-value", callSite.CallerStableKey);
+        Assert.Equal("GetValue", callSite.CallerName);
+        Assert.Equal("symbol:target-method", callSite.TargetStableKey);
+        IndexedRelationshipRow relationship = Assert.Single(relationships);
+        Assert.Equal("partial_declaration", relationship.RelationshipKind);
+        Assert.Equal(symbols[0].StableKey, relationship.SourceStableKey);
+        Assert.Equal(symbols[0].StableKey, relationship.TargetStableKey);
         Assert.Single(packages);
         Assert.Equal("Microsoft.Data.Sqlite", packages[0].Include);
         Assert.False(TableExists(databasePath, "index_runs"));

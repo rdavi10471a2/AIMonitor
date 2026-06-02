@@ -186,6 +186,75 @@ public sealed class McpServerSmokeTests
         Assert.DoesNotContain("StringLookalike", outlineJson, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Mcp_index_callers_and_relationships_return_real_index_rows()
+    {
+        McpFixture fixture = CreateFixture();
+        string targetStableKey = "symbol:target-method";
+        string callerStableKey = "symbol:caller-method";
+        SolutionIndexStore store = new(new SolutionIndexDatabase(fixture.IndexDatabasePath));
+        store.SaveSnapshot(new MSBuildSolutionSnapshot(
+            fixture.WatchedSolutionPath,
+            [
+                new MSBuildProjectSnapshot(
+                    "project:example",
+                    "Example",
+                    fixture.WatchedSolutionPath,
+                    "C#",
+                    "net10.0",
+                    "",
+                    "Exe",
+                    "Microsoft.NET.Sdk",
+                    "Example",
+                    "Example",
+                    "enable",
+                    "enable",
+                    "latest",
+                    [new MSBuildDocumentSnapshot("document:program", "Program.cs", fixture.ProgramFilePath, [])],
+                    [
+                        new MSBuildSymbolSnapshot("symbol:program", "Program", "NamedType", "Example", "", fixture.ProgramFilePath, 1, 10, "Example.Program"),
+                        new MSBuildSymbolSnapshot(callerStableKey, "Caller", "Method", "Example", "Program", fixture.ProgramFilePath, 3, 6, "Example.Program.Caller()"),
+                        new MSBuildSymbolSnapshot(targetStableKey, "Target", "Method", "Example", "Program", fixture.ProgramFilePath, 8, 9, "Example.Program.Target()")
+                    ],
+                    [
+                        new MSBuildReferenceSnapshot(targetStableKey, fixture.ProgramFilePath, 4, 20, "InvocationExpression", "Target()"),
+                        new MSBuildReferenceSnapshot("symbol:program", fixture.ProgramFilePath, 1, 1, "partial_declaration", "Program")
+                    ],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    ["DEBUG"])
+            ],
+            []));
+        await using McpClient client = await CreateClientAsync(fixture);
+
+        CallToolResult callers = await client.CallToolAsync(
+            "find_indexed_callers",
+            new Dictionary<string, object?>
+            {
+                ["stableSymbolKey"] = targetStableKey
+            });
+        Assert.False(callers.IsError == true);
+        string callersJson = ExtractToolText(callers);
+        Assert.Contains("\"callerStableKey\":\"" + callerStableKey + "\"", callersJson, StringComparison.Ordinal);
+        Assert.Contains("\"callerName\":\"Caller\"", callersJson, StringComparison.Ordinal);
+        Assert.Contains("\"callKind\":\"InvocationExpression\"", callersJson, StringComparison.Ordinal);
+
+        CallToolResult relationships = await client.CallToolAsync(
+            "find_indexed_relationships",
+            new Dictionary<string, object?>
+            {
+                ["stableSymbolKey"] = "symbol:program"
+            });
+        Assert.False(relationships.IsError == true);
+        string relationshipsJson = ExtractToolText(relationships);
+        Assert.Contains("\"relationshipKind\":\"partial_declaration\"", relationshipsJson, StringComparison.Ordinal);
+        Assert.Contains("\"sourceStableKey\":\"symbol:program\"", relationshipsJson, StringComparison.Ordinal);
+        Assert.Contains("\"targetStableKey\":\"symbol:program\"", relationshipsJson, StringComparison.Ordinal);
+    }
+
     [Fact(Skip = "MCP stdio bridge connects to the WinForms-owned MCP proxy hub; cover it with ToolSmokeTests live workflows.")]
     public async Task Mcp_bridge_forwards_stdio_to_server_and_records_request_response_telemetry()
     {
@@ -1331,7 +1400,8 @@ public sealed class McpServerSmokeTests
 
         MonitorSettingsLoader.SaveLocal(repositoryRoot, watchedSolutionPath, runtimeRoot, settingsPath);
         MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot, settingsPath);
-        SolutionIndexStore store = new(new SolutionIndexDatabase(MonitorDataPaths.GetDefaultIndexDatabasePath(settings)));
+        string indexDatabasePath = MonitorDataPaths.GetDefaultIndexDatabasePath(settings);
+        SolutionIndexStore store = new(new SolutionIndexDatabase(indexDatabasePath));
         store.SaveSnapshot(new MSBuildSolutionSnapshot(
             watchedSolutionPath,
             [
@@ -1380,7 +1450,7 @@ public sealed class McpServerSmokeTests
             ],
             []));
 
-        return new McpFixture(repositoryRoot, settingsPath, watchedSolutionPath, programFilePath, runtimeRoot, programSymbolStableKey);
+        return new McpFixture(repositoryRoot, settingsPath, watchedSolutionPath, programFilePath, runtimeRoot, indexDatabasePath, programSymbolStableKey);
     }
 
     private static string Serialize(object value)
@@ -1600,5 +1670,6 @@ public sealed class McpServerSmokeTests
         string WatchedSolutionPath,
         string ProgramFilePath,
         string RuntimeRoot,
+        string IndexDatabasePath,
         string ProgramSymbolStableKey);
 }

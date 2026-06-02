@@ -106,6 +106,40 @@ public sealed class SolutionIndexDatabase
             """);
 
         Execute(connection, transaction, """
+            create table if not exists call_sites (
+                id integer primary key autoincrement,
+                project_id integer not null references projects(id) on delete cascade,
+                caller_stable_key text not null,
+                caller_name text not null,
+                caller_kind text not null,
+                target_stable_key text not null,
+                file_path text not null,
+                line integer not null,
+                column integer not null,
+                call_kind text not null,
+                snippet text not null
+            );
+            """);
+
+        Execute(connection, transaction, """
+            create table if not exists symbol_relationships (
+                id integer primary key autoincrement,
+                project_id integer not null references projects(id) on delete cascade,
+                source_stable_key text not null,
+                source_name text not null,
+                source_kind text not null,
+                target_stable_key text not null,
+                target_name text not null,
+                target_kind text not null,
+                relationship_kind text not null,
+                file_path text not null,
+                line integer not null,
+                column integer not null,
+                snippet text not null
+            );
+            """);
+
+        Execute(connection, transaction, """
             create table if not exists project_references (
                 id integer primary key autoincrement,
                 project_id integer not null references projects(id) on delete cascade,
@@ -156,6 +190,10 @@ public sealed class SolutionIndexDatabase
         Execute(connection, transaction, "create index if not exists idx_symbols_file on symbols(file_path);");
         Execute(connection, transaction, "create index if not exists idx_symbol_references_target on symbol_references(target_stable_key);");
         Execute(connection, transaction, "create index if not exists idx_symbol_references_file on symbol_references(file_path);");
+        Execute(connection, transaction, "create index if not exists idx_call_sites_target on call_sites(target_stable_key);");
+        Execute(connection, transaction, "create index if not exists idx_call_sites_caller on call_sites(caller_stable_key);");
+        Execute(connection, transaction, "create index if not exists idx_symbol_relationships_target on symbol_relationships(target_stable_key);");
+        Execute(connection, transaction, "create index if not exists idx_symbol_relationships_source on symbol_relationships(source_stable_key);");
         Execute(connection, transaction, "create index if not exists idx_project_references_full_path on project_references(full_path);");
         Execute(connection, transaction, "create index if not exists idx_package_references_include on package_references(include);");
         Execute(connection, transaction, "create index if not exists idx_framework_references_include on framework_references(include);");

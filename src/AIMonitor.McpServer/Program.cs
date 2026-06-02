@@ -315,7 +315,7 @@ public sealed class AIMonitorTools
     }
 
     [McpServerTool]
-    [Description("Return persisted indexed invocation call sites for one stable C# method or constructor symbol key.")]
+    [Description("Return persisted indexed invocation/object-creation call sites for one stable C# method or constructor symbol key, including caller identity.")]
     public object FindIndexedCallers(
         [Description("Stable method or constructor symbol key returned by query_solution_index, find_indexed_symbols, or get_indexed_symbol.")] string stableSymbolKey,
         [Description("Maximum caller rows to return.")] int maxResults = 500)
@@ -326,15 +326,13 @@ public sealed class AIMonitorTools
             return error;
         }
 
-        return queryService.ListReferences(stableKey: stableSymbolKey)
-            .Where(reference => reference.ReferenceKind.Contains("Invocation", StringComparison.OrdinalIgnoreCase)
-                || reference.ReferenceKind.Contains("ObjectCreation", StringComparison.OrdinalIgnoreCase))
+        return queryService.ListCallSites(stableKey: stableSymbolKey)
             .Take(maxResults)
             .ToArray();
     }
 
     [McpServerTool]
-    [Description("Return indexed symbol relationship rows for one stable symbol key. AIMonitor currently returns an empty compatibility set until relationship rows are added to the shared index schema.")]
+    [Description("Return persisted indexed symbol relationship rows for one stable symbol key, including incoming and outgoing relationship direction.")]
     public object FindIndexedRelationships(
         [Description("Stable symbol key returned by query_solution_index, find_indexed_symbols, or get_indexed_symbol.")] string stableSymbolKey,
         [Description("Optional exact relationship kind filter.")] string? relationshipKind = null,
@@ -347,11 +345,9 @@ public sealed class AIMonitorTools
             return error;
         }
 
-        _ = stableSymbolKey;
-        _ = relationshipKind;
-        _ = direction;
-        _ = maxResults;
-        return Array.Empty<AIMonitorIndexedRelationship>();
+        return queryService.ListRelationships(stableSymbolKey, direction, relationshipKind)
+            .Take(maxResults)
+            .ToArray();
     }
 
     [McpServerTool]
@@ -1319,12 +1315,6 @@ public sealed record AIMonitorRefreshIndexFileResult(
 public sealed record AIMonitorRefreshFileAndIndexResult(
     EditSessionStatus Refresh,
     AIMonitorRefreshIndexFileResult Index);
-
-public sealed record AIMonitorIndexedRelationship(
-    string SourceStableKey,
-    string TargetStableKey,
-    string RelationshipKind,
-    string Direction);
 
 public sealed record AIMonitorSessionState(
     string SessionId,

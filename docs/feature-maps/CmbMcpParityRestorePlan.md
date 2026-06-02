@@ -134,6 +134,10 @@ Tests:
 - File refresh test proving per-file diagnostics/hash/write-time/stale details are returned.
 - Selector bridge test proving an indexed symbol result can drive a later symbol/edit call.
 
+Progress:
+
+- 2026-06-02: Initial storage/schema, shared query, and MCP exposure restored for call sites and symbol relationships. Focused data tests and MCP smoke prove `find_indexed_callers` and `find_indexed_relationships` return shared index rows instead of compatibility stubs.
+
 ## Phase 2 - Session-Scoped Staging And Record Lifecycle
 
 Owns:

@@ -33,6 +33,8 @@ public sealed class SolutionIndexStore
             InsertDocuments(connection, transaction, projectId, project.Documents);
             InsertSymbols(connection, transaction, projectId, project.Symbols);
             InsertReferences(connection, transaction, projectId, project.References);
+            InsertCallSites(connection, transaction, projectId, project.Symbols, project.References);
+            InsertRelationships(connection, transaction, projectId, project.Symbols, project.References);
             InsertProjectReferences(connection, transaction, projectId, project.ProjectReferences);
             InsertPackageReferences(connection, transaction, projectId, project.PackageReferences);
             InsertFrameworkReferences(connection, transaction, projectId, project.FrameworkReferences);
@@ -185,6 +187,128 @@ public sealed class SolutionIndexStore
         return rows;
     }
 
+    public IReadOnlyList<IndexedCallSiteRow> ListCallSites(string? stableKey = null)
+    {
+        database.EnsureCreated();
+        using SqliteConnection connection = database.OpenConnection();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = string.IsNullOrWhiteSpace(stableKey)
+            ? """
+              select projects.project_path, call_sites.caller_stable_key, call_sites.caller_name,
+                     call_sites.caller_kind, call_sites.target_stable_key, call_sites.file_path,
+                     call_sites.line, call_sites.column, call_sites.call_kind, call_sites.snippet
+              from call_sites
+              inner join projects on projects.id = call_sites.project_id
+              order by call_sites.file_path, call_sites.line, call_sites.column;
+              """
+            : """
+              select projects.project_path, call_sites.caller_stable_key, call_sites.caller_name,
+                     call_sites.caller_kind, call_sites.target_stable_key, call_sites.file_path,
+                     call_sites.line, call_sites.column, call_sites.call_kind, call_sites.snippet
+              from call_sites
+              inner join projects on projects.id = call_sites.project_id
+              where call_sites.target_stable_key = $stableKey
+              order by call_sites.file_path, call_sites.line, call_sites.column;
+              """;
+        if (!string.IsNullOrWhiteSpace(stableKey))
+        {
+            command.Parameters.AddWithValue("$stableKey", stableKey);
+        }
+
+        List<IndexedCallSiteRow> rows = [];
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new IndexedCallSiteRow(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetInt32(6),
+                reader.GetInt32(7),
+                reader.GetString(8),
+                reader.GetString(9)));
+        }
+
+        return rows;
+    }
+
+    public IReadOnlyList<IndexedRelationshipRow> ListRelationships(
+        string? stableKey = null,
+        string direction = "both",
+        string? relationshipKind = null)
+    {
+        database.EnsureCreated();
+        using SqliteConnection connection = database.OpenConnection();
+        using SqliteCommand command = connection.CreateCommand();
+        List<string> predicates = [];
+        if (!string.IsNullOrWhiteSpace(stableKey))
+        {
+            string normalizedDirection = NormalizeRelationshipDirection(direction);
+            if (normalizedDirection == "outgoing")
+            {
+                predicates.Add("symbol_relationships.source_stable_key = $stableKey");
+            }
+            else if (normalizedDirection == "incoming")
+            {
+                predicates.Add("symbol_relationships.target_stable_key = $stableKey");
+            }
+            else
+            {
+                predicates.Add("(symbol_relationships.source_stable_key = $stableKey or symbol_relationships.target_stable_key = $stableKey)");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(relationshipKind))
+        {
+            predicates.Add("symbol_relationships.relationship_kind = $relationshipKind");
+        }
+
+        string whereClause = predicates.Count == 0 ? string.Empty : "where " + string.Join(" and ", predicates);
+        command.CommandText = $"""
+            select projects.project_path, symbol_relationships.source_stable_key, symbol_relationships.source_name,
+                   symbol_relationships.source_kind, symbol_relationships.target_stable_key, symbol_relationships.target_name,
+                   symbol_relationships.target_kind, symbol_relationships.relationship_kind, symbol_relationships.file_path,
+                   symbol_relationships.line, symbol_relationships.column, symbol_relationships.snippet
+            from symbol_relationships
+            inner join projects on projects.id = symbol_relationships.project_id
+            {whereClause}
+            order by symbol_relationships.file_path, symbol_relationships.line, symbol_relationships.column, symbol_relationships.relationship_kind;
+            """;
+        if (!string.IsNullOrWhiteSpace(stableKey))
+        {
+            command.Parameters.AddWithValue("$stableKey", stableKey);
+        }
+
+        if (!string.IsNullOrWhiteSpace(relationshipKind))
+        {
+            command.Parameters.AddWithValue("$relationshipKind", relationshipKind);
+        }
+
+        List<IndexedRelationshipRow> rows = [];
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new IndexedRelationshipRow(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.GetString(7),
+                reader.GetString(8),
+                reader.GetInt32(9),
+                reader.GetInt32(10),
+                reader.GetString(11)));
+        }
+
+        return rows;
+    }
+
     public IReadOnlyList<IndexedProjectRow> ListProjects()
     {
         database.EnsureCreated();
@@ -254,6 +378,8 @@ public sealed class SolutionIndexStore
         Execute(connection, transaction, "delete from framework_references;");
         Execute(connection, transaction, "delete from package_references;");
         Execute(connection, transaction, "delete from project_references;");
+        Execute(connection, transaction, "delete from symbol_relationships;");
+        Execute(connection, transaction, "delete from call_sites;");
         Execute(connection, transaction, "delete from symbol_references;");
         Execute(connection, transaction, "delete from symbols;");
         Execute(connection, transaction, "delete from documents;");
@@ -383,6 +509,84 @@ public sealed class SolutionIndexStore
         }
     }
 
+    private static void InsertCallSites(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long projectId,
+        IReadOnlyList<MSBuildSymbolSnapshot> symbols,
+        IReadOnlyList<MSBuildReferenceSnapshot> references)
+    {
+        foreach (MSBuildReferenceSnapshot reference in references.Where(IsCallReference))
+        {
+            MSBuildSymbolSnapshot? caller = FindContainingSymbol(symbols, reference.FilePath, reference.Line);
+            if (caller is null)
+            {
+                continue;
+            }
+
+            Execute(connection, transaction, """
+                insert into call_sites(project_id, caller_stable_key, caller_name, caller_kind, target_stable_key,
+                                       file_path, line, column, call_kind, snippet)
+                values ($projectId, $callerStableKey, $callerName, $callerKind, $targetStableKey,
+                        $filePath, $line, $column, $callKind, $snippet);
+                """,
+                ("$projectId", projectId),
+                ("$callerStableKey", caller.StableKey),
+                ("$callerName", caller.Name),
+                ("$callerKind", caller.Kind),
+                ("$targetStableKey", reference.TargetStableKey),
+                ("$filePath", reference.FilePath),
+                ("$line", reference.Line),
+                ("$column", reference.Column),
+                ("$callKind", reference.ReferenceKind),
+                ("$snippet", reference.Snippet));
+        }
+    }
+
+    private static void InsertRelationships(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long projectId,
+        IReadOnlyList<MSBuildSymbolSnapshot> symbols,
+        IReadOnlyList<MSBuildReferenceSnapshot> references)
+    {
+        Dictionary<string, MSBuildSymbolSnapshot> symbolsByKey = symbols.ToDictionary(symbol => symbol.StableKey, StringComparer.Ordinal);
+        foreach (MSBuildReferenceSnapshot reference in references.Where(reference => IsRelationshipKind(reference.ReferenceKind)))
+        {
+            if (!symbolsByKey.TryGetValue(reference.TargetStableKey, out MSBuildSymbolSnapshot? target))
+            {
+                continue;
+            }
+
+            MSBuildSymbolSnapshot? source = FindRelationshipSource(symbols, reference.FilePath, reference.Line);
+            if (source is null)
+            {
+                continue;
+            }
+
+            Execute(connection, transaction, """
+                insert into symbol_relationships(project_id, source_stable_key, source_name, source_kind,
+                                                  target_stable_key, target_name, target_kind, relationship_kind,
+                                                  file_path, line, column, snippet)
+                values ($projectId, $sourceStableKey, $sourceName, $sourceKind,
+                        $targetStableKey, $targetName, $targetKind, $relationshipKind,
+                        $filePath, $line, $column, $snippet);
+                """,
+                ("$projectId", projectId),
+                ("$sourceStableKey", source.StableKey),
+                ("$sourceName", source.Name),
+                ("$sourceKind", source.Kind),
+                ("$targetStableKey", target.StableKey),
+                ("$targetName", target.Name),
+                ("$targetKind", target.Kind),
+                ("$relationshipKind", reference.ReferenceKind),
+                ("$filePath", reference.FilePath),
+                ("$line", reference.Line),
+                ("$column", reference.Column),
+                ("$snippet", reference.Snippet));
+        }
+    }
+
     private static void InsertProjectReferences(
         SqliteConnection connection,
         SqliteTransaction transaction,
@@ -470,5 +674,56 @@ public sealed class SolutionIndexStore
         }
 
         command.ExecuteNonQuery();
+    }
+
+    private static MSBuildSymbolSnapshot? FindContainingSymbol(
+        IReadOnlyList<MSBuildSymbolSnapshot> symbols,
+        string filePath,
+        int line)
+    {
+        return symbols
+            .Where(symbol => symbol.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase)
+                && symbol.StartLine <= line
+                && symbol.EndLine >= line)
+            .OrderByDescending(symbol => symbol.StartLine)
+            .ThenBy(symbol => symbol.EndLine)
+            .FirstOrDefault();
+    }
+
+    private static MSBuildSymbolSnapshot? FindRelationshipSource(
+        IReadOnlyList<MSBuildSymbolSnapshot> symbols,
+        string filePath,
+        int line)
+    {
+        return symbols.FirstOrDefault(symbol =>
+                symbol.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase)
+                && symbol.StartLine == line)
+            ?? FindContainingSymbol(symbols, filePath, line);
+    }
+
+    private static bool IsCallReference(MSBuildReferenceSnapshot reference)
+    {
+        return reference.ReferenceKind.Equals("InvocationExpression", StringComparison.Ordinal)
+            || reference.ReferenceKind.Equals("ObjectCreationExpression", StringComparison.Ordinal)
+            || reference.ReferenceKind.Equals("ImplicitObjectCreationExpression", StringComparison.Ordinal);
+    }
+
+    private static bool IsRelationshipKind(string referenceKind)
+    {
+        return referenceKind is "partial_declaration"
+            or "derived_type"
+            or "inherits_from"
+            or "overridden_by"
+            or "overrides"
+            or "implemented_by"
+            or "implements_interface_member";
+    }
+
+    private static string NormalizeRelationshipDirection(string direction)
+    {
+        string normalized = string.IsNullOrWhiteSpace(direction) ? "both" : direction.Trim().ToLowerInvariant();
+        return normalized is "incoming" or "outgoing" or "both"
+            ? normalized
+            : throw new ArgumentException("Relationship direction must be incoming, outgoing, or both.", nameof(direction));
     }
 }

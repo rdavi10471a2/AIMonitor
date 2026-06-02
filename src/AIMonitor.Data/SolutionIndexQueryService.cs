@@ -96,6 +96,19 @@ public sealed class SolutionIndexQueryService
         return store.ListReferences(stableKey);
     }
 
+    public IReadOnlyList<IndexedCallSiteRow> ListCallSites(string? stableKey = null)
+    {
+        return store.ListCallSites(stableKey);
+    }
+
+    public IReadOnlyList<IndexedRelationshipRow> ListRelationships(
+        string? stableKey = null,
+        string direction = "both",
+        string? relationshipKind = null)
+    {
+        return store.ListRelationships(stableKey, direction, relationshipKind);
+    }
+
     public IReadOnlyList<IndexedReferenceRow> ListReferencesInFile(string filePath)
     {
         if (string.IsNullOrWhiteSpace(filePath))
