@@ -2,6 +2,8 @@
 
 This list tracks standalone smoke and workflow coverage that should be ported or adapted from earlier safe-edit monitor test suites into AIMonitor.
 
+The corpus and tool-surface checks are intentionally indebted to prior Roslyn/MCP experiments and compiler-library-style known-answer tests. AIMonitor uses those patterns as regression memory while keeping the workflow, staging, and review contracts local to this repository.
+
 ## Common Surface
 
 These tests apply to the shared monitor/index/workflow surface regardless of whether the caller is Claude, Codex, MCP, CLI, or WinForms.

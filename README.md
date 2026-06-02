@@ -61,6 +61,10 @@ AIMonitor is MSBuild-first and language-provider aware. The current semantic pro
 
 AIMonitor does not currently promise full Visual Studio-level Razor component/event binding analysis. Use builds, representative smoke tests, source-map facts, and targeted text search as the practical safety net for those cases.
 
+## Lineage And Credit
+
+AIMonitor builds on prior work in safe-edit monitors, Roslyn/MCP tool surfaces, and compiler-library-style corpus testing. Those references shaped the source-map workflow, semantic edit vocabulary, and known-answer smoke corpus. The implementation here keeps those ideas behind AIMonitor's own layered workflow: shared services first, MCP/CLI/UI as adapters, and human-reviewed staged diffs as the watched-source gate.
+
 ## Project Layout
 
 ```text
