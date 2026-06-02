@@ -844,6 +844,57 @@ public sealed class WorkflowEditService
         SaveManifest(fullWatchedPath, manifest);
     }
 
+    public int MarkAllIndexesFresh()
+    {
+        if (!Directory.Exists(paths.MetadataRoot))
+        {
+            return 0;
+        }
+
+        int updated = 0;
+        foreach (string manifestPath in Directory.EnumerateFiles(paths.MetadataRoot, "*.json", SearchOption.AllDirectories))
+        {
+            EditSessionManifest? manifest;
+            try
+            {
+                manifest = DeserializeManifestFile(manifestPath);
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            if (manifest is null || !manifest.IndexStale || string.IsNullOrWhiteSpace(manifest.WatchedFilePath))
+            {
+                continue;
+            }
+
+            string fullWatchedPath;
+            try
+            {
+                fullWatchedPath = Path.GetFullPath(manifest.WatchedFilePath);
+                paths.GetRelativeWatchedPath(fullWatchedPath);
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
+            EditSessionManifest? currentManifest = LoadManifest(fullWatchedPath);
+            if (currentManifest is null || !currentManifest.IndexStale)
+            {
+                continue;
+            }
+
+            currentManifest.IndexStale = false;
+            SaveManifest(fullWatchedPath, currentManifest);
+            updated++;
+        }
+
+        return updated;
+    }
+
     private static string GetReviewedFilePath(StagedEditRecord record)
     {
         return record.WatchedFilePath;
@@ -903,7 +954,12 @@ public sealed class WorkflowEditService
             return null;
         }
 
-        return JsonSerializer.Deserialize<EditSessionManifest>(File.ReadAllText(metadataPath), JsonOptions);
+        return DeserializeManifestFile(metadataPath);
+    }
+
+    private static EditSessionManifest? DeserializeManifestFile(string manifestPath)
+    {
+        return JsonSerializer.Deserialize<EditSessionManifest>(File.ReadAllText(manifestPath), JsonOptions);
     }
 
     private void SaveManifest(string watchedFilePath, EditSessionManifest manifest)

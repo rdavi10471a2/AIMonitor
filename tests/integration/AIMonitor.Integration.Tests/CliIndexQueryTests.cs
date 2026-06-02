@@ -382,7 +382,7 @@ public sealed class CliIndexQueryTests
     }
 
     [Fact]
-    public async Task Edit_record_decision_rejected_requires_watched_source_to_remain_original()
+    public async Task Edit_reject_shortcut_returns_shared_decision_shape_and_keeps_watched_source_original()
     {
         CliFixture fixture = CreateFixture();
 
@@ -424,11 +424,9 @@ public sealed class CliIndexQueryTests
 
         CliResult decision = await RunCliAsync(
             "edit",
-            "record-decision",
-            "--staged-record-id",
-            stagedRecordId,
-            "--decision",
-            "rejected",
+            "reject",
+            "--file",
+            fixture.ProgramFilePath,
             "--repo-root",
             fixture.RepositoryRoot,
             "--config",
@@ -437,6 +435,9 @@ public sealed class CliIndexQueryTests
         Assert.Equal(0, decision.ExitCode);
         using JsonDocument decisionDocument = JsonDocument.Parse(decision.StdOut);
         Assert.Equal("rejected", decisionDocument.RootElement.GetProperty("classification").GetString());
+        Assert.Equal(stagedRecordId, decisionDocument.RootElement.GetProperty("stagedRecordId").GetString());
+        Assert.Equal("rejected", decisionDocument.RootElement.GetProperty("stagedRecordSummary").GetProperty("classification").GetString());
+        Assert.Contains("Decision recorded", decisionDocument.RootElement.GetProperty("nextStep").GetString(), StringComparison.Ordinal);
         Assert.Equal(originalContent, await File.ReadAllTextAsync(fixture.ProgramFilePath));
     }
 

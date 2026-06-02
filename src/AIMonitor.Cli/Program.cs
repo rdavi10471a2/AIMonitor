@@ -204,7 +204,7 @@ internal static class Program
                 "launch-diff" => LaunchDiff(args, settings, logger, service),
                 "record-decision" => RecordDecision(args, settings, logger, service),
                 "accept" => Accept(args, settings, logger, service),
-                "reject" => service.Reject(RequireOption(args, "--file")),
+                "reject" => Reject(args, settings, logger, service),
                 _ => throw new InvalidOperationException($"Unknown edit command: {args[1]}")
             };
         });
@@ -271,6 +271,26 @@ internal static class Program
             status.LastStagedRecordId,
             "accepted",
             RequireExpectedStagedHash(args),
+            "AIMonitor.Cli",
+            HasOption(args, "--verbose"));
+    }
+
+    private static object Reject(string[] args, MonitorSettings settings, IMonitorLogger logger, WorkflowEditService service)
+    {
+        string file = RequireOption(args, "--file");
+        EditSessionStatus status = service.GetStatus(file);
+        if (string.IsNullOrWhiteSpace(status.LastStagedRecordId))
+        {
+            throw new InvalidOperationException("No staged record exists for this file. Run edit stage first.");
+        }
+
+        return new StagedDecisionWorkflow().Record(
+            settings,
+            logger,
+            service,
+            status.LastStagedRecordId,
+            "rejected",
+            null,
             "AIMonitor.Cli",
             HasOption(args, "--verbose"));
     }

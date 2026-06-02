@@ -30,6 +30,7 @@ Codex / shell command
 - CLI command parsing.
 - CLI response shape.
 - Non-interactive command ergonomics.
+- Thin accept/reject shortcuts that route to shared record-decision orchestration.
 
 ## Does Not Own
 
