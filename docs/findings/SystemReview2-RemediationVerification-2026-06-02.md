@@ -41,10 +41,13 @@ from the diffstat.
 
 ## Remaining / optional (non-blocking)
 
-- **REG-BRIDGE-1 still open** — the proxy-hub relay + telemetry test remains `[Fact(Skip)]` in
-  `McpServerSmokeTests.cs` (1 skip). The work order permitted leaving it skipped; the live `--mcp-live-workflow`
-  ToolSmokeTests path still exercises it operator-driven. Lowest-priority carryover; worth a real headless test
-  eventually.
+- **REG-BRIDGE-1 — by-design, NOT a gap (recalibrated).** The proxy-hub relay + telemetry test stays `[Fact(Skip)]` in
+  `McpServerSmokeTests.cs` on purpose. The WinForms exe + proxy-hub telemetry (Monitor Status tab) IS the intended
+  verification surface: a human watching tool calls flow through the hub confirms the agent actually drove the safe-edit
+  workflow rather than writing watched source directly or fabricating. The bridge is a named-pipe client needing a live
+  WinForms host, so it is verified operator-driven via the `--mcp-live-workflow` ToolSmokeTests against a running exe.
+  The existing skip reason already points there. Do NOT add a headless stub test — that exercises plumbing while missing
+  the point (operator-visible assurance). Same flavor as the `forceValidation` by-design recalibration.
 - **Minor (style/concurrency):** `PostAcceptIndexRefreshService` calls `new WorkflowEditService(settings).MarkIndexFresh(...)`
   on a fresh instance rather than the injected singleton. Harmless in the single-operator flow, but if
   `AcquireManifestLock` is instance-scoped it would not coordinate with the singleton's lock under concurrent same-file
