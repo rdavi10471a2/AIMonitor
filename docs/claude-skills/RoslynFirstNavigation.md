@@ -27,3 +27,28 @@ get_symbol(symbolSelectorJson)
 ```
 
 The index is broad discovery. Source-map and symbol tools are the precise edit surface.
+
+## Extraction semantics you can rely on (cited)
+
+Reach for these before re-grepping the extractor (`src/AIMonitor.MSBuild/MSBuildWorkspaceLoader.cs`,
+`src/AIMonitor.Data/SolutionIndexStore.cs`). They are the facts that repeatedly trip up assertions:
+
+- **Relationship kinds:** `inherits_from` is emitted for **any** named type in a base list — so a class's base class
+  **and** each implemented interface both produce `inherits_from` rows. Also `implements_interface_member`,
+  `partial_declaration`, and `overrides`. `overrides` is emitted **only when the overridden target identity resolves**;
+  an override of a **generic base** virtual (e.g. `RepositoryBase<T>.GetByIdAsync`) does **not** resolve, so **no
+  `overrides` row** is emitted for it (assert its absence, not its presence).
+- **Call-site kinds (exact strings):** `InvocationExpression`, `ObjectCreationExpression`,
+  `ImplicitObjectCreationExpression`.
+- **Object creation capture:** an `ObjectCreationExpression` call site is captured for a `new` in a **local-variable
+  declaration inside a method body** (with an explicit constructor). It is **not** captured for a `new` in a **field
+  initializer**, a **field-assignment RHS**, or a **compiler-default** constructor. Copyable capturing shape:
+  `var x = new Foo();` inside a method body, where `Foo` declares an explicit ctor.
+- **Caller resolves to the concrete override target**, never the abstract/base method.
+- **`ContainingType` is fully-qualified** (`SymbolDisplayFormat.CSharpErrorMessageFormat`), e.g.
+  `WinFormsSample.Repositories.OrderRepository`.
+- **Razor `ReferenceKind`** is `"razor:" + node.Kind()` (e.g. `razor:InvocationExpression`); the ref's `FilePath`
+  ends with the `.razor` file. One `@code` block can emit several razor refs.
+- **Symbol-present does NOT imply references-extracted.** If a method body fails to bind (e.g. a missing `using`),
+  `GetReferencedSymbol` returns null and **no call sites are emitted for that body** even though the symbol still
+  indexes. Always assert call sites explicitly; never infer extraction completeness from symbol presence.

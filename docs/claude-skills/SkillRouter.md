@@ -16,7 +16,7 @@ Confirm task type from `get_workflow_status` output or the user's task descripti
 - Adding, replacing, or removing C# symbols: `FormattingOracle.md`
 - Async/signature/API caller propagation: `AsyncPropagation.md`
 - Human-guided companion partial extraction: `PartialClassRefactor.md`
-- New Razor component authoring: see the `CLAUDE.md` Razor boundary; start in two-file form with markup plus a companion partial class, not inline `@code`.
+- New Razor component authoring: `BlazorPageTriadAuthoring.md` (new Razor = `.razor` + `.razor.cs` + `.razor.css` triad, authored as one coupled session). Editing an existing Razor item: edit what's there with the standard workflow, do not force-add companions.
 - Live tool-traffic verification or debugging: `TroubleshootingDashboard.md`
 
 ## Layering

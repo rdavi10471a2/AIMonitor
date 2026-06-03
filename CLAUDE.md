@@ -71,6 +71,7 @@ Then load the smallest relevant card:
 - Formatting/newline-safe edits: `FormattingOracle.md`
 - Async or signature propagation: `AsyncPropagation.md`
 - Companion partial refactors: `PartialClassRefactor.md`
+- New Razor component authoring: `BlazorPageTriadAuthoring.md`
 - Live telemetry checks: `TroubleshootingDashboard.md`
 
 Use live MCP tool descriptions for exact argument names.
