@@ -27,6 +27,14 @@ samples/watched-solutions/*
 !samples/watched-solutions/WorkflowHarnessSample/**
 samples/watched-solutions/WorkflowHarnessSample/**/bin/
 samples/watched-solutions/WorkflowHarnessSample/**/obj/
+!samples/watched-solutions/CodexWindows/
+!samples/watched-solutions/CodexWindows/**
+samples/watched-solutions/CodexWindows/**/bin/
+samples/watched-solutions/CodexWindows/**/obj/
+!samples/watched-solutions/CodexBlazor/
+!samples/watched-solutions/CodexBlazor/**
+samples/watched-solutions/CodexBlazor/**/bin/
+samples/watched-solutions/CodexBlazor/**/obj/
 
 # Logs/temp
 *.log

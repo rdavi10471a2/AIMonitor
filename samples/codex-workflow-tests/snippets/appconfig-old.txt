@@ -1,0 +1,2 @@
+    public bool InitiaWorkflowTestPassed3 { get; set; } = true;
+

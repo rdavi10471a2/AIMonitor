@@ -9,6 +9,7 @@ This file is the Claude/Claude Code entry point. `AGENTS.md` is the Codex host e
 - Keep product code under `src/`, tests under `tests/`, samples under `samples/`, and documentation under `docs/`.
 - MCP is not the workflow. MCP is Claude's adapter over shared Core, Workflow, MSBuild, Indexing, and Runtime services.
 - Prefer MSBuild-loaded project truth over directory guessing.
+- For any newly authored C# source, do not use top-level statements, do not use `using var`, `using` declarations, or `await using` declarations for resource lifetime, and always use braces for control-flow bodies.
 - Add tests beside workflow behavior when changing behavior.
 - Keep generated runtime state under `runtime/`, not in watched projects.
 - Do not describe AIMonitor as C#-only. C# is the first semantic provider; MSBuild project/document loading is language-neutral.

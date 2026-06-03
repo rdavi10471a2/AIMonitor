@@ -63,12 +63,18 @@ public sealed class SolutionIndexQueryServiceTests
         IReadOnlyList<IndexedDocumentRow> documents = service.ListDocuments(filePath: filePath);
         IReadOnlyList<IndexedSymbolRow> symbols = service.ListSymbols(filePath, "Program");
         IReadOnlyList<IndexedReferenceRow> references = service.ListReferencesInFile(filePath);
+        IReadOnlyList<IndexedDocumentRow> relativeDocuments = service.ListDocuments(filePath: "Program.cs");
+        IReadOnlyList<IndexedSymbolRow> relativeSymbols = service.ListSymbols("Program.cs", "Program");
+        IReadOnlyList<IndexedReferenceRow> relativeReferences = service.ListReferencesInFile("Program.cs");
         MonitorStatusResult status = service.GetMonitorStatus();
 
         Assert.Single(documents);
+        Assert.Single(relativeDocuments);
         Assert.False(string.IsNullOrWhiteSpace(documents[0].ContentHash));
         Assert.Single(symbols);
+        Assert.Single(relativeSymbols);
         Assert.Equal(3, references.Count);
+        Assert.Equal(3, relativeReferences.Count);
         Assert.Equal("symbol:program", Assert.Single(references, reference => reference.ReferenceKind == "IdentifierName").TargetStableKey);
         IndexedReferenceRow invocation = Assert.Single(references, reference => reference.ReferenceKind == "InvocationExpression");
         Assert.Equal("Target", invocation.TargetName);

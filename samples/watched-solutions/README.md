@@ -6,11 +6,16 @@ Watched solution copies are local-only by default. Put large or real-world sampl
 under this folder when you want a local smoke target, but do not commit those
 project copies.
 
-`WorkflowHarnessSample` is the exception: it is a committed, tiny watched
-solution used by repeatable workflow smokes. Use
-`config/appsettings.workflow-harness-sample.json` with CLI, MCP server, or a
-WinForms app started with `--config config/appsettings.workflow-harness-sample.json`
-when a test should avoid a developer's real watched application.
+`WorkflowHarnessSample`, `CodexWindows`, and `CodexBlazor` are the exceptions: they are
+committed, tiny watched solutions used by repeatable workflow smokes.
+
+- Use `config/appsettings.workflow-harness-sample.json` with MCP server or a
+  WinForms app started with `--config config/appsettings.workflow-harness-sample.json`
+  when a shared/Claude-style smoke should avoid a developer's real watched
+  application.
+- Use `config/appsettings.codex-windows.json`, `config/appsettings.codex-blazor.json`, or the disposable-copy
+  recipe in `samples/codex-workflow-tests/` when a Codex CLI workflow sample
+  should avoid a developer's real watched application.
 
 Example roots:
 
@@ -18,6 +23,8 @@ Example roots:
 - `C:\Source\USExcomManager`
 - `C:\VSCodeProjects\AIMonitor\samples\watched-solutions\BlazorDetectorSample`
 - `C:\VSCodeProjects\AIMonitor\samples\watched-solutions\WorkflowHarnessSample`
+- `C:\VSCodeProjects\AIMonitor\samples\watched-solutions\CodexWindows`
+- `C:\VSCodeProjects\AIMonitor\samples\watched-solutions\CodexBlazor`
 
 Do not use samples as the only regression proof. If a behavior must stay fixed, add a test fixture or smoke.
 

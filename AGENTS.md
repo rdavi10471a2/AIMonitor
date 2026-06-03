@@ -5,6 +5,7 @@ This repository is the AIMonitor implementation.
 - Keep `src`, `tests`, `samples`, and `docs` as top-level peers.
 - Do not place product source at repository root.
 - Do not use C# top-level statements.
+- For any newly authored C# source, do not use top-level statements, do not use `using var`, `using` declarations, or `await using` declarations for resource lifetime, and always use braces for control-flow bodies.
 - Keep MCP, CLI, and UI as adapters over shared Core/Workflow/MSBuild/Indexing services.
 - Add tests in parallel with workflow behavior.
 - Prefer MSBuild-loaded project truth over filesystem guessing.

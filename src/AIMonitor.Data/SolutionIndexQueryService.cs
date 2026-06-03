@@ -136,7 +136,8 @@ public sealed class SolutionIndexQueryService
 
         if (!string.IsNullOrWhiteSpace(filePath))
         {
-            rows = rows.Where(row => string.Equals(row.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+            string fullPath = ResolveWatchedPath(filePath);
+            rows = rows.Where(row => PathEquals(row.FilePath, fullPath));
         }
 
         return rows.ToList();
@@ -148,7 +149,8 @@ public sealed class SolutionIndexQueryService
 
         if (!string.IsNullOrWhiteSpace(filePath))
         {
-            rows = rows.Where(row => string.Equals(row.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+            string fullPath = ResolveWatchedPath(filePath);
+            rows = rows.Where(row => PathEquals(row.FilePath, fullPath));
         }
 
         if (!string.IsNullOrWhiteSpace(name))
@@ -211,8 +213,9 @@ public sealed class SolutionIndexQueryService
             throw new ArgumentException("A file path is required.", nameof(filePath));
         }
 
+        string fullPath = ResolveWatchedPath(filePath);
         return store.ListReferences()
-            .Where(row => string.Equals(row.FilePath, filePath, StringComparison.OrdinalIgnoreCase))
+            .Where(row => PathEquals(row.FilePath, fullPath))
             .ToList();
     }
 

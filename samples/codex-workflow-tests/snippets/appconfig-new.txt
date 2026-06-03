@@ -1,0 +1,4 @@
+    public bool InitiaWorkflowTestPassed3 { get; set; } = true;
+
+    public bool CodexCliWorkflowSamplePassed { get; set; } = true;
+

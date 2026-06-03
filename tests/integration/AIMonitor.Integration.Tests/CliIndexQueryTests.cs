@@ -76,6 +76,53 @@ public sealed class CliIndexQueryTests
     }
 
     [Fact]
+    public async Task File_scoped_index_queries_accept_watched_relative_paths()
+    {
+        CliFixture fixture = CreateFixture();
+
+        CliResult documents = await RunCliAsync(
+            "index",
+            "documents",
+            "--file",
+            "Program.cs",
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+        CliResult symbols = await RunCliAsync(
+            "index",
+            "symbols",
+            "--file",
+            "Program.cs",
+            "--name",
+            "Program",
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+        CliResult references = await RunCliAsync(
+            "index",
+            "references-in-file",
+            "--file",
+            "Program.cs",
+            "--repo-root",
+            fixture.RepositoryRoot,
+            "--config",
+            fixture.SettingsPath);
+
+        Assert.Equal(0, documents.ExitCode);
+        Assert.Equal(0, symbols.ExitCode);
+        Assert.Equal(0, references.ExitCode);
+        using JsonDocument documentsJson = JsonDocument.Parse(documents.StdOut);
+        using JsonDocument symbolsJson = JsonDocument.Parse(symbols.StdOut);
+        using JsonDocument referencesJson = JsonDocument.Parse(references.StdOut);
+        Assert.Single(documentsJson.RootElement.EnumerateArray());
+        Assert.Single(symbolsJson.RootElement.EnumerateArray());
+        JsonElement reference = Assert.Single(referencesJson.RootElement.EnumerateArray());
+        Assert.Equal(fixture.ProgramSymbolStableKey, reference.GetProperty("targetStableKey").GetString());
+    }
+
+    [Fact]
     public async Task Edit_refresh_stage_and_record_decision_round_trip_through_working_candidate()
     {
         CliFixture fixture = CreateFixture();
