@@ -28,33 +28,33 @@ MCP is the Claude-facing adapter. It must not contain independent workflow, inde
 
 The items below are the hand-verified restore set from the finding. They are safe to plan against immediately.
 
-### CMB-PARITY-001 — Indexed Symbol Relationships
+### CMB-PARITY-001 - Indexed Symbol Relationships
 
 - **Owner:** Indexing/Data
 - **Adapter surface:** MCP query tools
-- **Current status:** Initial restore implemented
+- **Current status:** Restored for current parity scope
 - **Required proof:** Index rows for partial/inherits/implements/overrides plus MCP query returning real relationship rows.
 - **Proof added:** Data fixture persists `symbol_relationships` rows from relationship-shaped Roslyn/MSBuild references, and MCP smoke proves `find_indexed_relationships` returns those rows instead of an empty compatibility payload.
 - **Remaining Phase 1 work:** Broaden corpus coverage for inherits/implements/overrides and decide whether inverse relationship rows are persisted or query-projected.
 
-### CMB-PARITY-002 — Indexed Call Sites And True Callers
+### CMB-PARITY-002 - Indexed Call Sites And True Callers
 
 - **Owner:** Indexing/Data
 - **Adapter surface:** MCP query tools
-- **Current status:** Initial restore implemented
+- **Current status:** Restored for current parity scope
 - **Required proof:** Call-site table or equivalent persisted caller identity. `find_indexed_callers` cannot infer callers by string-matching reference kind.
 - **Proof added:** Data fixture persists `call_sites` rows with caller symbol identity and target stable key, and MCP smoke proves `find_indexed_callers` returns caller identity from shared index storage.
 - **Remaining Phase 1 work:** Broaden corpus coverage for object creation and additional invocation forms.
 
-### CMB-PARITY-003 — Rich Indexed References
+### CMB-PARITY-003 - Rich Indexed References
 
 - **Owner:** Indexing/Data
 - **Adapter surface:** MCP query tools
-- **Current status:** Initial restore implemented
+- **Current status:** Restored for current parity scope
 - **Required proof:** References include enough caller/file/hash/partial context for agent navigation, or an explicit accepted replacement.
 - **Proof added:** `IndexedReferenceRow` now includes target symbol metadata, containing caller symbol metadata when defensible from indexed spans, and indexed file content hash. Data tests and direct MCP server smokes verify the richer shape.
 
-### CMB-PARITY-004 — Real Self-Check Guardrails
+### CMB-PARITY-004 - Real Self-Check Guardrails
 
 - **Owner:** Core/Runtime or MCP shared support
 - **Adapter surface:** MCP `get_self_check`
@@ -62,31 +62,31 @@ The items below are the hand-verified restore set from the finding. They are saf
 - **Required proof:** Either run guardrail/collision checks or change tool description/result so it does not claim them.
 - **Proof added:** `get_self_check` now returns `overallStatus` and typed `guardrails` with passed/warning/failed statuses for configured roots, runtime/Working/History/Staged placement, watched source existence, diff-tool availability, and runtime-under-watched-source collisions. MCP smoke creates a deliberate runtime-under-watched-source collision and verifies a failed guardrail row.
 
-### CMB-PARITY-005 — Index Staleness And Counts
+### CMB-PARITY-005 - Index Staleness And Counts
 
 - **Owner:** Indexing/Data
 - **Adapter surface:** MCP status tools, UI as applicable
-- **Current status:** Initial restore implemented
+- **Current status:** Restored for current parity scope
 - **Required proof:** Status exposes stale-file count and useful symbol/reference/call-site/relationship counts, backed by persisted facts.
 - **Proof added:** `MonitorStatusResult` exposes symbol/reference/call-site/relationship/stale-file counts. Data tests mutate watched bytes after indexing to prove stale count changes, and direct MCP server smoke verifies the fields are visible through status tools.
 
-### CMB-PARITY-006 — Scoped Index Query Semantics
+### CMB-PARITY-006 - Scoped Index Query Semantics
 
 - **Owner:** Data
 - **Adapter surface:** MCP query tools
-- **Current status:** Initial restore implemented
+- **Current status:** Restored for current parity scope
 - **Required proof:** Folder scope uses path-aware matching and limits are clamped.
 - **Proof added:** Shared `SolutionIndexQueryService.QueryIndex` owns scope filtering and clamps. Data tests prove `Features/Orders` does not over-match `Features/OrdersExtra`; direct MCP server smoke verifies clamp/envelope fields.
 
-### CMB-PARITY-007 — Session-Scoped Staged Records
+### CMB-PARITY-007 - Session-Scoped Staged Records
 
 - **Owner:** Workflow
 - **Adapter surface:** MCP workflow tools, possible CLI overlap
-- **Current status:** Initial restore implemented
+- **Current status:** Restored for current parity scope
 - **Required proof:** Staged records persist session identity; `list_session_staged_records` returns only that session's records.
 - **Proof added:** `StagedEditRecord` and `StagedEditSummary` carry `SessionId`; MCP `stage_candidate_for_review` persists the supplied session id through shared Workflow; `list_session_staged_records` filters by persisted session. Workflow tests prove session filtering, and the MCP multi-file smoke proves another session's staged record is excluded.
 
-### CMB-PARITY-008 — Source-Map Density And Budget
+### CMB-PARITY-008 - Source-Map Density And Budget
 
 - **Owner:** Workflow/Roslyn
 - **Adapter surface:** MCP source-map tool, CLI if exposed
@@ -94,7 +94,7 @@ The items below are the hand-verified restore set from the finding. They are saf
 - **Required proof:** Modes actually shape payload; over-budget maps report explicit truncation/narrowing.
 - **Proof added:** `RoslynEditService.GetSourceMap` resolves `auto` to concrete modes, shapes navigation/selector/detail/full payloads, returns `estimatedTokenProxy`/`budgetLimit`/`wasTruncated`, truncates oversized payloads with `suggestedNarrowing`, and emits `suggestedNextCalls`. Workflow unit tests prove mode shaping and truncation; MCP smoke proves mode metadata, selector next-call guidance, and full-project truncation through the server adapter.
 
-### CMB-PARITY-009 — WinForms/Razor Source-Map Noise Filter
+### CMB-PARITY-009 - WinForms/Razor Source-Map Noise Filter
 
 - **Owner:** Workflow/Roslyn
 - **Adapter surface:** MCP source-map tool, CLI if exposed
@@ -102,7 +102,7 @@ The items below are the hand-verified restore set from the finding. They are saf
 - **Required proof:** Generated/designer noise is collapsed with visible elision markers; full/detail override can include generated members.
 - **Proof added:** Source-map symbols now filter legacy AI-history attributes from the map only, preserve useful attributes such as `AIFileContext` and `FileVersion`, and mark WinForms designer plumbing with explicit `isElided`/`elisionReason` fields. Workflow unit tests prove AI-attribute filtering and designer elision. Raw `.razor` requests continue to return explicit MCP guidance to use text/file workflow tools or `.razor.cs` for Roslyn.
 
-### CMB-PARITY-010 — Roslyn-Backed File Outline
+### CMB-PARITY-010 - Roslyn-Backed File Outline
 
 - **Owner:** Workflow/Roslyn
 - **Adapter surface:** MCP outline tool
@@ -110,15 +110,15 @@ The items below are the hand-verified restore set from the finding. They are saf
 - **Required proof:** Outline comes from syntax/Roslyn declarations with kind/name/span/signature, not line text heuristics.
 - **Evidence:** `RoslynEditService.GetFileOutline` returns structured Roslyn outline rows; `Mcp_get_file_outline_returns_roslyn_structured_members` proves the MCP tool returns `kind`, `name`, and `signature` fields and ignores comment/string declaration lookalikes.
 
-### CMB-PARITY-011 — Superseded Staged-Record Lifecycle
+### CMB-PARITY-011 - Superseded Staged-Record Lifecycle
 
 - **Owner:** Workflow
 - **Adapter surface:** MCP and CLI staging/decision overlap
-- **Current status:** Initial restore implemented
+- **Current status:** Restored for current parity scope
 - **Required proof:** Same-file restaging archives or blocks older staged records; accept/reject handles superseded records explicitly.
 - **Proof added:** Same-file restaging marks older non-terminal records `superseded` with `SupersededByStagedRecordId` after the replacement staged record is ready. Superseded records are rejected by shared validation, launch, and decision paths. Workflow tests prove old records cannot launch or record decisions.
 
-### CMB-PARITY-012 — Real Tool Manifest And Staging Guide
+### CMB-PARITY-012 - Real Tool Manifest And Staging Guide
 
 - **Owner:** Docs/MCP
 - **Adapter surface:** MCP guidance tools
@@ -149,7 +149,7 @@ Every appendix item must eventually become one of:
 
 Recorded explicitly so these are tracked decisions, not silent descopes (the failure mode this whole effort exists to
 prevent). Surfaced by the Phase 8 closure review (`../findings/Phase8HarnessClosureReview-2026-06-03.md`); both are
-**layering/ownership, NOT safety or correctness** — the behavior works at runtime and the safety floor is unaffected.
+**layering/ownership, NOT safety or correctness** - the behavior works at runtime and the safety floor is unaffected.
 
 - **HIGH-2 — durable monitor-session lifecycle lives in the MCP adapter** (session handles + file-access/hash tracking
   in `AIMonitor.McpServer/Program.cs`, not a shared `AIMonitor.Workflow` service). **Deferred.** Rationale: the fix

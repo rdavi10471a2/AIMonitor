@@ -60,6 +60,8 @@ discover
 
 Adapters may expose different commands or tool names, but they must route through shared services where behavior overlaps.
 
+Host command names are mutually exclusive by adapter surface. Codex/CLI workflow docs should use CLI command names such as `edit refresh` and `edit stage`; Claude/MCP workflow docs should use MCP tool names such as `refresh_file` and `stage_candidate_for_review`. Do not mix the two naming surfaces inside one operator instruction unless the point is to explain the mapping explicitly.
+
 Record-decision orchestration is shared. CLI and MCP may expose different arguments, but the accepted/rejected decision, conditional post-accept index rebuild, index-refresh payload, and next-step guidance are assembled by the shared indexing workflow.
 
 MCP parity is a contract surface. When a CMB/MonitorBaseClaude capability still applies, restore it in the shared owner first, then expose it through MCP or CLI only where the adapter overlaps that behavior. A compatibility-shaped empty response is not parity unless it is documented as an intentional operator-approved difference.
@@ -96,6 +98,8 @@ Before staging, the agent must have the full relevant edit surface in context at
 - for coupled changes, every related file should be composed into the same monitor session before review.
 
 The workflow does not try to prove that the agent understood everything. Instead, it forces enough local structure, bytes, or tightly bounded exact-match context into the edit loop that the candidate is coherent, then validates, reviews, and classifies the result. Stable diffs come from coherent local candidates and smallest-safe edits, not scattered partial patches.
+
+The smallest safe edit rule means: choose the narrowest edit that still leaves the candidate coherent at the file level being reviewed. Prefer exact-match replacements or symbol-bounded edits when they fully express the change; escalate to whole-file Working edits when smaller patches would hide necessary surrounding context or make the candidate harder to validate and review.
 
 ## Change Protocol
 

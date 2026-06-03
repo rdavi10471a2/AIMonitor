@@ -503,6 +503,8 @@ Status: Completed for current scope on 2026-06-03, with tracked deferrals.
 
 Purpose: prove there are no hidden missing/high/medium parity losses left.
 
+This phase documents the one-time parity closure pass for the MonitorBaseClaude-to-AIMonitor recovery effort. Its gate is historical closure evidence, not the standing minimum required for every future day-to-day change.
+
 Tasks:
 
 - Re-read `CmbMcpParityGap-2026-06-02.md`.
@@ -514,7 +516,7 @@ Tasks:
   - explicit deferred decision with rationale.
 - Remove or rewrite any tool descriptions that imply unimplemented capabilities.
 
-Final test gate:
+Closure pass test gate:
 
 - `dotnet build AIMonitor.slnx -c Debug -p:UseSharedCompilation=false`
 - All unit tests for affected projects.

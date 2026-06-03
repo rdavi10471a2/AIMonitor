@@ -20,8 +20,9 @@ This file is the Claude/Claude Code entry point. `AGENTS.md` is the Codex host e
 - For MCP, Roslyn, Workflow, or Indexing parity work, read `docs/feature-maps/CmbMcpCapabilityParity.md`. Do not treat compatibility-shaped stubs or valid JSON response shapes as proof that prior MonitorBaseClaude behavior was faithfully restored.
 - Prefer tight loops: small plan, bounded edit, focused test, inspect, then continue. Do not force exhaustive up-front plans when the edge cases need discovery.
 - Reason in the cloud; compose locally. Do not write watched source directly.
+- Claude MCP tool names and Codex/CLI command names are different adapter surfaces over the same shared workflow. Do not mix host-specific names when writing operator instructions, notes, or handoff docs.
 - After staging, staged runtime files are immutable review evidence. Further candidate changes go back through the Working file and must be staged again.
-- Diff stability depends on complete local edit context: use source-map/symbol context for semantic edits, the whole Working file for text/whole-file edits, or bounded exact replacements constrained by the smallest safe edit rule before staging.
+- Diff stability depends on complete local edit context: use source-map/symbol context for semantic edits, the whole Working file for text/whole-file edits, or bounded exact replacements constrained by the smallest safe edit rule before staging. The authoritative definition of the smallest safe edit rule lives in `docs/system-memory/README.md`.
 
 ## MCP Binding
 
@@ -47,6 +48,8 @@ Never edit watched source directly. For watched-project edits:
 8. For accepted or accepted-normalized decisions, check `indexRefresh.status` before relying on solution-index rows.
 
 After an accepted or accepted-normalized decision, call `refresh_file` before editing that same watched file again.
+
+If an accepted or accepted-normalized decision reports a failed `indexRefresh` or leaves the workflow session index-stale, do not trust solution-index rows for follow-up semantic work until `refresh_solution_index`, an equivalent rebuild, or a successful post-accept refresh clears the stale state.
 
 New-file review does not create watched source automatically. The operator must create/save the future watched file through WinMerge before an accepted decision can be classified.
 
