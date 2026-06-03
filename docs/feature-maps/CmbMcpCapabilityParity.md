@@ -145,6 +145,26 @@ Every appendix item must eventually become one of:
 - intentionally deferred;
 - not applicable to the current architecture.
 
+## Tracked Deferrals (operator decision, 2026-06-03)
+
+Recorded explicitly so these are tracked decisions, not silent descopes (the failure mode this whole effort exists to
+prevent). Surfaced by the Phase 8 closure review (`../findings/Phase8HarnessClosureReview-2026-06-03.md`); both are
+**layering/ownership, NOT safety or correctness** — the behavior works at runtime and the safety floor is unaffected.
+
+- **HIGH-2 — durable monitor-session lifecycle lives in the MCP adapter** (session handles + file-access/hash tracking
+  in `AIMonitor.McpServer/Program.cs`, not a shared `AIMonitor.Workflow` service). **Deferred.** Rationale: the fix
+  threads a shared service through the workflow engine and would churn the currently green/stable test surface for zero
+  safety or parity gain. Cost while deferred: sessions stay MCP-only (CLI cannot use them) and are covered only by
+  adapter-level tests. **Revisit when:** CLI sessions are wanted, or the next time this area is touched. **Cheap
+  insurance before any future move:** add a Workflow-layer session test so the move has a regression net.
+- **MEDIUM-1 — self-check guardrail evaluation lives in the adapter** (no owning-layer service/test; only an MCP smoke).
+  **Deferred.** Rationale/scope: same churn argument; MCP-only operator diagnostic, small blast radius. **Revisit
+  with HIGH-2.**
+- **Phase 7 (monitor history / prune)** — **deferred** as a future feature (see Restore Plan Phase 7); `prune_monitor_history`
+  honestly reports a no-op, not a falsely-claimed capability.
+- **Degraded-low appendix tail** (smoke-test catalog richness, single-entry `list_watched_projects`, `get_monitor_run`
+  last-500/case-sensitivity, raw list shapes) — **deferred**, accepted as low-impact; not safety-relevant.
+
 ## Restore Order
 
 1. Index richness and staleness: CMB-PARITY-001, 002, 003, 005, 006.

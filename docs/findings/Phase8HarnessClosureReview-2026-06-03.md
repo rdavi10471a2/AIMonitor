@@ -87,6 +87,15 @@ runtime-under-watched-source collision).
 - The proxy hub is a faithful PostToolUse-telemetry analog (with a server-side fallback log too).
 - **The one place a hook (or corrected deny) is genuinely needed is HIGH-1:** AIMonitor cannot confine Claude's *native* tools, so the agent's own Edit/Write/Bash against the live watched root are unguarded today.
 
+## Deferral decision (operator, 2026-06-03)
+
+HIGH-2 and MEDIUM-1 are **deferred** by operator decision. Codex proposed a fix that extracts a shared service and
+**ripples through the workflow engine**; given parity is closed, the safety floor is intact, and the ClaudeSmokes are
+green, that churn is not worth it right now for two items that are **layering/ownership, not safety or correctness**.
+Recorded as a tracked deferral in `../feature-maps/CmbMcpCapabilityParity.md` ("Tracked Deferrals"). Revisit when CLI
+sessions are wanted or the area is next touched; add a Workflow-layer session test first so the eventual move has a
+regression net. This is a sequencing call, not a silent descope.
+
 ## Suggested order for Codex
 1. HIGH-1 deny/hook fix (cheapest, closes a live safety gap — note this also benefits any Codex session).
 2. HIGH-2 extract `MonitorSessionService` into Workflow + owning-layer tests.
