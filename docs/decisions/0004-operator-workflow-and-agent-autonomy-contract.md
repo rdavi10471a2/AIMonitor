@@ -27,6 +27,18 @@ confirmation is **redundant with the structural floor** — it asks a human to a
 governs. Removing it (within the floor) is what converts the agent's speed into the operator's stated goal:
 generate-and-test weeks of work in days.
 
+## Conceptual root: one recursive loop
+
+Development here is a single self-similar primitive — **describe → generate → test → iterate** — applied at every
+altitude. "Description," "plan," "spec," and "intent" are the same artifact seen from different heights: the description
+that generates code is the plan, and the plan is itself produced by the same discuss→generate→iterate loop one level
+up. No artifact is hand-typed at any level (not the code, not the plan); the human supplies precise description and an
+objective gate closes the loop (a plan is validated by whether its generated code holds up, the same way code is
+validated by build + run). The remaining human skill is **describing well** — pinning intent precisely enough that the
+gate can judge the result. This is why per-step "OK?" is harmful: a synchronous human checkpoint the objective gate
+already covers **breaks the recursion** and throttles the loop at every level. The autonomy contract below exists to
+keep the loop flowing.
+
 ## Decision: the autonomy contract
 
 **Principle: do not ask a human to approve what an objective gate already governs.** Per-step "OK?" on reversible,
