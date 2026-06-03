@@ -11,13 +11,15 @@ public sealed class MonitorDashboardControl : UserControl
     private readonly SolutionIndexControl solutionIndexControl;
     private readonly AdapterSurfaceControl adapterSurfaceControl;
     private readonly Label statusLabel;
+    private readonly string? settingsPath;
     private MonitorLogService? logService;
     private MonitorLogPipeServer? logPipeServer;
     private McpProxyHubService? mcpProxyHubService;
 
-    public MonitorDashboardControl()
+    public MonitorDashboardControl(AppStartupOptions options)
     {
         Dock = DockStyle.Fill;
+        settingsPath = options.SettingsPath;
 
         statusLabel = new Label
         {
@@ -29,7 +31,7 @@ public sealed class MonitorDashboardControl : UserControl
         {
             Dock = DockStyle.Fill
         };
-        solutionIndexControl = new SolutionIndexControl
+        solutionIndexControl = new SolutionIndexControl(settingsPath)
         {
             Dock = DockStyle.Fill,
             MinimumSize = new Size(850, 360)
@@ -88,7 +90,7 @@ public sealed class MonitorDashboardControl : UserControl
         try
         {
             string repositoryRoot = AppPathResolver.FindRepositoryRoot();
-            MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot);
+            MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot, settingsPath);
             logService = new MonitorLogService(MonitorLogPaths.GetDefaultLogPath(settings));
             logPipeServer?.Dispose();
             mcpProxyHubService?.Dispose();

@@ -17,8 +17,14 @@ namespace AIMonitor.ToolSmokeTests;
 
 internal static class Program
 {
+    private static string? smokeSettingsPathOverride;
+
     private static async Task<int> Main(string[] args)
     {
+        smokeSettingsPathOverride = args.Contains("--sample-workflow-harness", StringComparer.OrdinalIgnoreCase)
+            ? Path.Combine("config", "appsettings.workflow-harness-sample.json")
+            : GetOption(args, "--config");
+
         if (args.Contains("--fixture-index-matrix", StringComparer.OrdinalIgnoreCase))
         {
             return await RunFixtureIndexMatrixAsync();
@@ -69,6 +75,11 @@ internal static class Program
             return await RunMcpLiveHumanMemberPairsRemoveWinMergeAsync(args);
         }
 
+        if (args.Contains("--cleanup-workflow-harness-member-pairs", StringComparer.OrdinalIgnoreCase))
+        {
+            return CleanupWorkflowHarnessMemberPairsFile(args);
+        }
+
         if (args.Contains("--mcp-live-premerge-failure", StringComparer.OrdinalIgnoreCase))
         {
             return await RunMcpLivePremergeFailureAsync();
@@ -107,11 +118,16 @@ internal static class Program
         Console.WriteLine("  --mcp-live-human-existing-winmerge Launch real WinMerge for an existing-file edit through the live MCP bridge.");
         Console.WriteLine("  --mcp-live-human-member-pairs-winmerge Create an AppConfig class with paired member categories, stage, and launch WinMerge.");
         Console.WriteLine("  --mcp-live-human-member-pairs-remove-winmerge --relative-path <path> --class-name <name> Remove _removed members, stage, and launch WinMerge.");
+        Console.WriteLine("  --cleanup-workflow-harness-member-pairs --relative-path <path> Delete a generated WorkflowHarnessSample member-pairs test file.");
         Console.WriteLine("  --mcp-live-premerge-failure Stage a syntax-valid compile-failing candidate through MCP and verify validation blocks WinMerge.");
         Console.WriteLine("  --mcp-live-restore-premerge-fixture-winmerge Restore the AppConfig pre-merge failure fixture through WinMerge.");
         Console.WriteLine("  --mcp-live-syntax-rejection Verify malformed C# is rejected at edit time before staging.");
         Console.WriteLine("  --mcp-live-record-decision --staged-record-id <id> --decision accepted|rejected [--expected-staged-hash <hash>] Record the human WinMerge decision.");
         Console.WriteLine("  --visible-test-suite      Run live MCP calls, then dotnet test, and emit test result telemetry to the WinForms monitor log.");
+        Console.WriteLine();
+        Console.WriteLine("Common options:");
+        Console.WriteLine("  --sample-workflow-harness Use the committed samples/watched-solutions/WorkflowHarnessSample config.");
+        Console.WriteLine("  --config <path>           Use an explicit AIMonitor config path for bridge-backed smoke modes.");
         return 2;
     }
 
@@ -281,7 +297,7 @@ internal static class Program
     private static async Task<int> RunMcpLiveWorkflowAsync()
     {
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
-        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
 
         await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
         await CallAndPrintAsync(client, "get_monitor_status");
@@ -303,7 +319,7 @@ internal static class Program
     private static async Task<int> RunMcpLiveEditWorkflowAsync()
     {
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
-        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
         const string relativePath = "AppConfig/AppConfig.cs";
         const string oldText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = true;";
         const string newText = oldText + "\r\n\r\n        public bool BridgeFileLevelEditSmoke { get; set; } = true;";
@@ -350,15 +366,16 @@ internal static class Program
     private static async Task<int> RunMcpLiveAllEditToolsAsync()
     {
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
-        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
         const string existingRelativePath = "AppConfig/AppConfig.cs";
         const string smokeRelativePath = "AppConfig/AIMonitorBridgeAllEditToolsSmoke.cs";
         const string containingType = "AIMonitorBridgeAllEditToolsSmoke";
+        string configurationNamespace = ResolveConfigurationNamespace(repositoryRoot, settingsPath);
 
-        string initialContent = """
+        string initialContent = $$"""
             using System;
 
-            namespace SchemaStudioWebViewer.Configuration
+            namespace {{configurationNamespace}}
             {
                 public partial class AIMonitorBridgeAllEditToolsSmoke
                 {
@@ -661,7 +678,8 @@ internal static class Program
     private static async Task<int> RunMcpLiveMultiFileSessionAsync()
     {
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
-        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
+        string configurationNamespace = ResolveConfigurationNamespace(repositoryRoot, settingsPath);
         string firstRelativePath = "AppConfig/AIMonitorBridgeMultiFileOne.cs";
         string secondRelativePath = "AppConfig/AIMonitorBridgeMultiFileTwo.cs";
 
@@ -679,8 +697,8 @@ internal static class Program
             client,
             sessionId,
             firstRelativePath,
-            """
-            namespace SchemaStudioWebViewer.Configuration
+            $$"""
+            namespace {{configurationNamespace}}
             {
                 public static class AIMonitorBridgeMultiFileOne
                 {
@@ -692,8 +710,8 @@ internal static class Program
             client,
             sessionId,
             secondRelativePath,
-            """
-            namespace SchemaStudioWebViewer.Configuration
+            $$"""
+            namespace {{configurationNamespace}}
             {
                 public static class AIMonitorBridgeMultiFileTwo
                 {
@@ -715,11 +733,12 @@ internal static class Program
     private static async Task<int> RunMcpLiveHumanWinMergeAsync()
     {
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
-        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
+        string configurationNamespace = ResolveConfigurationNamespace(repositoryRoot, settingsPath);
         string marker = DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssfff");
         string relativePath = $"AppConfig/AIMonitorHumanWinMergeSmoke_{marker}.cs";
         string content = $$"""
-            namespace SchemaStudioWebViewer.Configuration
+            namespace {{configurationNamespace}}
             {
                 public static class AIMonitorHumanWinMergeSmoke_{{marker}}
                 {
@@ -793,7 +812,7 @@ internal static class Program
     private static async Task<int> RunMcpLiveHumanExistingWinMergeAsync()
     {
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
-        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
         const string relativePath = "AppConfig/AppConfig.cs";
         string marker = DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssfff");
         const string oldText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = true;";
@@ -866,14 +885,15 @@ internal static class Program
     private static async Task<int> RunMcpLiveHumanMemberPairsWinMergeAsync()
     {
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
-        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
+        string configurationNamespace = ResolveConfigurationNamespace(repositoryRoot, settingsPath);
         string marker = DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssfff");
         string className = $"AIMonitorMemberPairsManual_{marker}";
         string relativePath = $"AppConfig/{className}.cs";
         string content = $$"""
             using System;
 
-            namespace SchemaStudioWebViewer.Configuration
+            namespace {{configurationNamespace}}
             {
                 public partial class {{className}}
                 {
@@ -925,7 +945,7 @@ internal static class Program
         string relativePath = GetRequiredOption(args, "--relative-path");
         string className = GetRequiredOption(args, "--class-name");
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
-        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
 
         await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
         CallToolResult session = await CallAndPrintAsync(
@@ -953,6 +973,56 @@ internal static class Program
             relativePath,
             "human member-pairs remove smoke",
             null);
+        return 0;
+    }
+
+    private static int CleanupWorkflowHarnessMemberPairsFile(string[] args)
+    {
+        if (!args.Contains("--sample-workflow-harness", StringComparer.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine("Cleanup is only allowed with --sample-workflow-harness.");
+            return 1;
+        }
+
+        string relativePath = GetRequiredOption(args, "--relative-path").Replace('/', Path.DirectorySeparatorChar);
+        string fileName = Path.GetFileName(relativePath);
+        if (!relativePath.StartsWith($"AppConfig{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+            || !fileName.StartsWith("AIMonitorMemberPairsManual_", StringComparison.Ordinal)
+            || !fileName.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            || relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(part => part == ".."))
+        {
+            Console.Error.WriteLine("Cleanup refused because the path is not a generated WorkflowHarnessSample member-pairs file.");
+            return 1;
+        }
+
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
+        MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot, settingsPath);
+        string fullPath = Path.GetFullPath(Path.Combine(settings.WatchedProjectFolder, relativePath));
+        string watchedRoot = Path.GetFullPath(settings.WatchedProjectFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!fullPath.StartsWith(watchedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine("Cleanup refused because the resolved path is outside the watched sample folder.");
+            return 1;
+        }
+
+        if (File.Exists(fullPath))
+        {
+            File.Delete(fullPath);
+            Console.WriteLine($"Deleted generated harness file: {fullPath}");
+        }
+        else
+        {
+            Console.WriteLine($"Generated harness file already absent: {fullPath}");
+        }
+
+        string backupPath = fullPath + ".bak";
+        if (File.Exists(backupPath))
+        {
+            File.Delete(backupPath);
+            Console.WriteLine($"Deleted generated harness backup: {backupPath}");
+        }
+
         return 0;
     }
 
@@ -1180,7 +1250,7 @@ internal static class Program
     private static async Task<int> RunMcpLivePremergeFailureAsync()
     {
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
-        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
         const string relativePath = "AppConfig/AppConfig.cs";
         const string oldText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = true;";
         const string newText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = MissingPremergeSymbol.Value;";
@@ -1262,7 +1332,7 @@ internal static class Program
     private static async Task<int> RunMcpLiveRestorePremergeFixtureWinMergeAsync()
     {
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
-        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
         const string relativePath = "AppConfig/AppConfig.cs";
         const string oldText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = MissingPremergeSymbol.Value;";
         const string newText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = true;";
@@ -1308,7 +1378,7 @@ internal static class Program
     private static async Task<int> RunMcpLiveSyntaxRejectionAsync()
     {
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
-        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
         const string relativePath = "AppConfig/AppConfig.cs";
         const string oldText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = true;";
         const string newText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = ;";
@@ -1364,7 +1434,7 @@ internal static class Program
         string decision = GetRequiredOption(args, "--decision");
         string? expectedStagedHash = GetOption(args, "--expected-staged-hash");
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
-        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
 
         await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
         await CallAndPrintAsync(
@@ -1439,6 +1509,36 @@ internal static class Program
         };
 
         return await McpClient.CreateAsync(new StdioClientTransport(options));
+    }
+
+    private static string ResolveSmokeSettingsPath(string repositoryRoot)
+    {
+        if (string.IsNullOrWhiteSpace(smokeSettingsPathOverride))
+        {
+            return Path.Combine(repositoryRoot, "config", "appsettings.json");
+        }
+
+        return Path.GetFullPath(Path.IsPathFullyQualified(smokeSettingsPathOverride)
+            ? smokeSettingsPathOverride
+            : Path.Combine(repositoryRoot, smokeSettingsPathOverride));
+    }
+
+    private static string ResolveConfigurationNamespace(string repositoryRoot, string settingsPath)
+    {
+        MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot, settingsPath);
+        string solutionName = Path.GetFileNameWithoutExtension(settings.WatchedSolutionPath);
+        string safeName = Regex.Replace(solutionName, "[^A-Za-z0-9_]", "_");
+        if (string.IsNullOrWhiteSpace(safeName))
+        {
+            safeName = "WatchedSample";
+        }
+
+        if (char.IsDigit(safeName[0]))
+        {
+            safeName = "_" + safeName;
+        }
+
+        return $"{safeName}.Configuration";
     }
 
     private static async Task<CallToolResult> CallAndPrintAsync(

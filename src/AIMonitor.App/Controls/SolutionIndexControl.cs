@@ -29,6 +29,7 @@ public sealed class SolutionIndexControl : UserControl
     private readonly DataGridView relationshipsGrid;
     private readonly DataGridView packagesGrid;
     private readonly TextBox rawBox;
+    private readonly string? settingsPath;
     private readonly SplitContainer mainSplit;
     private readonly SplitContainer detailSplit;
     private readonly TabControl detailTabs;
@@ -51,9 +52,10 @@ public sealed class SolutionIndexControl : UserControl
     private IReadOnlyList<IndexedReferenceRow> references = [];
     private IReadOnlyList<IndexedPackageReferenceRow> packages = [];
 
-    public SolutionIndexControl()
+    public SolutionIndexControl(string? settingsPath = null)
     {
         Dock = DockStyle.Fill;
+        this.settingsPath = settingsPath;
 
         rebuildIndexMenuItem = new ToolStripMenuItem("Rebuild Index");
         refreshMenuItem = new ToolStripMenuItem("Refresh");
@@ -276,7 +278,7 @@ public sealed class SolutionIndexControl : UserControl
         try
         {
             string repositoryRoot = AppPathResolver.FindRepositoryRoot();
-            settings = MonitorSettingsLoader.Load(repositoryRoot);
+            settings = MonitorSettingsLoader.Load(repositoryRoot, settingsPath);
             string databasePath = MonitorDataPaths.GetDefaultIndexDatabasePath(settings);
             store = new SolutionIndexStore(new SolutionIndexDatabase(databasePath));
             watchedSolutionBox.Text = settings.WatchedSolutionPath;
@@ -319,7 +321,8 @@ public sealed class SolutionIndexControl : UserControl
             string settingsPath = MonitorSettingsLoader.SaveLocal(
                 repositoryRoot,
                 dialog.FileName,
-                runtimeRoot);
+                runtimeRoot,
+                this.settingsPath);
             logger?.Write(
                 MonitorLogLevel.Information,
                 "AIMonitor.App",

@@ -23,6 +23,10 @@ runtime/
 local/
 samples/watched-solutions/*
 !samples/watched-solutions/README.md
+!samples/watched-solutions/WorkflowHarnessSample/
+!samples/watched-solutions/WorkflowHarnessSample/**
+samples/watched-solutions/WorkflowHarnessSample/**/bin/
+samples/watched-solutions/WorkflowHarnessSample/**/obj/
 
 # Logs/temp
 *.log
