@@ -430,12 +430,14 @@ public sealed class AIMonitorTools
         string path = ResolveWatchedPath(sourceFilePath);
         string text = File.ReadAllText(path);
         AIMonitorFileHashInfo hashInfo = GetFileHashInfo(path);
+        AIMonitorSessionFileAccess? access = null;
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
+            access = RecordSessionFileAccess(sessionId, path, "read", hashInfo);
             RecordMonitorSessionEvent(sessionId, "file-fetch", path, JsonSerializer.Serialize(hashInfo, JsonOptions));
         }
 
-        return new AIMonitorFileReadResult(path, workflowPaths.GetRelativeWatchedPath(path), hashInfo, text);
+        return new AIMonitorFileReadResult(path, workflowPaths.GetRelativeWatchedPath(path), hashInfo, access, text);
     }
 
     [McpServerTool]
@@ -448,22 +450,19 @@ public sealed class AIMonitorTools
         AIMonitorSessionState session = GetMonitorSession(sessionId);
         string path = ResolveWatchedPath(sourceFilePath);
         AIMonitorFileHashInfo current = GetFileHashInfo(path);
-        AIMonitorSessionEvent? fetch = session.Events
-            .Where(item => item.EventType.Equals("file-fetch", StringComparison.OrdinalIgnoreCase)
-                && item.Summary.Equals(path, StringComparison.OrdinalIgnoreCase))
-            .LastOrDefault();
-        AIMonitorFileHashInfo? previous = null;
-        if (!string.IsNullOrWhiteSpace(fetch?.PayloadJson))
-        {
-            previous = JsonSerializer.Deserialize<AIMonitorFileHashInfo>(fetch.PayloadJson, JsonOptions);
-        }
+        AIMonitorSessionFileAccess? access = session.Files
+            .Where(item => item.SourceFilePath.Equals(path, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(item => item.LastAccessedAtUtc)
+            .FirstOrDefault();
+        AIMonitorFileHashInfo? previous = access?.Hash;
 
         return new AIMonitorFileHashCheckResult(
             path,
             previous is not null,
             previous?.Sha256.Equals(current.Sha256, StringComparison.OrdinalIgnoreCase) == false,
             current,
-            previous);
+            previous,
+            access);
     }
 
     [McpServerTool]
@@ -1076,6 +1075,40 @@ public sealed class AIMonitorTools
         File.WriteAllText(GetSessionPath(session.SessionId), JsonSerializer.Serialize(session, JsonOptions));
     }
 
+    private AIMonitorSessionFileAccess RecordSessionFileAccess(
+        string sessionId,
+        string sourceFilePath,
+        string accessKind,
+        AIMonitorFileHashInfo hash)
+    {
+        AIMonitorSessionState session = LoadSessionById(sessionId)
+            ?? throw new InvalidOperationException($"Monitor session was not found: {sessionId}");
+        List<AIMonitorSessionFileAccess> files = session.Files.ToList();
+        AIMonitorSessionFileAccess? previous = files
+            .FirstOrDefault(item => item.SourceFilePath.Equals(sourceFilePath, StringComparison.OrdinalIgnoreCase));
+        AIMonitorSessionFileAccess updated = new(
+            sessionId,
+            sourceFilePath,
+            workflowPaths.GetRelativeWatchedPath(sourceFilePath),
+            accessKind,
+            hash,
+            (previous?.FetchCount ?? 0) + 1,
+            previous?.FirstAccessedAtUtc ?? DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow);
+        if (previous is not null)
+        {
+            files.Remove(previous);
+        }
+
+        files.Add(updated);
+        SaveSession(session with
+        {
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+            Files = files
+        });
+        return updated;
+    }
+
     private AIMonitorSessionState? LoadSessionById(string sessionId)
     {
         string path = GetSessionPath(sessionId);
@@ -1283,7 +1316,10 @@ public sealed record AIMonitorSessionState(
     string Purpose,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc,
-    IReadOnlyList<AIMonitorSessionEvent> Events);
+    IReadOnlyList<AIMonitorSessionEvent> Events)
+{
+    public IReadOnlyList<AIMonitorSessionFileAccess> Files { get; init; } = [];
+}
 
 public sealed record AIMonitorSessionSummary(
     string SessionId,
@@ -1298,6 +1334,16 @@ public sealed record AIMonitorSessionEvent(
     string Summary,
     string? PayloadJson);
 
+public sealed record AIMonitorSessionFileAccess(
+    string SessionId,
+    string SourceFilePath,
+    string RelativePath,
+    string AccessKind,
+    AIMonitorFileHashInfo Hash,
+    int FetchCount,
+    DateTimeOffset FirstAccessedAtUtc,
+    DateTimeOffset LastAccessedAtUtc);
+
 public sealed record AIMonitorFileHashInfo(
     string Sha256,
     long Length,
@@ -1307,6 +1353,7 @@ public sealed record AIMonitorFileReadResult(
     string SourceFilePath,
     string RelativePath,
     AIMonitorFileHashInfo Hash,
+    AIMonitorSessionFileAccess? SessionAccess,
     string Content);
 
 public sealed record AIMonitorFileHashCheckResult(
@@ -1314,7 +1361,8 @@ public sealed record AIMonitorFileHashCheckResult(
     bool KnownInSession,
     bool ChangedSinceFetch,
     AIMonitorFileHashInfo Current,
-    AIMonitorFileHashInfo? Previous);
+    AIMonitorFileHashInfo? Previous,
+    AIMonitorSessionFileAccess? PreviousAccess);
 
 public sealed record AIMonitorFileMatch(
     string Name,

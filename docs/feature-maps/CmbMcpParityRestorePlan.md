@@ -199,6 +199,7 @@ Tests:
 Progress:
 
 - 2026-06-02: Initial session/staged-record lifecycle restore implemented. `StagedEditRecord` and `StagedEditSummary` now carry `SessionId` plus supersede metadata. MCP `stage_candidate_for_review` threads `sessionId` into the shared Workflow record, and `list_session_staged_records` now filters by persisted session instead of returning all records. Same-file restaging supersedes older non-terminal staged records only after the replacement record is ready; superseded records are blocked from validation, launch, and decision recording. Focused Workflow tests prove supersede/block/session filtering, and the existing MCP multi-file smoke now also proves another session's staged record is not leaked into the requested session.
+- 2026-06-02: Durable MCP session file-fetch tracking restored. Session JSON now carries typed per-file access rows with session id, relative path, access kind, fetch count, first/last access timestamps, and hash. `get_file` records both the historical event and the typed access row; `check_file_hash` reads the typed access row and returns it as `previousAccess`. The existing MCP hash smoke now proves unchanged/changed detection plus access kind, relative path, and typed previous-access payload.
 
 ## Phase 3 - Source-Map Density, Budget, And Noise Filtering
 

@@ -1313,6 +1313,10 @@ public sealed class McpServerSmokeTests
                 ["sessionId"] = sessionId
             });
         Assert.False(read.IsError == true);
+        string readJson = ExtractToolText(read);
+        Assert.Contains("\"sessionAccess\"", readJson, StringComparison.Ordinal);
+        Assert.Contains("\"accessKind\":\"read\"", readJson, StringComparison.Ordinal);
+        Assert.Contains("\"fetchCount\":1", readJson, StringComparison.Ordinal);
 
         CallToolResult unchanged = await client.CallToolAsync(
             "check_file_hash",
@@ -1322,8 +1326,12 @@ public sealed class McpServerSmokeTests
                 ["sourceFilePath"] = fixture.ProgramFilePath
             });
         Assert.False(unchanged.IsError == true);
-        Assert.True(ExtractJsonBool(ExtractToolText(unchanged), "knownInSession"));
-        Assert.False(ExtractJsonBool(ExtractToolText(unchanged), "changedSinceFetch"));
+        string unchangedJson = ExtractToolText(unchanged);
+        Assert.True(ExtractJsonBool(unchangedJson, "knownInSession"));
+        Assert.False(ExtractJsonBool(unchangedJson, "changedSinceFetch"));
+        Assert.Contains("\"previousAccess\"", unchangedJson, StringComparison.Ordinal);
+        Assert.Contains("\"relativePath\":\"Program.cs\"", unchangedJson, StringComparison.Ordinal);
+        Assert.Contains("\"accessKind\":\"read\"", unchangedJson, StringComparison.Ordinal);
 
         await File.WriteAllTextAsync(fixture.ProgramFilePath, "namespace Example { internal static class Program { public static string Value => \"external\"; } }");
 
@@ -1335,7 +1343,9 @@ public sealed class McpServerSmokeTests
                 ["sourceFilePath"] = fixture.ProgramFilePath
             });
         Assert.False(changed.IsError == true);
-        Assert.True(ExtractJsonBool(ExtractToolText(changed), "changedSinceFetch"));
+        string changedJson = ExtractToolText(changed);
+        Assert.True(ExtractJsonBool(changedJson, "changedSinceFetch"));
+        Assert.Contains("\"previousAccess\"", changedJson, StringComparison.Ordinal);
     }
 
     [Fact]
