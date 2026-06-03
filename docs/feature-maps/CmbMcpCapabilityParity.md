@@ -157,6 +157,10 @@ prevent). Surfaced by the Phase 8 closure review (`../findings/Phase8HarnessClos
   safety or parity gain. Cost while deferred: sessions stay MCP-only (CLI cannot use them) and are covered only by
   adapter-level tests. **Revisit when:** CLI sessions are wanted, or the next time this area is touched. **Cheap
   insurance before any future move:** add a Workflow-layer session test so the move has a regression net.
+  **Testing dividend argument for unparking:** shared-engine logic earns dual-adapter validation for free (CLI
+  integration tests exercise the same engine the MCP tools do, from a second entrance); logic that leaks into an
+  adapter forfeits it. Moving sessions into the shared engine would hand us CLI cross-coverage of session behavior we
+  cannot get today — a concrete, non-safety reason to eventually do it.
 - **MEDIUM-1 — self-check guardrail evaluation lives in the adapter** (no owning-layer service/test; only an MCP smoke).
   **Deferred.** Rationale/scope: same churn argument; MCP-only operator diagnostic, small blast radius. **Revisit
   with HIGH-2.**
