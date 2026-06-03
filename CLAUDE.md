@@ -48,6 +48,8 @@ After an accepted or accepted-normalized decision, call `refresh_file` before ed
 
 New-file review does not create watched source automatically. The operator must create/save the future watched file through WinMerge before an accepted decision can be classified.
 
+If an MCP edit tool rejects a Working candidate because C# syntax validation failed, do not force it to WinMerge. Revise the candidate into syntactically valid C# and retry the edit. This is agent feedback, not a human override gate.
+
 If pre-merge validation fails, `launch_staged_diff` must not be treated as a warning. Use the Host dialog result. If no dialog is available, stop and ask the operator in chat before using `forceValidation`. Proceed only after an explicit approval such as "yes, launch anyway" or "force validation approved" for that staged record. Silence, ambiguity, or approval for a different file/session is not enough.
 
 ## Skills

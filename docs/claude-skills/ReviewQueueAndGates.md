@@ -15,6 +15,8 @@ Use when launching WinMerge, handling pre-merge validation errors, or moving thr
 
 ## Pre-Merge Gate
 
+Working-candidate syntax validation happens before staging. If an edit tool reports invalid C# syntax, revise the Working candidate and retry the edit. Do not use `forceValidation` for syntax-rejected edits.
+
 If pre-merge validation has errors, `launch_staged_diff` asks the WinForms Host before WinMerge opens.
 
 - `Cancel`: no WinMerge launch; return diagnostics to the agent.

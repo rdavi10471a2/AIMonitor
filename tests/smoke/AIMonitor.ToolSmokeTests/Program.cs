@@ -74,6 +74,16 @@ internal static class Program
             return await RunMcpLivePremergeFailureAsync();
         }
 
+        if (args.Contains("--mcp-live-restore-premerge-fixture-winmerge", StringComparer.OrdinalIgnoreCase))
+        {
+            return await RunMcpLiveRestorePremergeFixtureWinMergeAsync();
+        }
+
+        if (args.Contains("--mcp-live-syntax-rejection", StringComparer.OrdinalIgnoreCase))
+        {
+            return await RunMcpLiveSyntaxRejectionAsync();
+        }
+
         if (args.Contains("--mcp-live-record-decision", StringComparer.OrdinalIgnoreCase))
         {
             return await RunMcpLiveRecordDecisionAsync(args);
@@ -97,7 +107,9 @@ internal static class Program
         Console.WriteLine("  --mcp-live-human-existing-winmerge Launch real WinMerge for an existing-file edit through the live MCP bridge.");
         Console.WriteLine("  --mcp-live-human-member-pairs-winmerge Create an AppConfig class with paired member categories, stage, and launch WinMerge.");
         Console.WriteLine("  --mcp-live-human-member-pairs-remove-winmerge --relative-path <path> --class-name <name> Remove _removed members, stage, and launch WinMerge.");
-        Console.WriteLine("  --mcp-live-premerge-failure Stage an invalid existing-file candidate through MCP and verify validation blocks WinMerge.");
+        Console.WriteLine("  --mcp-live-premerge-failure Stage a syntax-valid compile-failing candidate through MCP and verify validation blocks WinMerge.");
+        Console.WriteLine("  --mcp-live-restore-premerge-fixture-winmerge Restore the AppConfig pre-merge failure fixture through WinMerge.");
+        Console.WriteLine("  --mcp-live-syntax-rejection Verify malformed C# is rejected at edit time before staging.");
         Console.WriteLine("  --mcp-live-record-decision --staged-record-id <id> --decision accepted|rejected [--expected-staged-hash <hash>] Record the human WinMerge decision.");
         Console.WriteLine("  --visible-test-suite      Run live MCP calls, then dotnet test, and emit test result telemetry to the WinForms monitor log.");
         return 2;
@@ -1171,7 +1183,7 @@ internal static class Program
         string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
         const string relativePath = "AppConfig/AppConfig.cs";
         const string oldText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = true;";
-        const string newText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = ;";
+        const string newText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = MissingPremergeSymbol.Value;";
 
         await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
         CallToolResult session = await CallAndPrintAsync(
@@ -1213,6 +1225,7 @@ internal static class Program
             });
         string stageJson = ExtractToolText(stage);
         string stagedRecordId = ExtractJsonString(stageJson, "stagedRecordId");
+        string stagedHash = ExtractJsonString(stageJson, "stagedHash");
 
         CallToolResult launch = await CallAndPrintAsync(
             client,
@@ -1222,7 +1235,8 @@ internal static class Program
                 ["stagedRecordId"] = stagedRecordId
             });
         string launchText = ExtractToolText(launch);
-        if (!launchText.Contains("Pre-merge validation failed", StringComparison.OrdinalIgnoreCase))
+        if (!launchText.Contains("\"status\":\"failed\"", StringComparison.OrdinalIgnoreCase)
+            || !launchText.Contains("\"isError\":true", StringComparison.OrdinalIgnoreCase))
         {
             Console.Error.WriteLine("Expected pre-merge validation failure before any launch decision.");
             Console.Error.WriteLine(launchText);
@@ -1232,22 +1246,116 @@ internal static class Program
         string launchStatus = launchText.Contains("\"launched\":true", StringComparison.OrdinalIgnoreCase)
             ? "override-launched"
             : "blocked";
-        await CallAndPrintAsync(
-            client,
-            "record_diff_decision",
-            new Dictionary<string, object?>
-            {
-                ["stagedRecordId"] = stagedRecordId,
-                ["decision"] = "rejected"
-            });
-
         Console.WriteLine();
         Console.WriteLine("Pre-merge validation failure smoke passed.");
         Console.WriteLine($"Launch status: {launchStatus}");
         Console.WriteLine($"Session ID: {sessionId}");
         Console.WriteLine($"Staged record ID: {stagedRecordId}");
+        Console.WriteLine($"Expected staged hash: {stagedHash}");
+        Console.WriteLine("After reviewing/saving in WinMerge, record the result with:");
+        Console.WriteLine($"dotnet .\\tests\\smoke\\AIMonitor.ToolSmokeTests\\bin\\Debug\\net10.0\\AIMonitor.ToolSmokeTests.dll --mcp-live-record-decision --staged-record-id {stagedRecordId} --decision accepted --expected-staged-hash {stagedHash}");
+        Console.WriteLine($"dotnet .\\tests\\smoke\\AIMonitor.ToolSmokeTests\\bin\\Debug\\net10.0\\AIMonitor.ToolSmokeTests.dll --mcp-live-record-decision --staged-record-id {stagedRecordId} --decision rejected");
         Console.WriteLine(launchText);
         return launch.IsError == true ? 1 : 0;
+    }
+
+    private static async Task<int> RunMcpLiveRestorePremergeFixtureWinMergeAsync()
+    {
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        const string relativePath = "AppConfig/AppConfig.cs";
+        const string oldText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = MissingPremergeSymbol.Value;";
+        const string newText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = true;";
+
+        await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
+        CallToolResult session = await CallAndPrintAsync(
+            client,
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["title"] = "restore premerge validation fixture"
+            });
+        string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
+
+        await CallAndPrintAsync(
+            client,
+            "refresh_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = relativePath,
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "replace_text_in_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["oldText"] = oldText,
+                ["newText"] = newText,
+                ["expectedMatches"] = 1,
+                ["sessionId"] = sessionId
+            });
+        await StageLaunchAndPrintDecisionAsync(
+            client,
+            sessionId,
+            relativePath,
+            "restore premerge validation fixture",
+            "Pre-merge fixture restore smoke");
+        return 0;
+    }
+
+    private static async Task<int> RunMcpLiveSyntaxRejectionAsync()
+    {
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        const string relativePath = "AppConfig/AppConfig.cs";
+        const string oldText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = true;";
+        const string newText = "        public bool InitiaWorkflowTestPassed3 { get; set; } = ;";
+
+        await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
+        CallToolResult session = await CallAndPrintAsync(
+            client,
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["title"] = "syntax rejection smoke"
+            });
+        string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
+
+        await CallAndPrintAsync(
+            client,
+            "refresh_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = relativePath,
+                ["sessionId"] = sessionId
+            });
+        CallToolResult replace = await CallAndPrintAsync(
+            client,
+            "replace_text_in_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["oldText"] = oldText,
+                ["newText"] = newText,
+                ["expectedMatches"] = 1,
+                ["sessionId"] = sessionId
+            });
+        string replaceText = ExtractToolText(replace);
+        if (replace.IsError != true)
+        {
+            Console.Error.WriteLine("Expected malformed C# to be rejected before staging.");
+            Console.Error.WriteLine(replaceText);
+            return 1;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("Syntax rejection smoke passed.");
+        Console.WriteLine("Agent recovery contract: rewrite the Working candidate into valid C# and retry the edit; do not force this path to WinMerge.");
+        Console.WriteLine($"Session ID: {sessionId}");
+        Console.WriteLine(replaceText);
+        return 0;
     }
 
     private static async Task<int> RunMcpLiveRecordDecisionAsync(string[] args)
