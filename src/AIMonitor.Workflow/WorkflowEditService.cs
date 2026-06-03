@@ -15,10 +15,12 @@ public sealed class WorkflowEditService
     };
 
     private readonly WorkflowEditPaths paths;
+    private readonly CandidateEditValidator editValidator;
 
     public WorkflowEditService(MonitorSettings settings)
     {
         paths = new WorkflowEditPaths(settings);
+        editValidator = new CandidateEditValidator(settings);
     }
 
     public EditSessionStatus Refresh(string watchedFilePath)
@@ -106,7 +108,11 @@ public sealed class WorkflowEditService
             LastCompareSnapshotPath = manifest?.LastCompareSnapshotPath ?? string.Empty,
             LastLedgerPath = manifest?.LastLedgerPath ?? string.Empty,
             LastStagedRecordId = manifest?.LastStagedRecordId ?? string.Empty,
-            LastStagedRecordPath = manifest?.LastStagedRecordPath ?? string.Empty
+            LastStagedRecordPath = manifest?.LastStagedRecordPath ?? string.Empty,
+            ManifestJson = manifest?.ManifestJson ?? string.Empty,
+            OperationCount = manifest?.OperationCount ?? 0,
+            SyntaxValidation = manifest?.LastSyntaxValidation,
+            OverlayValidation = manifest?.LastOverlayValidation
         };
 
         if (status.WatchedFileExists)
@@ -222,23 +228,14 @@ public sealed class WorkflowEditService
         return GetStatus(fullWatchedPath);
     }
 
-    public EditSessionStatus WriteWorkingCandidate(string watchedFilePath, string content)
+    public EditSessionStatus WriteWorkingCandidate(string watchedFilePath, string content, string? manifestJson = null)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
         using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
         EditSessionManifest manifest = LoadManifest(fullWatchedPath)
             ?? throw new InvalidOperationException("No edit session exists for this file. Run edit refresh first.");
         EnsureSessionCanEdit(manifest);
-
-        Directory.CreateDirectory(Path.GetDirectoryName(manifest.WorkingFilePath) ?? ".");
-        string existingText = File.Exists(manifest.WorkingFilePath)
-            ? File.ReadAllText(manifest.WorkingFilePath)
-            : string.Empty;
-        string lineEnding = string.IsNullOrEmpty(existingText)
-            ? DetectDominantLineEnding(content)
-            : DetectDominantLineEnding(existingText);
-        File.WriteAllText(manifest.WorkingFilePath, NormalizeLineEndingsForFile(content, lineEnding));
-        return GetStatus(fullWatchedPath);
+        return WriteCandidateContent(fullWatchedPath, manifest, content, manifestJson);
     }
 
     public ReplaceTextResult ReplaceText(
@@ -247,7 +244,8 @@ public sealed class WorkflowEditService
         string newText,
         int? expectedMatches = null,
         string? expectedWorkingHash = null,
-        int? occurrenceIndex = null)
+        int? occurrenceIndex = null,
+        string? manifestJson = null)
     {
         if (string.IsNullOrEmpty(oldText))
         {
@@ -296,7 +294,7 @@ public sealed class WorkflowEditService
         string updatedText = occurrenceIndex.HasValue
             ? ReplaceOccurrence(workingText, textToFind, normalizedNewText, occurrenceIndex.Value)
             : workingText.Replace(textToFind, normalizedNewText, StringComparison.Ordinal);
-        File.WriteAllText(manifest.WorkingFilePath, updatedText);
+        EditSessionStatus updatedStatus = WriteCandidateContent(fullWatchedPath, manifest, updatedText, manifestJson);
         return new ReplaceTextResult
         {
             WatchedFilePath = fullWatchedPath,
@@ -306,9 +304,15 @@ public sealed class WorkflowEditService
             NewWorkingHash = FileHash.Compute(manifest.WorkingFilePath),
             LineEnding = lineEnding == "\r\n" ? "CRLF" : "LF",
             ActualMatches = matchCount,
+            TotalMatchCount = matchCount,
+            ReplacementCount = occurrenceIndex.HasValue ? 1 : matchCount,
             ExpectedMatches = expectedMatches,
             Changed = true,
-            Message = "Working candidate text was replaced."
+            Message = "Working candidate text was replaced.",
+            OperationCount = updatedStatus.OperationCount,
+            ManifestJson = updatedStatus.ManifestJson,
+            SyntaxValidation = updatedStatus.SyntaxValidation,
+            OverlayValidation = updatedStatus.OverlayValidation
         };
     }
 
@@ -335,6 +339,7 @@ public sealed class WorkflowEditService
 
         ValidateWorkingHash(manifest.WorkingFilePath, expectedWorkingHash);
         string text = File.ReadAllText(manifest.WorkingFilePath);
+        int occurrenceCount = CountOccurrences(text, findText);
         int index = FindOccurrence(text, findText, occurrenceIndex);
         TextPosition start = GetPosition(text, index);
         TextPosition end = GetPosition(text, index + findText.Length);
@@ -343,6 +348,7 @@ public sealed class WorkflowEditService
             WatchedFilePath = fullWatchedPath,
             WorkingFilePath = manifest.WorkingFilePath,
             Text = findText,
+            OccurrenceCount = occurrenceCount,
             OccurrenceIndex = occurrenceIndex,
             StartLine = start.Line,
             StartColumn = start.Column,
@@ -361,7 +367,8 @@ public sealed class WorkflowEditService
         string newText,
         string? expectedWorkingHash = null,
         string? expectedOldTextHash = null,
-        string? expectedOldText = null)
+        string? expectedOldText = null,
+        string? manifestJson = null)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
         using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
@@ -395,13 +402,11 @@ public sealed class WorkflowEditService
         }
 
         string lineEnding = DetectDominantLineEnding(text);
-        File.WriteAllText(
-            manifest.WorkingFilePath,
-            text[..startIndex] + NormalizeLineEndingsForFile(newText, lineEnding) + text[endIndex..]);
-        return GetStatus(fullWatchedPath);
+        string updatedText = text[..startIndex] + NormalizeLineEndingsForFile(newText, lineEnding) + text[endIndex..];
+        return WriteCandidateContent(fullWatchedPath, manifest, updatedText, manifestJson);
     }
 
-    public EditSessionStatus SubmitFile(string watchedFilePath, string content)
+    public EditSessionStatus SubmitFile(string watchedFilePath, string content, string? manifestJson = null)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
         using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
@@ -449,8 +454,24 @@ public sealed class WorkflowEditService
         }
 
         EnsureSessionCanEdit(manifest);
-        Directory.CreateDirectory(Path.GetDirectoryName(manifest.WorkingFilePath) ?? ".");
+        return WriteCandidateContent(fullWatchedPath, manifest, content, manifestJson);
+    }
 
+    private EditSessionStatus WriteCandidateContent(
+        string fullWatchedPath,
+        EditSessionManifest manifest,
+        string content,
+        string? manifestJson)
+    {
+        EditSyntaxValidationResult syntaxValidation = editValidator.ValidateSyntaxIfCSharp(fullWatchedPath, content);
+        if (syntaxValidation.HasErrors)
+        {
+            EditSyntaxDiagnostic first = syntaxValidation.Diagnostics[0];
+            throw new InvalidOperationException(
+                $"C# syntax validation failed for {manifest.RelativePath} at line {first.Line}, column {first.Column}: {first.Id} {first.Message}");
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(manifest.WorkingFilePath) ?? ".");
         string existingText = File.Exists(manifest.WorkingFilePath)
             ? File.ReadAllText(manifest.WorkingFilePath)
             : string.Empty;
@@ -458,6 +479,15 @@ public sealed class WorkflowEditService
             ? DetectDominantLineEnding(content)
             : DetectDominantLineEnding(existingText);
         File.WriteAllText(manifest.WorkingFilePath, NormalizeLineEndingsForFile(content, lineEnding));
+
+        EditOverlayValidationResult overlayValidation = editValidator.ValidateCandidateOverlayCompilation(
+            manifest,
+            manifest.WorkingFilePath);
+        manifest.OperationCount++;
+        manifest.ManifestJson = manifestJson ?? string.Empty;
+        manifest.LastSyntaxValidation = syntaxValidation;
+        manifest.LastOverlayValidation = overlayValidation;
+        SaveManifest(fullWatchedPath, manifest);
         return GetStatus(fullWatchedPath);
     }
 

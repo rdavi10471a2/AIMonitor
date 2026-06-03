@@ -9,7 +9,11 @@ public sealed record RoslynEditResult(
     string RelativePath,
     string Status,
     string Message,
-    string WorkingHash);
+    string WorkingHash,
+    int OperationCount = 0,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ManifestJson = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] EditSyntaxValidationResult? SyntaxValidation = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] EditOverlayValidationResult? OverlayValidation = null);
 
 public sealed record RoslynSymbolSelector(
     string? ContainingNamespace = null,

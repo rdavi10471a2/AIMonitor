@@ -119,7 +119,7 @@ public sealed class RoslynEditService
             target.ToFullString());
     }
 
-    public RoslynEditResult SubmitSymbol(string watchedFilePath, string symbolSelectorJson, string code)
+    public RoslynEditResult SubmitSymbol(string watchedFilePath, string symbolSelectorJson, string code, string? manifestJson = null)
     {
         EditSessionStatus status = EnsureSession(watchedFilePath);
         CompilationUnitSyntax root = ParseCompilationUnit(status.WorkingFilePath, status.RelativePath);
@@ -129,10 +129,10 @@ public sealed class RoslynEditService
             .WithLeadingTrivia(target.GetLeadingTrivia())
             .WithTrailingTrivia(target.GetTrailingTrivia())
             .WithAdditionalAnnotations(FormatAnnotation);
-        return WriteRoot("submit_symbol", status, root.ReplaceNode(target, replacement));
+        return WriteRoot("submit_symbol", status, root.ReplaceNode(target, replacement), manifestJson);
     }
 
-    public RoslynEditResult AddUsing(string watchedFilePath, string namespaceName)
+    public RoslynEditResult AddUsing(string watchedFilePath, string namespaceName, string? manifestJson = null)
     {
         EditSessionStatus status = EnsureSession(watchedFilePath);
         CompilationUnitSyntax root = ParseCompilationUnit(status.WorkingFilePath, status.RelativePath);
@@ -148,10 +148,10 @@ public sealed class RoslynEditService
             .Add(newUsing)
             .OrderBy(usingDirective => usingDirective.Name?.ToString(), StringComparer.Ordinal)
             .ToArray();
-        return WriteRoot("add_using", status, root.WithUsings(SyntaxFactory.List(usings)));
+        return WriteRoot("add_using", status, root.WithUsings(SyntaxFactory.List(usings)), manifestJson);
     }
 
-    public RoslynEditResult RemoveUsing(string watchedFilePath, string namespaceName)
+    public RoslynEditResult RemoveUsing(string watchedFilePath, string namespaceName, string? manifestJson = null)
     {
         EditSessionStatus status = EnsureSession(watchedFilePath);
         CompilationUnitSyntax root = ParseCompilationUnit(status.WorkingFilePath, status.RelativePath);
@@ -159,10 +159,10 @@ public sealed class RoslynEditService
             ?? throw new InvalidOperationException($"Using '{namespaceName}' was not found in {status.RelativePath}.");
         CompilationUnitSyntax newRoot = root.RemoveNode(target, SyntaxRemoveOptions.KeepNoTrivia)
             ?? throw new InvalidOperationException($"Using '{namespaceName}' could not be removed from {status.RelativePath}.");
-        return WriteRoot("remove_using", status, newRoot);
+        return WriteRoot("remove_using", status, newRoot, manifestJson);
     }
 
-    public RoslynEditResult SetTypePartial(string watchedFilePath, string containingType, bool isPartial)
+    public RoslynEditResult SetTypePartial(string watchedFilePath, string containingType, bool isPartial, string? manifestJson = null)
     {
         EditSessionStatus status = EnsureSession(watchedFilePath);
         CompilationUnitSyntax root = ParseCompilationUnit(status.WorkingFilePath, status.RelativePath);
@@ -170,16 +170,16 @@ public sealed class RoslynEditService
         bool currentlyPartial = type.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.PartialKeyword));
         if (currentlyPartial == isPartial)
         {
-            return WriteRoot("set_type_partial", status, root);
+            return WriteRoot("set_type_partial", status, root, manifestJson);
         }
 
         TypeDeclarationSyntax newType = isPartial
             ? type.WithModifiers(type.Modifiers.Add(SyntaxFactory.Token(SyntaxKind.PartialKeyword).WithTrailingTrivia(SyntaxFactory.Space)))
             : type.WithModifiers(SyntaxFactory.TokenList(type.Modifiers.Where(modifier => !modifier.IsKind(SyntaxKind.PartialKeyword))));
-        return WriteRoot("set_type_partial", status, root.ReplaceNode(type, newType.WithAdditionalAnnotations(FormatAnnotation)));
+        return WriteRoot("set_type_partial", status, root.ReplaceNode(type, newType.WithAdditionalAnnotations(FormatAnnotation)), manifestJson);
     }
 
-    public RoslynEditResult AddSymbol(string watchedFilePath, string containingType, string symbolType, string code, string? afterSymbol = null)
+    public RoslynEditResult AddSymbol(string watchedFilePath, string containingType, string symbolType, string code, string? afterSymbol = null, string? manifestJson = null)
     {
         EditSessionStatus status = EnsureSession(watchedFilePath);
         CompilationUnitSyntax root = ParseCompilationUnit(status.WorkingFilePath, status.RelativePath);
@@ -205,30 +205,30 @@ public sealed class RoslynEditService
 
         newMember = ApplyInsertionTrivia(newMember, type, insertIndex).WithAdditionalAnnotations(FormatAnnotation);
         TypeDeclarationSyntax newType = type.WithMembers(members.Insert(insertIndex, newMember));
-        return WriteRoot("add_symbol", status, root.ReplaceNode(type, newType));
+        return WriteRoot("add_symbol", status, root.ReplaceNode(type, newType), manifestJson);
     }
 
-    public RoslynEditResult AddField(string watchedFilePath, string containingType, string declaration, string? afterSymbol = null)
+    public RoslynEditResult AddField(string watchedFilePath, string containingType, string declaration, string? afterSymbol = null, string? manifestJson = null)
     {
-        return AddSymbol(watchedFilePath, containingType, "field", declaration, afterSymbol);
+        return AddSymbol(watchedFilePath, containingType, "field", declaration, afterSymbol, manifestJson);
     }
 
-    public RoslynEditResult AddProperty(string watchedFilePath, string containingType, string declaration, string? afterSymbol = null)
+    public RoslynEditResult AddProperty(string watchedFilePath, string containingType, string declaration, string? afterSymbol = null, string? manifestJson = null)
     {
-        return AddSymbol(watchedFilePath, containingType, "property", declaration, afterSymbol);
+        return AddSymbol(watchedFilePath, containingType, "property", declaration, afterSymbol, manifestJson);
     }
 
-    public RoslynEditResult AddMethod(string watchedFilePath, string containingType, string declaration, string? afterSymbol = null)
+    public RoslynEditResult AddMethod(string watchedFilePath, string containingType, string declaration, string? afterSymbol = null, string? manifestJson = null)
     {
-        return AddSymbol(watchedFilePath, containingType, "method", declaration, afterSymbol);
+        return AddSymbol(watchedFilePath, containingType, "method", declaration, afterSymbol, manifestJson);
     }
 
-    public RoslynEditResult AddConstructor(string watchedFilePath, string containingType, string declaration, string? afterSymbol = null)
+    public RoslynEditResult AddConstructor(string watchedFilePath, string containingType, string declaration, string? afterSymbol = null, string? manifestJson = null)
     {
-        return AddSymbol(watchedFilePath, containingType, "constructor", declaration, afterSymbol);
+        return AddSymbol(watchedFilePath, containingType, "constructor", declaration, afterSymbol, manifestJson);
     }
 
-    public RoslynEditResult AddNestedType(string watchedFilePath, string containingType, string declaration, string? afterSymbol = null)
+    public RoslynEditResult AddNestedType(string watchedFilePath, string containingType, string declaration, string? afterSymbol = null, string? manifestJson = null)
     {
         MemberDeclarationSyntax member = ParseMemberDeclaration(declaration, "new nested type");
         string kind = SymbolKind(member);
@@ -237,10 +237,10 @@ public sealed class RoslynEditService
             throw new InvalidOperationException($"Nested type declaration must be class, struct, interface, record, or enum. Actual kind: '{kind}'.");
         }
 
-        return AddSymbol(watchedFilePath, containingType, kind, declaration, afterSymbol);
+        return AddSymbol(watchedFilePath, containingType, kind, declaration, afterSymbol, manifestJson);
     }
 
-    public RoslynEditResult RemoveSymbol(string watchedFilePath, string symbolSelectorJson)
+    public RoslynEditResult RemoveSymbol(string watchedFilePath, string symbolSelectorJson, string? manifestJson = null)
     {
         EditSessionStatus status = EnsureSession(watchedFilePath);
         CompilationUnitSyntax root = ParseCompilationUnit(status.WorkingFilePath, status.RelativePath);
@@ -248,7 +248,7 @@ public sealed class RoslynEditService
         MemberDeclarationSyntax target = ResolveSingleMember(root, selector, status.RelativePath);
         CompilationUnitSyntax newRoot = root.RemoveNode(target, SyntaxRemoveOptions.KeepNoTrivia)
             ?? throw new InvalidOperationException($"Symbol '{selector.Name}' could not be removed from {status.RelativePath}.");
-        return WriteRoot("remove_symbol", status, newRoot);
+        return WriteRoot("remove_symbol", status, newRoot, manifestJson);
     }
 
     private IEnumerable<string> ResolveSourceMapFiles(string? requestedPath, string scope, string? namespaceName)
@@ -503,10 +503,10 @@ public sealed class RoslynEditService
         return workflowService.EnsureEditableSession(fullPath);
     }
 
-    private RoslynEditResult WriteRoot(string operation, EditSessionStatus status, CompilationUnitSyntax root)
+    private RoslynEditResult WriteRoot(string operation, EditSessionStatus status, CompilationUnitSyntax root, string? manifestJson)
     {
         CompilationUnitSyntax formatted = FormatAnnotatedNodes(root);
-        EditSessionStatus updatedStatus = workflowService.WriteWorkingCandidate(status.WatchedFilePath, formatted.ToFullString());
+        EditSessionStatus updatedStatus = workflowService.WriteWorkingCandidate(status.WatchedFilePath, formatted.ToFullString(), manifestJson);
         return new RoslynEditResult(
             operation,
             updatedStatus.WatchedFilePath,
@@ -514,7 +514,11 @@ public sealed class RoslynEditService
             updatedStatus.RelativePath,
             "updated",
             $"{operation} updated the monitor-owned Working candidate.",
-            FileHash.Compute(updatedStatus.WorkingFilePath));
+            FileHash.Compute(updatedStatus.WorkingFilePath),
+            updatedStatus.OperationCount,
+            string.IsNullOrWhiteSpace(updatedStatus.ManifestJson) ? null : updatedStatus.ManifestJson,
+            updatedStatus.SyntaxValidation,
+            updatedStatus.OverlayValidation);
     }
 
     private static CompilationUnitSyntax ParseCompilationUnit(string filePath, string relativePath)

@@ -132,9 +132,9 @@ The source finding also contains a larger machine-generated appendix. That appen
 
 Summary of the appendix categories:
 
-- Missing MCP-scope behavior: per-edit overlay feedback, superseded-record lifecycle, source-map narrowing/next-call hints, AI-attribute filtering, and review-chain blocking across multi-file sessions.
+- Missing MCP-scope behavior: review-chain blocking across multi-file sessions.
 - Degraded high-impact behavior: self-check guardrails, solution-index status richness, relationship/caller/reference tools, source-map budget/mode behavior, Roslyn outline, staged-record/session behavior, monitor-run lookup, and staging guide richness.
-- Degraded medium-impact behavior: status DTO counts, refresh timing/counts, query envelopes/clamps, richer symbol/reference metadata, source-map file metadata, text/span edit result richness, structured diagnostics, manifest/operation-count persistence, file-fetch/session tracking, launch/stage response states, per-file index refresh details, and tool-manifest content.
+- Degraded medium-impact behavior: refresh timing/counts, file-fetch/session tracking, launch/stage response states, and per-file index refresh details.
 - Degraded low-impact behavior: self-check metadata, monitor-status implementation-path fields, index-tree status details, source-map symbol metadata, parameter descriptions, session access bookkeeping, ledger/list shapes, smoke-test catalog richness, and future multi-project watched-project enumeration.
 - Renamed/no-loss behavior: `new_file`, explicit staged-record/status tools, and the MCP stdio bridge rename are architectural changes rather than losses.
 
@@ -152,7 +152,7 @@ Every appendix item must eventually become one of:
 3. Source-map density, budget, and generated-noise filtering: CMB-PARITY-008, 009.
 4. Roslyn outline and MCP guidance docs: CMB-PARITY-010, 012.
 5. Self-check truthfulness: CMB-PARITY-004.
-6. Optional early feedback: per-edit overlay compile if the operator later wants faster iteration before the pre-merge build gate.
+6. Per-edit feedback: restored as shared Workflow candidate-write validation with MCP-visible syntax/overlay diagnostics and operation metadata.
 
 ## Dataflow
 

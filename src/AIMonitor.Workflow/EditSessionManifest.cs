@@ -33,4 +33,12 @@ public sealed class EditSessionManifest
     public string LastStagedRecordId { get; set; } = string.Empty;
 
     public string LastStagedRecordPath { get; set; } = string.Empty;
+
+    public string ManifestJson { get; set; } = string.Empty;
+
+    public int OperationCount { get; set; }
+
+    public EditSyntaxValidationResult? LastSyntaxValidation { get; set; }
+
+    public EditOverlayValidationResult? LastOverlayValidation { get; set; }
 }

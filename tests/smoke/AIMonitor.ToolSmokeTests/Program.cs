@@ -59,6 +59,16 @@ internal static class Program
             return await RunMcpLiveHumanExistingWinMergeAsync();
         }
 
+        if (args.Contains("--mcp-live-human-member-pairs-winmerge", StringComparer.OrdinalIgnoreCase))
+        {
+            return await RunMcpLiveHumanMemberPairsWinMergeAsync();
+        }
+
+        if (args.Contains("--mcp-live-human-member-pairs-remove-winmerge", StringComparer.OrdinalIgnoreCase))
+        {
+            return await RunMcpLiveHumanMemberPairsRemoveWinMergeAsync(args);
+        }
+
         if (args.Contains("--mcp-live-premerge-failure", StringComparer.OrdinalIgnoreCase))
         {
             return await RunMcpLivePremergeFailureAsync();
@@ -85,6 +95,8 @@ internal static class Program
         Console.WriteLine("  --mcp-live-multi-file-session Run a two-file staged session through the stdio bridge, then reject both files.");
         Console.WriteLine("  --mcp-live-human-winmerge Launch real WinMerge through the live MCP bridge and stop for human save/reject.");
         Console.WriteLine("  --mcp-live-human-existing-winmerge Launch real WinMerge for an existing-file edit through the live MCP bridge.");
+        Console.WriteLine("  --mcp-live-human-member-pairs-winmerge Create an AppConfig class with paired member categories, stage, and launch WinMerge.");
+        Console.WriteLine("  --mcp-live-human-member-pairs-remove-winmerge --relative-path <path> --class-name <name> Remove _removed members, stage, and launch WinMerge.");
         Console.WriteLine("  --mcp-live-premerge-failure Stage an invalid existing-file candidate through MCP and verify validation blocks WinMerge.");
         Console.WriteLine("  --mcp-live-record-decision --staged-record-id <id> --decision accepted|rejected [--expected-staged-hash <hash>] Record the human WinMerge decision.");
         Console.WriteLine("  --visible-test-suite      Run live MCP calls, then dotnet test, and emit test result telemetry to the WinForms monitor log.");
@@ -837,6 +849,320 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine(launchText);
         return launch.IsError == true ? 1 : 0;
+    }
+
+    private static async Task<int> RunMcpLiveHumanMemberPairsWinMergeAsync()
+    {
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+        string marker = DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssfff");
+        string className = $"AIMonitorMemberPairsManual_{marker}";
+        string relativePath = $"AppConfig/{className}.cs";
+        string content = $$"""
+            using System;
+
+            namespace SchemaStudioWebViewer.Configuration
+            {
+                public partial class {{className}}
+                {
+                }
+            }
+            """;
+
+        await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
+        CallToolResult session = await CallAndPrintAsync(
+            client,
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["title"] = "human member-pairs create smoke"
+            });
+        string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
+
+        await CallAndPrintAsync(
+            client,
+            "new_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = relativePath,
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "submit_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["content"] = content,
+                ["sessionId"] = sessionId,
+                ["manifestJson"] = """{"intent":"manual-member-pairs-create"}"""
+            });
+
+        await AddMemberPairAsync(client, sessionId, relativePath, className);
+        await StageLaunchAndPrintDecisionAsync(
+            client,
+            sessionId,
+            relativePath,
+            "human member-pairs create smoke",
+            $"dotnet .\\tests\\smoke\\AIMonitor.ToolSmokeTests\\bin\\Debug\\net10.0\\AIMonitor.ToolSmokeTests.dll --mcp-live-human-member-pairs-remove-winmerge --relative-path {relativePath} --class-name {className}");
+        return 0;
+    }
+
+    private static async Task<int> RunMcpLiveHumanMemberPairsRemoveWinMergeAsync(string[] args)
+    {
+        string relativePath = GetRequiredOption(args, "--relative-path");
+        string className = GetRequiredOption(args, "--class-name");
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        string settingsPath = Path.Combine(repositoryRoot, "config", "appsettings.json");
+
+        await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
+        CallToolResult session = await CallAndPrintAsync(
+            client,
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["title"] = "human member-pairs remove smoke"
+            });
+        string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
+
+        await CallAndPrintAsync(
+            client,
+            "refresh_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = relativePath,
+                ["sessionId"] = sessionId
+            });
+
+        await RemoveMemberPairAsync(client, sessionId, relativePath, className);
+        await StageLaunchAndPrintDecisionAsync(
+            client,
+            sessionId,
+            relativePath,
+            "human member-pairs remove smoke",
+            null);
+        return 0;
+    }
+
+    private static async Task AddMemberPairAsync(McpClient client, string sessionId, string relativePath, string className)
+    {
+        await CallAndPrintAsync(
+            client,
+            "add_field",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["containingType"] = className,
+                ["declaration"] = "private readonly string NormalField = \"normal\";",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_field",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["containingType"] = className,
+                ["declaration"] = "private readonly string RemovedField_removed = \"remove\";",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_property",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["containingType"] = className,
+                ["declaration"] = "public string NormalProperty { get; set; } = \"normal\";",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_property",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["containingType"] = className,
+                ["declaration"] = "public string RemovedProperty_removed { get; set; } = \"remove\";",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_method",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["containingType"] = className,
+                ["declaration"] = "public string NormalMethod() => NormalProperty;",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_method",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["containingType"] = className,
+                ["declaration"] = "public string RemovedMethod_removed() => RemovedProperty_removed;",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_constructor",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["containingType"] = className,
+                ["declaration"] = $"public {className}(string normalValue) {{ NormalProperty = normalValue; }}",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_constructor",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["containingType"] = className,
+                ["declaration"] = $"public {className}(int removedConstructor_removed) {{ RemovedProperty_removed = removedConstructor_removed.ToString(); }}",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_symbol",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["containingType"] = className,
+                ["symbolType"] = "event",
+                ["code"] = "public event EventHandler? NormalEvent;",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_symbol",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["containingType"] = className,
+                ["symbolType"] = "event",
+                ["code"] = "public event EventHandler? RemovedEvent_removed;",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_nested_type",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["containingType"] = className,
+                ["declaration"] = "public sealed class NormalNested { }",
+                ["sessionId"] = sessionId
+            });
+        await CallAndPrintAsync(
+            client,
+            "add_nested_type",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["containingType"] = className,
+                ["declaration"] = "public sealed class RemovedNested_removed { }",
+                ["sessionId"] = sessionId
+            });
+    }
+
+    private static async Task RemoveMemberPairAsync(McpClient client, string sessionId, string relativePath, string className)
+    {
+        await RemoveSymbolAsync(client, sessionId, relativePath, className, "field", "RemovedField_removed");
+        await RemoveSymbolAsync(client, sessionId, relativePath, className, "property", "RemovedProperty_removed");
+        await RemoveSymbolAsync(client, sessionId, relativePath, className, "method", "RemovedMethod_removed");
+        await RemoveSymbolAsync(client, sessionId, relativePath, className, "event", "RemovedEvent_removed");
+        await RemoveSymbolAsync(client, sessionId, relativePath, className, "class", "RemovedNested_removed");
+        await CallAndPrintAsync(
+            client,
+            "remove_symbol",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["symbolSelectorJson"] = JsonSerializer.Serialize(new
+                {
+                    containingType = className,
+                    memberKind = "constructor",
+                    name = className,
+                    parameterTypes = new[] { "int" }
+                }),
+                ["sessionId"] = sessionId
+            });
+    }
+
+    private static async Task RemoveSymbolAsync(
+        McpClient client,
+        string sessionId,
+        string relativePath,
+        string containingType,
+        string memberKind,
+        string name)
+    {
+        await CallAndPrintAsync(
+            client,
+            "remove_symbol",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["symbolSelectorJson"] = JsonSerializer.Serialize(new
+                {
+                    containingType,
+                    memberKind,
+                    name
+                }),
+                ["sessionId"] = sessionId
+            });
+    }
+
+    private static async Task StageLaunchAndPrintDecisionAsync(
+        McpClient client,
+        string sessionId,
+        string relativePath,
+        string ledgerSummary,
+        string? nextCommand)
+    {
+        CallToolResult stage = await CallAndPrintAsync(
+            client,
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["ledgerSummary"] = ledgerSummary,
+                ["sessionId"] = sessionId
+            });
+        string stageJson = ExtractToolText(stage);
+        string stagedRecordId = ExtractJsonString(stageJson, "stagedRecordId");
+        string stagedHash = ExtractJsonString(stageJson, "stagedHash");
+
+        CallToolResult launch = await CallAndPrintAsync(
+            client,
+            "launch_staged_diff",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = stagedRecordId
+            });
+
+        Console.WriteLine();
+        Console.WriteLine($"{ledgerSummary} launched.");
+        Console.WriteLine($"Session ID: {sessionId}");
+        Console.WriteLine($"Relative path: {relativePath}");
+        Console.WriteLine($"Staged record ID: {stagedRecordId}");
+        Console.WriteLine($"Expected staged hash: {stagedHash}");
+        Console.WriteLine("After reviewing/saving in WinMerge, record the result with:");
+        Console.WriteLine($"dotnet .\\tests\\smoke\\AIMonitor.ToolSmokeTests\\bin\\Debug\\net10.0\\AIMonitor.ToolSmokeTests.dll --mcp-live-record-decision --staged-record-id {stagedRecordId} --decision accepted --expected-staged-hash {stagedHash}");
+        Console.WriteLine($"dotnet .\\tests\\smoke\\AIMonitor.ToolSmokeTests\\bin\\Debug\\net10.0\\AIMonitor.ToolSmokeTests.dll --mcp-live-record-decision --staged-record-id {stagedRecordId} --decision rejected");
+        if (!string.IsNullOrWhiteSpace(nextCommand))
+        {
+            Console.WriteLine("After accepting, run the next step with:");
+            Console.WriteLine(nextCommand);
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(ExtractToolText(launch));
     }
 
     private static async Task<int> RunMcpLivePremergeFailureAsync()

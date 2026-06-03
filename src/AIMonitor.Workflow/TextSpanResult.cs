@@ -8,6 +8,8 @@ public sealed class TextSpanResult
 
     public string Text { get; set; } = string.Empty;
 
+    public int OccurrenceCount { get; set; }
+
     public int OccurrenceIndex { get; set; }
 
     public int StartLine { get; set; }

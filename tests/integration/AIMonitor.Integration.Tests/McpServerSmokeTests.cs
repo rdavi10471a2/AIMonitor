@@ -664,6 +664,11 @@ public sealed class McpServerSmokeTests
         string replaceJson = ExtractToolText(replace);
         Assert.Equal("CRLF", ExtractJsonString(replaceJson, "lineEnding"));
         Assert.Equal(1, ExtractJsonInt(replaceJson, "actualMatches"));
+        Assert.Equal(1, ExtractJsonInt(replaceJson, "totalMatchCount"));
+        Assert.Equal(1, ExtractJsonInt(replaceJson, "replacementCount"));
+        Assert.Equal(1, ExtractJsonInt(replaceJson, "operationCount"));
+        Assert.Contains("\"syntaxValidation\"", replaceJson, StringComparison.Ordinal);
+        Assert.Contains("\"overlayValidation\"", replaceJson, StringComparison.Ordinal);
 
         string workingText = await File.ReadAllTextAsync(workingFilePath);
         Assert.Contains("public static int Count => 1;", workingText, StringComparison.Ordinal);
@@ -731,9 +736,15 @@ public sealed class McpServerSmokeTests
             new Dictionary<string, object?>
             {
                 ["path"] = fixture.ProgramFilePath,
-                ["content"] = "namespace Example\n{\n    internal static class Program\n    {\n        public static string Value => \"submitted\";\n    }\n}\n"
+                ["content"] = "namespace Example\n{\n    internal static class Program\n    {\n        public static string Value => \"submitted\";\n    }\n}\n",
+                ["manifestJson"] = """{"intent":"submit"}"""
             });
         Assert.False(submit.IsError == true);
+        string submitJson = ExtractToolText(submit);
+        Assert.Equal(1, ExtractJsonInt(submitJson, "operationCount"));
+        Assert.Equal("""{"intent":"submit"}""", ExtractJsonString(submitJson, "manifestJson"));
+        Assert.Contains("\"syntaxValidation\"", submitJson, StringComparison.Ordinal);
+        Assert.Contains("\"overlayValidation\"", submitJson, StringComparison.Ordinal);
 
         string workingText = await File.ReadAllTextAsync(workingFilePath);
         Assert.Contains("submitted", workingText, StringComparison.Ordinal);
@@ -767,6 +778,7 @@ public sealed class McpServerSmokeTests
         Assert.False(span.IsError == true);
         string spanJson = ExtractToolText(span);
         string oldTextHash = ExtractJsonString(spanJson, "textHash");
+        Assert.Equal(1, ExtractJsonInt(spanJson, "occurrenceCount"));
 
         CallToolResult replace = await client.CallToolAsync(
             "replace_span_in_file",
@@ -1279,9 +1291,15 @@ public sealed class McpServerSmokeTests
             {
                 ["path"] = fixture.ProgramFilePath,
                 ["symbolSelectorJson"] = getValueSelector,
-                ["code"] = "public static string GetValue() => \"new\";"
+                ["code"] = "public static string GetValue() => \"new\";",
+                ["manifestJson"] = """{"intent":"typed-submit"}"""
             });
         Assert.False(replacement.IsError == true);
+        string replacementJson = ExtractToolText(replacement);
+        Assert.Equal(1, ExtractJsonInt(replacementJson, "operationCount"));
+        Assert.Equal("""{"intent":"typed-submit"}""", ExtractJsonString(replacementJson, "manifestJson"));
+        Assert.Contains("\"syntaxValidation\"", replacementJson, StringComparison.Ordinal);
+        Assert.Contains("\"overlayValidation\"", replacementJson, StringComparison.Ordinal);
 
         CallToolResult addProperty = await client.CallToolAsync(
             "add_property",

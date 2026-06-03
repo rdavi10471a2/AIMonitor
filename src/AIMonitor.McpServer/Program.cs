@@ -585,7 +585,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
-        EditSessionStatus status = workflowService.SubmitFile(fullPath, content);
+        EditSessionStatus status = workflowService.SubmitFile(fullPath, content, manifestJson);
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
             RecordMonitorSessionEvent(sessionId, "submit-file", fullPath, manifestJson);
@@ -608,7 +608,6 @@ public sealed class AIMonitorTools
         [Description("Optional JSON manifest expressing model intent.")] string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = manifestJson;
         if (!string.IsNullOrWhiteSpace(expectedOldTextHash)
             && !ComputeHash(oldText).Equals(expectedOldTextHash, StringComparison.OrdinalIgnoreCase))
         {
@@ -625,7 +624,8 @@ public sealed class AIMonitorTools
             newText,
             expectedMatchCount,
             expectedFileHash,
-            occurrenceIndex >= 0 ? occurrenceIndex : null);
+            occurrenceIndex >= 0 ? occurrenceIndex : null,
+            manifestJson);
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
             RecordMonitorSessionEvent(sessionId, "replace-text-in-file", result.WatchedFilePath, JsonSerializer.Serialize(result, JsonOptions));
@@ -666,7 +666,6 @@ public sealed class AIMonitorTools
         [Description("Optional JSON manifest expressing model intent.")] string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = manifestJson;
         string fullPath = ResolveWatchedPath(path);
         EnsureSession(fullPath);
         EditSessionStatus status = workflowService.ReplaceSpan(
@@ -678,7 +677,8 @@ public sealed class AIMonitorTools
             newText,
             expectedFileHash,
             expectedOldTextHash,
-            expectedOldText);
+            expectedOldText,
+            manifestJson);
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
             RecordMonitorSessionEvent(sessionId, "replace-span-in-file", status.WatchedFilePath, null);
@@ -697,7 +697,6 @@ public sealed class AIMonitorTools
         [Description("Return the full staged record inline for debugging. Defaults to compact response.")] bool verbose = false)
     {
         runtimeState.Touch();
-        _ = manifestJson;
         StagedEditRecord record = workflowService.Stage(ResolveWatchedPath(path), ledgerSummary, sessionId);
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
@@ -721,8 +720,7 @@ public sealed class AIMonitorTools
     public RoslynEditResult SubmitSymbol(string path, string symbolSelectorJson, string code, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = manifestJson;
-        RoslynEditResult result = roslynEditService.SubmitSymbol(ResolveWatchedPath(path), symbolSelectorJson, code);
+        RoslynEditResult result = roslynEditService.SubmitSymbol(ResolveWatchedPath(path), symbolSelectorJson, code, manifestJson);
         RecordRoslynSessionEvent(sessionId, "submit-symbol", result);
         return result;
     }
@@ -732,8 +730,7 @@ public sealed class AIMonitorTools
     public RoslynEditResult AddUsing(string path, string @namespace, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = manifestJson;
-        RoslynEditResult result = roslynEditService.AddUsing(ResolveWatchedPath(path), @namespace);
+        RoslynEditResult result = roslynEditService.AddUsing(ResolveWatchedPath(path), @namespace, manifestJson);
         RecordRoslynSessionEvent(sessionId, "add-using", result);
         return result;
     }
@@ -743,8 +740,7 @@ public sealed class AIMonitorTools
     public RoslynEditResult RemoveUsing(string path, string @namespace, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = manifestJson;
-        RoslynEditResult result = roslynEditService.RemoveUsing(ResolveWatchedPath(path), @namespace);
+        RoslynEditResult result = roslynEditService.RemoveUsing(ResolveWatchedPath(path), @namespace, manifestJson);
         RecordRoslynSessionEvent(sessionId, "remove-using", result);
         return result;
     }
@@ -754,8 +750,7 @@ public sealed class AIMonitorTools
     public RoslynEditResult SetTypePartial(string path, string containingType, bool isPartial, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = manifestJson;
-        RoslynEditResult result = roslynEditService.SetTypePartial(ResolveWatchedPath(path), containingType, isPartial);
+        RoslynEditResult result = roslynEditService.SetTypePartial(ResolveWatchedPath(path), containingType, isPartial, manifestJson);
         RecordRoslynSessionEvent(sessionId, "set-type-partial", result);
         return result;
     }
@@ -765,8 +760,7 @@ public sealed class AIMonitorTools
     public RoslynEditResult AddSymbol(string path, string containingType, string symbolType, string code, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = manifestJson;
-        RoslynEditResult result = roslynEditService.AddSymbol(ResolveWatchedPath(path), containingType, symbolType, code, afterSymbol);
+        RoslynEditResult result = roslynEditService.AddSymbol(ResolveWatchedPath(path), containingType, symbolType, code, afterSymbol, manifestJson);
         RecordRoslynSessionEvent(sessionId, "add-symbol", result);
         return result;
     }
@@ -776,8 +770,7 @@ public sealed class AIMonitorTools
     public RoslynEditResult AddField(string path, string containingType, string declaration, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = manifestJson;
-        RoslynEditResult result = roslynEditService.AddField(ResolveWatchedPath(path), containingType, declaration, afterSymbol);
+        RoslynEditResult result = roslynEditService.AddField(ResolveWatchedPath(path), containingType, declaration, afterSymbol, manifestJson);
         RecordRoslynSessionEvent(sessionId, "add-field", result);
         return result;
     }
@@ -787,8 +780,7 @@ public sealed class AIMonitorTools
     public RoslynEditResult AddProperty(string path, string containingType, string declaration, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = manifestJson;
-        RoslynEditResult result = roslynEditService.AddProperty(ResolveWatchedPath(path), containingType, declaration, afterSymbol);
+        RoslynEditResult result = roslynEditService.AddProperty(ResolveWatchedPath(path), containingType, declaration, afterSymbol, manifestJson);
         RecordRoslynSessionEvent(sessionId, "add-property", result);
         return result;
     }
@@ -798,8 +790,7 @@ public sealed class AIMonitorTools
     public RoslynEditResult AddMethod(string path, string containingType, string declaration, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = manifestJson;
-        RoslynEditResult result = roslynEditService.AddMethod(ResolveWatchedPath(path), containingType, declaration, afterSymbol);
+        RoslynEditResult result = roslynEditService.AddMethod(ResolveWatchedPath(path), containingType, declaration, afterSymbol, manifestJson);
         RecordRoslynSessionEvent(sessionId, "add-method", result);
         return result;
     }
@@ -809,8 +800,7 @@ public sealed class AIMonitorTools
     public RoslynEditResult AddConstructor(string path, string containingType, string declaration, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = manifestJson;
-        RoslynEditResult result = roslynEditService.AddConstructor(ResolveWatchedPath(path), containingType, declaration, afterSymbol);
+        RoslynEditResult result = roslynEditService.AddConstructor(ResolveWatchedPath(path), containingType, declaration, afterSymbol, manifestJson);
         RecordRoslynSessionEvent(sessionId, "add-constructor", result);
         return result;
     }
@@ -820,8 +810,7 @@ public sealed class AIMonitorTools
     public RoslynEditResult AddNestedType(string path, string containingType, string declaration, string? afterSymbol = null, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = manifestJson;
-        RoslynEditResult result = roslynEditService.AddNestedType(ResolveWatchedPath(path), containingType, declaration, afterSymbol);
+        RoslynEditResult result = roslynEditService.AddNestedType(ResolveWatchedPath(path), containingType, declaration, afterSymbol, manifestJson);
         RecordRoslynSessionEvent(sessionId, "add-nested-type", result);
         return result;
     }
@@ -831,8 +820,7 @@ public sealed class AIMonitorTools
     public RoslynEditResult RemoveSymbol(string path, string symbolSelectorJson, string? sessionId = null, string? manifestJson = null)
     {
         runtimeState.Touch();
-        _ = manifestJson;
-        RoslynEditResult result = roslynEditService.RemoveSymbol(ResolveWatchedPath(path), symbolSelectorJson);
+        RoslynEditResult result = roslynEditService.RemoveSymbol(ResolveWatchedPath(path), symbolSelectorJson, manifestJson);
         RecordRoslynSessionEvent(sessionId, "remove-symbol", result);
         return result;
     }

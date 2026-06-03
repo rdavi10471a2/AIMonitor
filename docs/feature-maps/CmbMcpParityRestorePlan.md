@@ -448,6 +448,12 @@ Tests:
 - Text-span test proving occurrence count is returned.
 - Manifest/session test proving edit calls do not discard exposed metadata.
 
+Progress:
+
+- 2026-06-02: Phase 6 shared Workflow surface restored for candidate writes. `submit_file`, `replace_text_in_file`, `replace_span_in_file`, and Roslyn typed edits now route through shared candidate-write validation. C# syntax errors block the Working-candidate write with structured line/column diagnostics; non-C# text assets skip C# validation. A lightweight Roslyn overlay compilation runs after successful C# candidate writes and reports diagnostics for overlaid Working files without replacing the existing full pre-merge build gate.
+- 2026-06-02: Edit result shapes now expose operation count, manifest JSON threading, syntax validation, overlay validation, total match counts, replacement counts, and text-span occurrence counts. MCP now passes `manifestJson` into shared Workflow/Roslyn edit services instead of discarding it.
+- 2026-06-02: Added Workflow unit coverage for syntax rejection, overlay diagnostics, manifest/operation count persistence, text-span counts, and Roslyn typed-edit overlay feedback. Added MCP smoke assertions proving Claude-visible responses include the new fields.
+
 ## Phase 7 - Monitor History, Runs, And Prune Policy
 
 Owns:

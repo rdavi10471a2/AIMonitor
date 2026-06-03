@@ -277,11 +277,13 @@ public sealed class WorkflowEditServiceSafetyTests
     {
         WorkflowFixture fixture = CreateFixture();
         WorkflowEditService service = new(fixture.Settings);
-        EditSessionStatus refresh = service.Refresh(fixture.ProgramFilePath);
+        string textFilePath = Path.Combine(Path.GetDirectoryName(fixture.ProgramFilePath)!, "Notes.txt");
+        File.WriteAllText(textFilePath, "one fish one fish");
+        EditSessionStatus refresh = service.Refresh(textFilePath);
         File.WriteAllText(refresh.WorkingFilePath, "one fish one fish");
 
         ReplaceTextResult result = service.ReplaceText(
-            fixture.ProgramFilePath,
+            textFilePath,
             "one",
             "two",
             expectedMatches: 2,
@@ -296,12 +298,14 @@ public sealed class WorkflowEditServiceSafetyTests
     {
         WorkflowFixture fixture = CreateFixture();
         WorkflowEditService service = new(fixture.Settings);
-        EditSessionStatus refresh = service.Refresh(fixture.ProgramFilePath);
+        string textFilePath = Path.Combine(Path.GetDirectoryName(fixture.ProgramFilePath)!, "Notes.txt");
+        File.WriteAllText(textFilePath, "first\r\nsecond\r\nthird\r\n");
+        EditSessionStatus refresh = service.Refresh(textFilePath);
         File.WriteAllText(refresh.WorkingFilePath, "first\r\nsecond\r\nthird\r\n");
 
-        TextSpanResult span = service.FindTextSpan(fixture.ProgramFilePath, "second");
+        TextSpanResult span = service.FindTextSpan(textFilePath, "second");
         EditSessionStatus status = service.ReplaceSpan(
-            fixture.ProgramFilePath,
+            textFilePath,
             span.StartLine,
             span.StartColumn,
             span.EndLine,
@@ -312,6 +316,93 @@ public sealed class WorkflowEditServiceSafetyTests
 
         Assert.Equal("pending", status.Classification);
         Assert.Equal("first\r\nchanged\r\nthird\r\n", File.ReadAllText(refresh.WorkingFilePath));
+    }
+
+    [Fact]
+    public void SubmitFile_reports_operation_manifest_syntax_and_overlay_feedback()
+    {
+        WorkflowFixture fixture = CreateFixture();
+        WorkflowEditService service = new(fixture.Settings);
+
+        EditSessionStatus status = service.SubmitFile(
+            fixture.ProgramFilePath,
+            "namespace Example { internal static class Program { public static string Value => Missing.Value; } }",
+            """{"intent":"phase6"}""");
+
+        Assert.Equal(1, status.OperationCount);
+        Assert.Equal("""{"intent":"phase6"}""", status.ManifestJson);
+        Assert.NotNull(status.SyntaxValidation);
+        Assert.False(status.SyntaxValidation.HasErrors);
+        Assert.NotNull(status.OverlayValidation);
+        Assert.True(status.OverlayValidation.HasErrors);
+        Assert.Equal("compiled-with-errors", status.OverlayValidation.Status);
+        Assert.Contains(status.OverlayValidation.Diagnostics, diagnostic => diagnostic.Id == "CS0103");
+    }
+
+    [Fact]
+    public void SubmitFile_rejects_invalid_csharp_syntax_before_writing_candidate()
+    {
+        WorkflowFixture fixture = CreateFixture();
+        WorkflowEditService service = new(fixture.Settings);
+        EditSessionStatus refresh = service.Refresh(fixture.ProgramFilePath);
+        string originalWorkingText = File.ReadAllText(refresh.WorkingFilePath);
+
+        InvalidOperationException ex = Assert.Throws<InvalidOperationException>(() =>
+            service.SubmitFile(fixture.ProgramFilePath, "namespace Example { internal static class Program { public static string Broken => ; } }"));
+
+        Assert.Contains("C# syntax validation failed", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(originalWorkingText, File.ReadAllText(refresh.WorkingFilePath));
+        Assert.Equal(0, service.GetStatus(fixture.ProgramFilePath).OperationCount);
+    }
+
+    [Fact]
+    public void ReplaceText_and_find_span_report_counts_and_validation_feedback()
+    {
+        WorkflowFixture fixture = CreateFixture();
+        WorkflowEditService service = new(fixture.Settings);
+        EditSessionStatus refresh = service.Refresh(fixture.ProgramFilePath);
+        File.WriteAllText(refresh.WorkingFilePath, "namespace Example { internal static class Program { public static string First => \"same\"; public static string Second => \"same\"; } }");
+
+        TextSpanResult span = service.FindTextSpan(fixture.ProgramFilePath, "\"same\"", occurrenceIndex: 1);
+        ReplaceTextResult result = service.ReplaceText(
+            fixture.ProgramFilePath,
+            "\"same\"",
+            "\"changed\"",
+            occurrenceIndex: 1,
+            manifestJson: """{"tool":"replace"}""");
+
+        Assert.Equal(2, span.OccurrenceCount);
+        Assert.Equal(2, result.TotalMatchCount);
+        Assert.Equal(1, result.ReplacementCount);
+        Assert.Equal(1, result.OperationCount);
+        Assert.Equal("""{"tool":"replace"}""", result.ManifestJson);
+        Assert.NotNull(result.SyntaxValidation);
+        Assert.False(result.SyntaxValidation.HasErrors);
+        Assert.NotNull(result.OverlayValidation);
+    }
+
+    [Fact]
+    public void Roslyn_typed_edit_reports_overlay_feedback_and_operation_count()
+    {
+        WorkflowFixture fixture = CreateFixture();
+        WorkflowEditService service = new(fixture.Settings);
+        service.Refresh(fixture.ProgramFilePath);
+        RoslynEditService roslyn = new(fixture.Settings);
+
+        RoslynEditResult result = roslyn.AddMethod(
+            fixture.ProgramFilePath,
+            "Program",
+            "public static string BrokenSemantic() => Missing.Value;",
+            manifestJson: """{"tool":"add_method"}""");
+
+        Assert.Equal("updated", result.Status);
+        Assert.Equal(1, result.OperationCount);
+        Assert.Equal("""{"tool":"add_method"}""", result.ManifestJson);
+        Assert.NotNull(result.SyntaxValidation);
+        Assert.False(result.SyntaxValidation.HasErrors);
+        Assert.NotNull(result.OverlayValidation);
+        Assert.True(result.OverlayValidation.HasErrors);
+        Assert.Contains(result.OverlayValidation.Diagnostics, diagnostic => diagnostic.Id == "CS0103");
     }
 
     private static StagedEditRecord StageChangedCandidate(WorkflowEditService service, WorkflowFixture fixture)

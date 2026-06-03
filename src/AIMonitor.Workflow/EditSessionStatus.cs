@@ -43,4 +43,12 @@ public sealed class EditSessionStatus
     public string LastDecision { get; set; } = string.Empty;
 
     public string LastDecisionAtUtc { get; set; } = string.Empty;
+
+    public string ManifestJson { get; set; } = string.Empty;
+
+    public int OperationCount { get; set; }
+
+    public EditSyntaxValidationResult? SyntaxValidation { get; set; }
+
+    public EditOverlayValidationResult? OverlayValidation { get; set; }
 }
