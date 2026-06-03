@@ -37,7 +37,9 @@ The WinForms Monitor Status tab should show request/response telemetry when live
 
 ## Safe Edit Reminder
 
-For watched source, never patch the watched file directly:
+For watched source, never patch the watched file directly. Use the command surface for the active host:
+
+Claude/MCP:
 
 ```text
 refresh_file/new_file
@@ -47,6 +49,18 @@ launch_staged_diff
 operator reviews/saves in WinMerge
 record_diff_decision
 refresh_file before editing the same accepted file again
+```
+
+Codex/CLI:
+
+```text
+edit refresh / edit new
+edit Working candidate
+edit stage
+edit launch-diff
+operator reviews/saves in WinMerge
+edit record-decision
+edit refresh before editing the same accepted file again
 ```
 
 CSS, JSON, config, markup, and other non-C# text assets use the same diff workflow. They do not need semantic index rows.
@@ -61,10 +75,6 @@ CSS, JSON, config, markup, and other non-C# text assets use the same diff workfl
 
 Integration tests are intentionally slower because workflow tests build validation copies. Use a longer timeout for the full integration project.
 
-Recent expected integration shape:
+Expected integration counts change as coverage grows. Treat the current test output as authoritative, and expect the direct stdio bridge test to be skipped when the live bridge/proxy path is covered elsewhere.
 
-```text
-39 passed, 1 skipped
-```
-
-The skipped test is the direct stdio bridge test; live bridge/proxy behavior is covered by smoke tests that run through WinForms-visible telemetry.
+Live bridge/proxy behavior is covered by smoke tests that run through WinForms-visible telemetry.

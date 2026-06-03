@@ -8,6 +8,8 @@ Use the AIMonitor workflow docs for current implementation details:
 - `docs/feature-maps/SharedAdapterSurface.md`
 - `docs/workflows/SafeEditWorkflow.md`
 
+`SafeEditWorkflow.md` intentionally lives under `docs/workflows/`; feature maps hold per-feature memory, while workflow docs hold durable process shape.
+
 Feature maps are AIMonitor's centralized per-feature memory. Load the smallest relevant map before changing a workflow, adapter surface, semantic query, or test harness behavior.
 
 ## Cards
