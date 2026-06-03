@@ -35,6 +35,14 @@ samples/watched-solutions/CodexWindows/**/obj/
 !samples/watched-solutions/CodexBlazor/**
 samples/watched-solutions/CodexBlazor/**/bin/
 samples/watched-solutions/CodexBlazor/**/obj/
+!samples/watched-solutions/WinFormsSample/
+!samples/watched-solutions/WinFormsSample/**
+samples/watched-solutions/WinFormsSample/**/bin/
+samples/watched-solutions/WinFormsSample/**/obj/
+!samples/watched-solutions/BlazorSample/
+!samples/watched-solutions/BlazorSample/**
+samples/watched-solutions/BlazorSample/**/bin/
+samples/watched-solutions/BlazorSample/**/obj/
 
 # Logs/temp
 *.log
