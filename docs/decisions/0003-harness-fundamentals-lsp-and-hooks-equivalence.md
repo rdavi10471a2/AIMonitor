@@ -35,6 +35,39 @@ query, staleness, content-hash safety). The remaining LSP surface does not apply
 Therefore there is **no language-server to "add."** Position AIMonitor as a *durable semantic index + safe-edit
 harness covering the navigate+validate subset of an LSP*, not as an LSP equivalent.
 
+#### 1a. Concretely: what Claude's plugin LSP gives the *agent*, and why AIMonitor's MCP is not a redundant duplicate
+
+The "LSP" in the harness discourse, in practice, is Claude Code's IDE/plugin language-server integration. Verified
+against the Claude Code docs (vs-code / jetbrains / plugins-reference), what that integration exposes **to the agent**
+is minimal:
+
+- `mcp__ide__getDiagnostics` — read-only language-server **diagnostics** (the Problems panel), and `mcp__ide__executeCode`
+  (Jupyter only), plus ambient **selection / open-file** context.
+- It does **not** give Claude a callable **find-references / go-to-definition / hover / symbols / rename** tool — those
+  LSP usages are **human-facing IDE UI**, not agent-callable. Absent a dedicated tool, Claude falls back to **grep** for
+  symbol discovery.
+- It is **strictly scoped to the workspace open in the editor**; it cannot reach a solution on disk that is not open.
+
+So AIMonitor's MCP index is **not** a redundant copy of something the agent already had. Two consequences:
+
+1. **Callable vs human-only.** `find_indexed_references` / `find_indexed_callers` / `find_indexed_relationships` /
+   `find_indexed_symbols` / `get_source_map` / `get_file_outline` give the *agent* callable semantic navigation that the
+   plugin exposes only to the human eye (the agent's alternative is grep).
+2. **A target the plugin cannot see.** The watched solution is a *different* directory than the editor's open workspace
+   (usually the AIMonitor repo). The plugin LSP **structurally cannot navigate the watched target**; the AIMonitor index
+   is purpose-built for it.
+
+This maps onto the two regimes of decision 0002:
+
+| Target | Open in the IDE? | Agent's semantic surface |
+| --- | --- | --- |
+| The monitor itself (AIMonitor repo) | yes | plugin `getDiagnostics` + grep (plugin navigation is human-only) |
+| The watched solution (safe-edit target) | no | **AIMonitor MCP index** — the *only* callable semantic navigation, and it is workflow-gated |
+
+Diagnostics map the same way: plugin `getDiagnostics` = as-you-type on the *open* workspace; AIMonitor's equivalent =
+per-edit overlay validation + the authoritative pre-merge `dotnet build` gate on the *watched candidate*. Net: for the
+agent and for the watched target, AIMonitor's MCP **exceeds** the plugin LSP rather than duplicating it.
+
 ### 2. Cross-file rename is moot three ways; propagation is not rename
 
 The one LSP feature that initially looked like a gain — atomic, solution-wide semantic **rename** — is moot, and the
