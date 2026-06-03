@@ -147,6 +147,50 @@ public sealed class McpServerSmokeTests
     }
 
     [Fact]
+    public async Task Mcp_tool_manifest_and_staging_guide_are_current_agent_guidance()
+    {
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+
+        CallToolResult manifest = await client.CallToolAsync("get_tool_manifest");
+        Assert.False(manifest.IsError == true, ExtractToolText(manifest));
+        string manifestText = ExtractToolText(manifest);
+        Assert.Contains("# AIMonitor MCP Tool Manifest", manifestText, StringComparison.Ordinal);
+        Assert.Contains("`get_source_map`", manifestText, StringComparison.Ordinal);
+        Assert.Contains("`stage_candidate_for_review`", manifestText, StringComparison.Ordinal);
+        Assert.Contains("`record_diff_decision`", manifestText, StringComparison.Ordinal);
+        Assert.Contains("pre-merge validation", manifestText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("WinMerge", manifestText, StringComparison.OrdinalIgnoreCase);
+
+        CallToolResult guide = await client.CallToolAsync("get_staging_guide");
+        Assert.False(guide.IsError == true, ExtractToolText(guide));
+        string guideText = ExtractToolText(guide);
+        Assert.Contains("refresh_file", guideText, StringComparison.Ordinal);
+        Assert.Contains("stage_candidate_for_review", guideText, StringComparison.Ordinal);
+        Assert.Contains("launch_staged_diff", guideText, StringComparison.Ordinal);
+        Assert.Contains("pre-merge validation", guideText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("WinMerge", guideText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("record_diff_decision", guideText, StringComparison.Ordinal);
+        Assert.Contains("indexRefresh", guideText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Mcp_self_check_reports_real_guardrail_rows_and_path_collisions()
+    {
+        McpFixture fixture = CreateFixture(runtimeUnderWatchedRoot: true);
+        await using McpClient client = await CreateClientAsync(fixture);
+
+        CallToolResult selfCheck = await client.CallToolAsync("get_self_check");
+
+        Assert.False(selfCheck.IsError == true, ExtractToolText(selfCheck));
+        string selfCheckJson = ExtractToolText(selfCheck);
+        Assert.Contains("\"guardrails\"", selfCheckJson, StringComparison.Ordinal);
+        Assert.Contains("\"name\":\"runtime-outside-watched-source\"", selfCheckJson, StringComparison.Ordinal);
+        Assert.Contains("\"status\":\"failed\"", selfCheckJson, StringComparison.Ordinal);
+        Assert.Equal("failed", ExtractJsonString(selfCheckJson, "overallStatus"));
+    }
+
+    [Fact]
     public async Task Mcp_index_reference_tools_reject_source_map_selector_keys()
     {
         McpFixture fixture = CreateFixture();
@@ -490,6 +534,92 @@ public sealed class McpServerSmokeTests
         string sourceMapError = ExtractToolText(sourceMap);
         Assert.Contains("cannot read or edit Razor markup directly", sourceMapError, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("replace_text_in_file", sourceMapError, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Mcp_source_map_exposes_mode_guidance_budget_and_symbol_source_kind()
+    {
+        McpFixture fixture = CreateFixture();
+        await File.WriteAllTextAsync(
+            fixture.ProgramFilePath,
+            """
+            using System;
+
+            namespace Example
+            {
+                internal static class Program
+                {
+                    public static string GetValue() => "small";
+                }
+            }
+            """);
+        string bigFilePath = Path.Combine(Path.GetDirectoryName(fixture.ProgramFilePath)!, "BigFile.cs");
+        string members = string.Join(
+            Environment.NewLine,
+            Enumerable.Range(0, 700).Select(index => $"        public static string Method{index}() => \"{index}\";"));
+        await File.WriteAllTextAsync(
+            bigFilePath,
+            $$"""
+            namespace Example
+            {
+                internal static class BigFile
+                {
+            {{members}}
+                }
+            }
+            """);
+        await using McpClient client = await CreateClientAsync(fixture);
+
+        CallToolResult navigation = await client.CallToolAsync(
+            "get_source_map",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["scope"] = "file",
+                ["mode"] = "navigation"
+            });
+        Assert.False(navigation.IsError == true, ExtractToolText(navigation));
+        string navigationJson = ExtractToolText(navigation);
+        Assert.Contains("\"mode\":\"navigation\"", navigationJson, StringComparison.Ordinal);
+        Assert.Contains("\"suggestedNextCalls\"", navigationJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"stableSymbolKey\"", navigationJson, StringComparison.Ordinal);
+
+        CallToolResult selector = await client.CallToolAsync(
+            "get_source_map",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["scope"] = "file",
+                ["mode"] = "selector"
+            });
+        Assert.False(selector.IsError == true, ExtractToolText(selector));
+        string selectorJson = ExtractToolText(selector);
+        Assert.Contains("\"mode\":\"selector\"", selectorJson, StringComparison.Ordinal);
+        Assert.Contains("\"stableSymbolKey\"", selectorJson, StringComparison.Ordinal);
+        Assert.Contains("\"tool\":\"get_symbol\"", selectorJson, StringComparison.Ordinal);
+
+        CallToolResult fullProject = await client.CallToolAsync(
+            "get_source_map",
+            new Dictionary<string, object?>
+            {
+                ["scope"] = "project",
+                ["mode"] = "full"
+            });
+        Assert.False(fullProject.IsError == true, ExtractToolText(fullProject));
+        string fullProjectJson = ExtractToolText(fullProject);
+        Assert.True(ExtractJsonBool(fullProjectJson, "wasTruncated"));
+        Assert.Contains("\"suggestedNarrowing\"", fullProjectJson, StringComparison.Ordinal);
+
+        const string getValueSelector = """{"containingType":"Program","memberKind":"method","name":"GetValue"}""";
+        CallToolResult symbol = await client.CallToolAsync(
+            "get_symbol",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["symbolSelectorJson"] = getValueSelector
+            });
+        Assert.False(symbol.IsError == true, ExtractToolText(symbol));
+        Assert.Contains("\"sourceKind\":\"working-candidate\"", ExtractToolText(symbol), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1501,14 +1631,16 @@ public sealed class McpServerSmokeTests
         return await McpClient.CreateAsync(new StdioClientTransport(options));
     }
 
-    private static McpFixture CreateFixture()
+    private static McpFixture CreateFixture(bool runtimeUnderWatchedRoot = false)
     {
         string repositoryRoot = FindRepositoryRoot();
         string tempRoot = Path.Combine(Path.GetTempPath(), "AIMonitorMcpTests", Guid.NewGuid().ToString("N"));
         string settingsPath = Path.Combine(tempRoot, "config", "appsettings.json");
-        string runtimeRoot = Path.Combine(tempRoot, "runtime");
         string watchedSolutionPath = Path.Combine(tempRoot, "Watched", "Example.csproj");
         string programFilePath = Path.Combine(tempRoot, "Watched", "Program.cs");
+        string runtimeRoot = runtimeUnderWatchedRoot
+            ? Path.Combine(Path.GetDirectoryName(watchedSolutionPath)!, "runtime")
+            : Path.Combine(tempRoot, "runtime");
         string programSymbolStableKey = "symbol:program";
 
         Directory.CreateDirectory(Path.GetDirectoryName(watchedSolutionPath)!);

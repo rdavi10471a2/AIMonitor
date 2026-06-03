@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -137,10 +138,15 @@ public sealed class AIMonitorTools
     }
 
     [McpServerTool]
-    [Description("Return a self-check snapshot for configured roots, working folders, diff tool availability, and safety guardrails.")]
+    [Description("Return evaluated self-check guardrails for configured roots, working folders, diff tool availability, and watched-source safety boundaries.")]
     public AIMonitorSelfCheckResult GetSelfCheck()
     {
         runtimeState.Touch();
+        AIMonitorGuardrailCheck[] guardrails = BuildSelfCheckGuardrails();
+        string overallStatus = guardrails.Any(check => check.Status.Equals("failed", StringComparison.OrdinalIgnoreCase)) ? "failed"
+            : guardrails.Any(check => check.Status.Equals("warning", StringComparison.OrdinalIgnoreCase)) ? "warning"
+            : guardrails.Any(check => check.Status.Equals("unavailable", StringComparison.OrdinalIgnoreCase)) ? "unavailable"
+            : "passed";
         return new AIMonitorSelfCheckResult(
             settings.RepositoryRoot,
             settings.RuntimeRoot,
@@ -152,7 +158,9 @@ public sealed class AIMonitorTools
             File.Exists(settings.WatchedSolutionPath),
             Directory.Exists(settings.WatchedProjectFolder),
             settings.WinMergeCandidatePaths.FirstOrDefault(File.Exists),
-            "agents edit monitor-owned Working candidates only; WinMerge review/save remains the watched-source mutation surface");
+            "agents edit monitor-owned Working candidates only; WinMerge review/save remains the watched-source mutation surface",
+            overallStatus,
+            guardrails);
     }
 
     [McpServerTool]
@@ -992,10 +1000,7 @@ public sealed class AIMonitorTools
     public string GetToolManifest()
     {
         runtimeState.Touch();
-        string path = Path.Combine(settings.RepositoryRoot, "docs", "feature-maps", "SharedAdapterSurface.md");
-        return File.Exists(path)
-            ? File.ReadAllText(path)
-            : "AIMonitor shared adapter surface documentation is missing.";
+        return ComposeToolManifest();
     }
 
     [McpServerTool]
@@ -1003,10 +1008,7 @@ public sealed class AIMonitorTools
     public string GetStagingGuide()
     {
         runtimeState.Touch();
-        string path = Path.Combine(settings.RepositoryRoot, "docs", "workflows", "SafeEditWorkflow.md");
-        return File.Exists(path)
-            ? File.ReadAllText(path)
-            : "AIMonitor safe edit workflow documentation is missing.";
+        return ComposeStagingGuide();
     }
 
     [McpServerTool]
@@ -1046,6 +1048,159 @@ public sealed class AIMonitorTools
             applicationLifetime.StopApplication();
         });
         return new AIMonitorServerShutdownResult(Environment.ProcessId, DateTimeOffset.UtcNow, string.IsNullOrWhiteSpace(reason) ? "shutdown_server requested" : reason);
+    }
+
+    private string ComposeToolManifest()
+    {
+        StringBuilder builder = new();
+        builder.AppendLine("# AIMonitor MCP Tool Manifest");
+        builder.AppendLine();
+        builder.AppendLine("This manifest is generated from the currently loaded AIMonitor MCP tool methods.");
+        builder.AppendLine();
+        foreach (MethodInfo method in typeof(AIMonitorTools)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.GetCustomAttribute<McpServerToolAttribute>() is not null)
+            .OrderBy(method => ToToolName(method.Name), StringComparer.Ordinal))
+        {
+            string toolName = ToToolName(method.Name);
+            string description = method.GetCustomAttribute<DescriptionAttribute>()?.Description ?? "No description.";
+            builder.AppendLine($"## `{toolName}`");
+            builder.AppendLine();
+            builder.AppendLine(description);
+            builder.AppendLine();
+            ParameterInfo[] parameters = method.GetParameters();
+            if (parameters.Length > 0)
+            {
+                builder.AppendLine("Parameters:");
+                foreach (ParameterInfo parameter in parameters)
+                {
+                    string parameterDescription = parameter.GetCustomAttribute<DescriptionAttribute>()?.Description ?? string.Empty;
+                    string nullable = IsNullableParameter(parameter) ? "optional" : "required";
+                    builder.AppendLine($"- `{parameter.Name}` ({parameter.ParameterType.Name}, {nullable}): {parameterDescription}");
+                }
+
+                builder.AppendLine();
+            }
+        }
+
+        builder.AppendLine("## Safety Notes");
+        builder.AppendLine();
+        builder.AppendLine("- Watched source is not edited directly by agents.");
+        builder.AppendLine("- Existing files enter through `refresh_file`; future files enter through `new_file`.");
+        builder.AppendLine("- Candidate edits happen in monitor-owned Working files.");
+        builder.AppendLine("- Review uses `stage_candidate_for_review`, `launch_staged_diff`, WinMerge review/save, and `record_diff_decision`.");
+        builder.AppendLine("- `launch_staged_diff` runs pre-merge validation; failed validation requires host/operator approval before WinMerge opens.");
+        builder.AppendLine("- Accepted decisions trigger index refresh metadata; refresh before editing the same watched file again.");
+        return builder.ToString();
+    }
+
+    private string ComposeStagingGuide()
+    {
+        StringBuilder builder = new();
+        builder.AppendLine("# AIMonitor Staging Guide");
+        builder.AppendLine();
+        builder.AppendLine("Use this sequence for watched-project edits through MCP.");
+        builder.AppendLine();
+        builder.AppendLine("1. Check `get_self_check`, `get_workflow_status`, and `get_monitor_status` when starting a session.");
+        builder.AppendLine("2. For existing files, call `refresh_file`. For future watched files, call `new_file`.");
+        builder.AppendLine("3. Edit only the monitor-owned Working candidate with `submit_file`, text/span tools, or Roslyn typed edit tools.");
+        builder.AppendLine("4. For C# symbol edits, prefer `get_source_map` in selector mode and `get_symbol` before mutation.");
+        builder.AppendLine("5. Stage with `stage_candidate_for_review`.");
+        builder.AppendLine("6. Launch review with `launch_staged_diff`; this runs pre-merge validation before WinMerge.");
+        builder.AppendLine("7. If validation fails and no host dialog appears, stop and ask the operator before using `forceValidation`.");
+        builder.AppendLine("8. The operator reviews/saves in WinMerge. WinMerge is the watched-source mutation surface.");
+        builder.AppendLine("9. Record the result with `record_diff_decision`.");
+        builder.AppendLine("10. After `accepted` or `accepted-normalized`, inspect `indexRefresh` and call `refresh_file` before editing that watched file again.");
+        builder.AppendLine();
+        builder.AppendLine("Failure paths:");
+        builder.AppendLine();
+        builder.AppendLine("- `blocked`, `dirty-unexpected`, `superseded`, missing Working files, and stale hashes require recovery before follow-up edits.");
+        builder.AppendLine("- Warnings do not block by themselves; build/compile errors and explicit validation failures do.");
+        builder.AppendLine("- Do not manually copy candidates into watched source outside WinMerge/decision classification.");
+        return builder.ToString();
+    }
+
+    private AIMonitorGuardrailCheck[] BuildSelfCheckGuardrails()
+    {
+        string repositoryRoot = Path.GetFullPath(settings.RepositoryRoot);
+        string runtimeRoot = Path.GetFullPath(settings.RuntimeRoot);
+        string watchedProjectFolder = Path.GetFullPath(settings.WatchedProjectFolder);
+        string workingRoot = Path.GetFullPath(workflowPaths.WorkingRoot);
+        string historyRoot = Path.GetFullPath(workflowPaths.HistoryRoot);
+        string stagedRoot = Path.GetFullPath(workflowPaths.StagedRoot);
+        List<AIMonitorGuardrailCheck> checks =
+        [
+            CheckPathExists("repository-root-exists", repositoryRoot, Directory.Exists(repositoryRoot), "Repository root exists.", "Repository root is missing."),
+            CheckPathExists("watched-solution-exists", settings.WatchedSolutionPath, File.Exists(settings.WatchedSolutionPath), "Watched solution/project exists.", "Watched solution/project is missing."),
+            CheckPathExists("watched-project-folder-exists", watchedProjectFolder, Directory.Exists(watchedProjectFolder), "Watched project folder exists.", "Watched project folder is missing."),
+            CheckPathExists("runtime-root-exists", runtimeRoot, Directory.Exists(runtimeRoot), "Runtime root exists.", "Runtime root is missing."),
+            CheckPathUnderRoot("working-under-runtime", workingRoot, runtimeRoot, "Working root is under runtime root.", "Working root is outside runtime root."),
+            CheckPathUnderRoot("history-under-runtime", historyRoot, runtimeRoot, "History root is under runtime root.", "History root is outside runtime root."),
+            CheckPathUnderRoot("staged-under-runtime", stagedRoot, runtimeRoot, "Staged root is under runtime root.", "Staged root is outside runtime root."),
+            CheckPathOutsideRoot("runtime-outside-watched-source", runtimeRoot, watchedProjectFolder, "Runtime state is outside watched source.", "Runtime state is inside watched source."),
+        ];
+
+        string? diffTool = settings.WinMergeCandidatePaths.FirstOrDefault(File.Exists);
+        checks.Add(diffTool is null
+            ? new AIMonitorGuardrailCheck("diff-tool-available", "warning", "No configured WinMerge candidate exists on disk.", string.Join(";", settings.WinMergeCandidatePaths))
+            : new AIMonitorGuardrailCheck("diff-tool-available", "passed", "Configured WinMerge candidate exists.", diffTool));
+
+        return checks.ToArray();
+    }
+
+    private static AIMonitorGuardrailCheck CheckPathExists(string name, string path, bool passed, string passedMessage, string failedMessage)
+    {
+        return new AIMonitorGuardrailCheck(name, passed ? "passed" : "failed", passed ? passedMessage : failedMessage, path);
+    }
+
+    private static AIMonitorGuardrailCheck CheckPathUnderRoot(string name, string path, string root, string passedMessage, string failedMessage)
+    {
+        bool passed = IsPathUnderRoot(path, root);
+        return new AIMonitorGuardrailCheck(name, passed ? "passed" : "failed", passed ? passedMessage : failedMessage, path);
+    }
+
+    private static AIMonitorGuardrailCheck CheckPathOutsideRoot(string name, string path, string root, string passedMessage, string failedMessage)
+    {
+        bool passed = !IsPathUnderRoot(path, root);
+        return new AIMonitorGuardrailCheck(name, passed ? "passed" : "failed", passed ? passedMessage : failedMessage, path);
+    }
+
+    private static bool IsPathUnderRoot(string path, string root)
+    {
+        string fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return fullPath.Equals(fullRoot, StringComparison.OrdinalIgnoreCase)
+            || fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || fullPath.StartsWith(fullRoot + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsNullableParameter(ParameterInfo parameter)
+    {
+        return parameter.HasDefaultValue
+            || Nullable.GetUnderlyingType(parameter.ParameterType) is not null
+            || !parameter.ParameterType.IsValueType;
+    }
+
+    private static string ToToolName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return value;
+        }
+
+        StringBuilder builder = new(value.Length + 8);
+        for (int index = 0; index < value.Length; index++)
+        {
+            char character = value[index];
+            if (char.IsUpper(character) && index > 0)
+            {
+                builder.Append('_');
+            }
+
+            builder.Append(char.ToLowerInvariant(character));
+        }
+
+        return builder.ToString();
     }
 
     private string SessionRoot => Path.Combine(MonitorWorkspacePaths.GetWatchedSolutionWorkspaceRoot(settings), "workflow", "sessions");
@@ -1292,7 +1447,15 @@ public sealed record AIMonitorSelfCheckResult(
     bool WatchedSolutionExists,
     bool WatchedProjectFolderExists,
     string? ResolvedDiffToolPath,
-    string SafetySummary);
+    string SafetySummary,
+    string OverallStatus,
+    IReadOnlyList<AIMonitorGuardrailCheck> Guardrails);
+
+public sealed record AIMonitorGuardrailCheck(
+    string Name,
+    string Status,
+    string Message,
+    string? Path);
 
 public sealed record AIMonitorRefreshIndexFileResult(
     SolutionIndexSummary Summary,

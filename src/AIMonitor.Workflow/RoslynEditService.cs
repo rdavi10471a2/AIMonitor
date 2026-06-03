@@ -16,6 +16,11 @@ public sealed class RoslynEditService
         PropertyNameCaseInsensitive = true
     };
 
+    private static readonly JsonSerializerOptions SourceMapJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    };
+
     private static readonly SyntaxAnnotation FormatAnnotation = new("AIMonitorRoslynEditFormat");
 
     private readonly WorkflowEditService workflowService;
@@ -29,14 +34,20 @@ public sealed class RoslynEditService
 
     public RoslynSourceMapResult GetSourceMap(string? path, string scope = "auto", string mode = "auto", string? namespaceName = null)
     {
-        string effectiveScope = NormalizeScope(scope);
-        string effectiveMode = NormalizeMode(mode);
+        string effectiveScope = ResolveEffectiveScope(path, NormalizeScope(scope));
+        string effectiveMode = ResolveEffectiveMode(effectiveScope, mode);
         string? requestedNamespace = effectiveScope.Equals("namespace", StringComparison.OrdinalIgnoreCase)
             ? namespaceName ?? path
             : namespaceName;
         string[] files = ResolveSourceMapFiles(path, effectiveScope, requestedNamespace).ToArray();
-        RoslynSourceMapFile[] mappedFiles = files.Select(MapFile).ToArray();
-        return new RoslynSourceMapResult(
+        RoslynSourceMapFile[] mappedFiles = files.Select(MapFile).Select(file => ShapeSourceMapFile(file, effectiveMode)).ToArray();
+        string watchedProjectAlias = new DirectoryInfo(paths.Settings.WatchedProjectFolder).Name;
+        string? watchedProjectFolder = effectiveMode.Equals("full", StringComparison.OrdinalIgnoreCase)
+            ? paths.Settings.WatchedProjectFolder
+            : null;
+        RoslynSourceMapNextCall[] nextCalls = BuildSourceMapNextCalls(mappedFiles, effectiveMode).ToArray();
+        int budgetLimit = GetSourceMapBudgetLimit(effectiveMode);
+        RoslynSourceMapResult result = new(
             effectiveScope,
             effectiveMode,
             GetSourceMapModePurpose(effectiveMode),
@@ -44,7 +55,27 @@ public sealed class RoslynEditService
             requestedNamespace,
             mappedFiles.Length,
             mappedFiles.Sum(file => file.Symbols.Count),
-            mappedFiles);
+            mappedFiles,
+            BudgetLimit: budgetLimit,
+            WatchedProjectAlias: watchedProjectAlias,
+            WatchedProjectFolder: watchedProjectFolder,
+            SuggestedNextCalls: nextCalls.Length == 0 ? null : nextCalls);
+        long estimatedTokenProxy = EstimateSourceMapTokenProxy(result);
+        if (estimatedTokenProxy <= budgetLimit)
+        {
+            return result with { EstimatedTokenProxy = estimatedTokenProxy };
+        }
+
+        RoslynSourceMapNarrowingSuggestion[] suggestions = BuildSourceMapNarrowingSuggestions(mappedFiles).ToArray();
+        return result with
+        {
+            FileCount = 0,
+            SymbolCount = 0,
+            Files = [],
+            EstimatedTokenProxy = estimatedTokenProxy,
+            WasTruncated = true,
+            SuggestedNarrowing = suggestions
+        };
     }
 
     public RoslynFileOutlineResult GetFileOutline(string watchedFilePath)
@@ -271,12 +302,16 @@ public sealed class RoslynEditService
             diagnostics.Length,
             root.Usings.Select(usingDirective => usingDirective.Name?.ToString() ?? string.Empty).Where(value => value.Length > 0).ToArray(),
             root.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>().Select(item => item.Name.ToString()).Distinct(StringComparer.Ordinal).ToArray(),
-            symbols);
+            symbols,
+            FileHash.Compute(filePath),
+            new FileInfo(filePath).Length,
+            diagnostics.Select(MapDiagnostic).Take(10).ToArray());
     }
 
     private static RoslynSourceMapSymbol MapSymbol(SyntaxTree tree, string relativePath, MemberDeclarationSyntax member)
     {
         FileLinePositionSpan span = tree.GetLineSpan(member.Span);
+        string? elisionReason = GetElisionReason(relativePath, member);
         return new RoslynSourceMapSymbol(
             SymbolKind(member),
             SymbolName(member),
@@ -292,7 +327,18 @@ public sealed class RoslynEditService
             GetParameterTypes(member),
             GetParameterNames(member),
             GetArity(member),
-            member.Kind().ToString());
+            member.Kind().ToString(),
+            GetBaseTypes(member),
+            GetAttributeSummaries(member),
+            HasDocumentation(member),
+            HasVisibleAttributes(member),
+            HasModifier(member, SyntaxKind.StaticKeyword),
+            HasModifier(member, SyntaxKind.AsyncKeyword),
+            HasModifier(member, SyntaxKind.OverrideKeyword),
+            HasModifier(member, SyntaxKind.VirtualKeyword),
+            HasModifier(member, SyntaxKind.PartialKeyword),
+            elisionReason is not null ? true : null,
+            elisionReason);
     }
 
     private static RoslynFileOutlineItem MapOutlineItem(SyntaxTree tree, MemberDeclarationSyntax member)
@@ -307,6 +353,143 @@ public sealed class RoslynEditService
             BuildNamespace(member),
             BuildContainingType(member),
             member.Kind().ToString());
+    }
+
+    private static RoslynSourceMapDiagnostic MapDiagnostic(Diagnostic diagnostic)
+    {
+        FileLinePositionSpan span = diagnostic.Location.GetLineSpan();
+        return new RoslynSourceMapDiagnostic(
+            diagnostic.Id,
+            diagnostic.Severity.ToString(),
+            diagnostic.GetMessage(),
+            span.StartLinePosition.Line + 1,
+            span.EndLinePosition.Line + 1);
+    }
+
+    private static RoslynSourceMapFile ShapeSourceMapFile(RoslynSourceMapFile file, string mode)
+    {
+        if (mode.Equals("full", StringComparison.OrdinalIgnoreCase))
+        {
+            return file;
+        }
+
+        RoslynSourceMapSymbol[] symbols = file.Symbols
+            .Select(symbol => ShapeSourceMapSymbol(symbol, mode))
+            .ToArray();
+
+        if (mode.Equals("selector", StringComparison.OrdinalIgnoreCase)
+            || mode.Equals("detail", StringComparison.OrdinalIgnoreCase))
+        {
+            return file with
+            {
+                SourceFilePath = null,
+                DiagnosticsSummary = file.DiagnosticCount > 0 ? file.DiagnosticsSummary : null,
+                Usings = NullIfEmpty(file.Usings),
+                Namespaces = NullIfEmpty(file.Namespaces),
+                Symbols = symbols
+            };
+        }
+
+        return file with
+        {
+            SourceFilePath = null,
+            Sha256 = null,
+            Length = null,
+            DiagnosticsSummary = file.DiagnosticCount > 0 ? file.DiagnosticsSummary : null,
+            Usings = null,
+            Namespaces = NullIfEmpty(file.Namespaces),
+            Symbols = symbols
+        };
+    }
+
+    private static RoslynSourceMapSymbol ShapeSourceMapSymbol(RoslynSourceMapSymbol symbol, string mode)
+    {
+        if (mode.Equals("full", StringComparison.OrdinalIgnoreCase))
+        {
+            return symbol;
+        }
+
+        if (symbol.IsElided == true)
+        {
+            return symbol with
+            {
+                StableSymbolKey = null,
+                Signature = null,
+                TextHash = null,
+                Modifiers = null,
+                ReturnType = null,
+                ParameterTypes = null,
+                ParameterNames = null,
+                Arity = null,
+                SyntaxKind = null,
+                BaseTypes = null,
+                Attributes = null,
+                HasDocumentation = null,
+                HasAttributes = null,
+                IsStatic = null,
+                IsAsync = null,
+                IsOverride = null,
+                IsVirtual = null,
+                IsPartial = null
+            };
+        }
+
+        if (mode.Equals("selector", StringComparison.OrdinalIgnoreCase))
+        {
+            return symbol with
+            {
+                BaseTypes = NullIfEmpty(symbol.BaseTypes),
+                Attributes = NullIfEmpty(ToAttributeNamesOnly(symbol.Attributes)),
+                Modifiers = NullIfEmpty(symbol.Modifiers),
+                ParameterTypes = NullIfEmpty(symbol.ParameterTypes),
+                ParameterNames = NullIfEmpty(symbol.ParameterNames),
+                IsPartial = symbol.IsPartial == true ? true : null
+            };
+        }
+
+        if (mode.Equals("detail", StringComparison.OrdinalIgnoreCase))
+        {
+            return symbol with
+            {
+                BaseTypes = NullIfEmpty(symbol.BaseTypes),
+                Attributes = NullIfEmpty(symbol.Attributes),
+                Modifiers = NullIfEmpty(symbol.Modifiers),
+                ParameterTypes = NullIfEmpty(symbol.ParameterTypes),
+                ParameterNames = NullIfEmpty(symbol.ParameterNames),
+                IsPartial = symbol.IsPartial == true ? true : null
+            };
+        }
+
+        return symbol with
+        {
+            StableSymbolKey = null,
+            Signature = null,
+            TextHash = null,
+            Modifiers = null,
+            ReturnType = null,
+            ParameterTypes = null,
+            ParameterNames = null,
+            Arity = null,
+            SyntaxKind = null,
+            BaseTypes = NullIfEmpty(symbol.BaseTypes),
+            Attributes = NullIfEmpty(ToAttributeNamesOnly(symbol.Attributes)),
+            HasDocumentation = null,
+            IsStatic = null,
+            IsAsync = null,
+            IsOverride = null,
+            IsVirtual = null,
+            IsPartial = symbol.IsPartial == true ? true : null
+        };
+    }
+
+    private static IReadOnlyList<RoslynSourceMapAttribute>? ToAttributeNamesOnly(IReadOnlyList<RoslynSourceMapAttribute>? attributes)
+    {
+        return attributes?.Select(attribute => new RoslynSourceMapAttribute(attribute.Name)).ToArray();
+    }
+
+    private static IReadOnlyList<T>? NullIfEmpty<T>(IReadOnlyList<T>? values)
+    {
+        return values is null || values.Count == 0 ? null : values;
     }
 
     private EditSessionStatus EnsureSession(string watchedFilePath)
@@ -519,6 +702,26 @@ public sealed class RoslynEditService
             : throw new InvalidOperationException("Source map scope must be auto, file, folder, namespace, or project.");
     }
 
+    private string ResolveEffectiveScope(string? path, string scope)
+    {
+        if (!scope.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            return scope;
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return "project";
+        }
+
+        string targetPath = Path.IsPathRooted(path)
+            ? Path.GetFullPath(path)
+            : Path.GetFullPath(Path.Combine(paths.Settings.WatchedProjectFolder, path));
+        return File.Exists(targetPath) ? "file"
+            : Directory.Exists(targetPath) ? "folder"
+            : "project";
+    }
+
     private static string CreateUnsupportedRoslynPathMessage(string path, string toolName)
     {
         string extension = Path.GetExtension(path);
@@ -538,12 +741,147 @@ public sealed class RoslynEditService
             : throw new InvalidOperationException("Source map mode must be auto, navigation, selector, detail, or full.");
     }
 
+    private static string ResolveEffectiveMode(string scope, string? mode)
+    {
+        string normalized = NormalizeMode(mode);
+        if (!normalized.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            return normalized;
+        }
+
+        return scope.Equals("file", StringComparison.OrdinalIgnoreCase)
+            ? "selector"
+            : "navigation";
+    }
+
+    private static int GetSourceMapBudgetLimit(string mode)
+    {
+        return mode switch
+        {
+            "navigation" => 20000,
+            "selector" => 25000,
+            "detail" => 20000,
+            "full" => 15000,
+            _ => 15000
+        };
+    }
+
     private static string GetSourceMapModePurpose(string mode)
     {
         return mode.Equals("navigation", StringComparison.OrdinalIgnoreCase) ? "broad-orientation"
             : mode.Equals("selector", StringComparison.OrdinalIgnoreCase) ? "stable-symbol-selection"
             : mode.Equals("detail", StringComparison.OrdinalIgnoreCase) ? "contract-detail"
             : "audit-debug";
+    }
+
+    private static long EstimateSourceMapTokenProxy(RoslynSourceMapResult result)
+    {
+        string json = JsonSerializer.Serialize(result, SourceMapJsonOptions);
+        return Math.Max(1, (json.Length + 3L) / 4L);
+    }
+
+    private static IEnumerable<RoslynSourceMapNarrowingSuggestion> BuildSourceMapNarrowingSuggestions(IReadOnlyList<RoslynSourceMapFile> files)
+    {
+        return files
+            .OrderByDescending(file => file.Symbols.Count)
+            .ThenByDescending(file => file.DiagnosticCount)
+            .ThenBy(file => file.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .Take(10)
+            .Select(file => new RoslynSourceMapNarrowingSuggestion(
+                file.RelativePath,
+                file.DiagnosticCount > 0 ? "diagnostics-present" : "high-symbol-count",
+                file.Symbols.Count,
+                file.DiagnosticCount));
+    }
+
+    private static IEnumerable<RoslynSourceMapNextCall> BuildSourceMapNextCalls(IReadOnlyList<RoslynSourceMapFile> files, string mode)
+    {
+        if (mode.Equals("navigation", StringComparison.OrdinalIgnoreCase))
+        {
+            List<RoslynSourceMapNextCall> calls = files
+                .OrderByDescending(file => file.DiagnosticCount)
+                .ThenByDescending(file => file.Symbols.Count)
+                .ThenBy(file => file.RelativePath, StringComparer.OrdinalIgnoreCase)
+                .Take(8)
+                .Select((file, index) => new RoslynSourceMapNextCall(
+                    index + 1,
+                    "get_source_map",
+                    file.DiagnosticCount > 0 ? "inspect-file-with-diagnostics" : "inspect-file-selectors",
+                    new Dictionary<string, string>
+                    {
+                        ["path"] = file.RelativePath,
+                        ["scope"] = "file",
+                        ["mode"] = "selector"
+                    }))
+                .ToList();
+            AddUsingNamespaceNextCalls(calls, files, calls.Count + 1);
+            return calls;
+        }
+
+        if (mode.Equals("selector", StringComparison.OrdinalIgnoreCase))
+        {
+            List<RoslynSourceMapNextCall> calls = files
+                .SelectMany(file => file.Symbols
+                    .Where(symbol => !string.IsNullOrWhiteSpace(symbol.StableSymbolKey))
+                    .Where(symbol => symbol.Kind is "method" or "constructor" or "property" or "event" or "field")
+                    .OrderBy(symbol => SourceMapSymbolNextCallRank(symbol.Kind))
+                    .ThenBy(symbol => symbol.StartLine)
+                    .Select(symbol => new { File = file, Symbol = symbol }))
+                .Take(10)
+                .Select((item, index) => new RoslynSourceMapNextCall(
+                    index + 1,
+                    "get_symbol",
+                    "read-selected-symbol-body",
+                    new Dictionary<string, string>
+                    {
+                        ["path"] = item.File.RelativePath,
+                        ["symbolSelectorJson"] = BuildStableKeySelectorJson(item.Symbol)
+                    }))
+                .ToList();
+            AddUsingNamespaceNextCalls(calls, files, calls.Count + 1);
+            return calls;
+        }
+
+        return [];
+    }
+
+    private static void AddUsingNamespaceNextCalls(List<RoslynSourceMapNextCall> calls, IReadOnlyList<RoslynSourceMapFile> files, int startRank)
+    {
+        foreach (string usingNamespace in files
+            .SelectMany(file => file.Usings ?? [])
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .Take(6))
+        {
+            calls.Add(new RoslynSourceMapNextCall(
+                startRank++,
+                "get_source_map",
+                "inspect-referenced-namespace-surface",
+                new Dictionary<string, string>
+                {
+                    ["scope"] = "namespace",
+                    ["namespaceName"] = usingNamespace,
+                    ["mode"] = "navigation"
+                }));
+        }
+    }
+
+    private static int SourceMapSymbolNextCallRank(string kind)
+    {
+        return kind switch
+        {
+            "method" => 0,
+            "constructor" => 1,
+            "property" => 2,
+            "event" => 3,
+            "field" => 4,
+            _ => 9
+        };
+    }
+
+    private static string BuildStableKeySelectorJson(RoslynSourceMapSymbol symbol)
+    {
+        return JsonSerializer.Serialize(new RoslynSymbolSelector(StableSymbolKey: symbol.StableSymbolKey), SourceMapJsonOptions);
     }
 
     private static string BuildStableSymbolKey(string relativePath, MemberDeclarationSyntax member)
@@ -705,6 +1043,105 @@ public sealed class RoslynEditService
             _ => default
         };
         return modifiers.Select(modifier => modifier.ValueText).ToArray();
+    }
+
+    private static bool HasModifier(MemberDeclarationSyntax member, SyntaxKind kind)
+    {
+        SyntaxTokenList modifiers = member switch
+        {
+            BaseTypeDeclarationSyntax type => type.Modifiers,
+            BaseMethodDeclarationSyntax method => method.Modifiers,
+            EventDeclarationSyntax evt => evt.Modifiers,
+            EventFieldDeclarationSyntax eventField => eventField.Modifiers,
+            BasePropertyDeclarationSyntax property => property.Modifiers,
+            FieldDeclarationSyntax field => field.Modifiers,
+            DelegateDeclarationSyntax del => del.Modifiers,
+            _ => default
+        };
+        return modifiers.Any(modifier => modifier.IsKind(kind));
+    }
+
+    private static IReadOnlyList<string> GetBaseTypes(MemberDeclarationSyntax member)
+    {
+        return member is BaseTypeDeclarationSyntax type && type.BaseList is not null
+            ? type.BaseList.Types.Select(item => item.Type.ToString()).ToArray()
+            : [];
+    }
+
+    private static bool HasDocumentation(MemberDeclarationSyntax member)
+    {
+        return member.GetLeadingTrivia()
+            .Select(trivia => trivia.GetStructure())
+            .OfType<DocumentationCommentTriviaSyntax>()
+            .Any();
+    }
+
+    private static bool HasVisibleAttributes(MemberDeclarationSyntax member)
+    {
+        return member.AttributeLists
+            .SelectMany(list => list.Attributes)
+            .Any(attribute => !ShouldSkipSourceMapAttribute(attribute.Name.ToString()));
+    }
+
+    private static IReadOnlyList<RoslynSourceMapAttribute> GetAttributeSummaries(MemberDeclarationSyntax member)
+    {
+        return member.AttributeLists
+            .SelectMany(list => list.Attributes)
+            .Where(attribute => !ShouldSkipSourceMapAttribute(attribute.Name.ToString()))
+            .Select(attribute => new RoslynSourceMapAttribute(
+                attribute.Name.ToString(),
+                attribute.ArgumentList?.Arguments.Select(argument => argument.ToString()).ToArray()))
+            .ToArray();
+    }
+
+    private static bool ShouldSkipSourceMapAttribute(string attributeName)
+    {
+        string simpleName = attributeName.Split('.').Last();
+        if (simpleName.EndsWith("Attribute", StringComparison.Ordinal))
+        {
+            simpleName = simpleName[..^"Attribute".Length];
+        }
+
+        return simpleName is "AIChange" or "AIHistory" or "AIInstructions" or "UserHistory"
+            || simpleName.StartsWith("AI", StringComparison.Ordinal)
+                && simpleName is not ("AIFileContext");
+    }
+
+    private static string? GetElisionReason(string relativePath, MemberDeclarationSyntax member)
+    {
+        string normalizedPath = NormalizePath(relativePath);
+        string name = SymbolName(member);
+        if (normalizedPath.EndsWith(".Designer.cs", StringComparison.OrdinalIgnoreCase))
+        {
+            if (member is MethodDeclarationSyntax method
+                && name.Equals("InitializeComponent", StringComparison.Ordinal)
+                && method.ParameterList.Parameters.Count == 0)
+            {
+                return "winforms-designer-initialize-component";
+            }
+
+            if (member is MethodDeclarationSyntax dispose
+                && name.Equals("Dispose", StringComparison.Ordinal)
+                && dispose.ParameterList.Parameters.Count == 1
+                && dispose.ParameterList.Parameters[0].Type?.ToString() == "bool")
+            {
+                return "winforms-designer-dispose";
+            }
+
+            if (member is FieldDeclarationSyntax or EventFieldDeclarationSyntax)
+            {
+                return "winforms-designer-field";
+            }
+        }
+
+        if (name.Equals("BuildRenderTree", StringComparison.Ordinal)
+            && member is MethodDeclarationSyntax renderMethod
+            && renderMethod.ParameterList.Parameters.Count == 1)
+        {
+            return "razor-generated-render-plumbing";
+        }
+
+        return null;
     }
 
     private static string? GetReturnType(MemberDeclarationSyntax member)

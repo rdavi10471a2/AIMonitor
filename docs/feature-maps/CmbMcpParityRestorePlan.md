@@ -216,32 +216,89 @@ Owns:
 - High appendix: source-map token budget/truncation.
 - High appendix: source-map per-mode field shaping.
 
-Shared implementation:
+Layering rule:
 
-- Pass source-map `mode` into the actual mapping pipeline.
-- Define mode behavior:
-  - `navigation`: small orientation map;
-  - `selector`: enough to choose symbols/selectors;
-  - `detail`: selected detail without full generated noise;
-  - `full`: complete map, including generated members if requested.
-- Add budget fields:
-  - estimated token/character count;
-  - budget limit;
-  - was truncated;
-  - elided count.
-- Add explicit narrowing hints when a map is too large.
-- Add suggested next calls for common navigation paths.
-- Make `auto` resolve to an actual mode instead of remaining an unshaped label.
-- Return file-level metadata such as hash/length/diagnostic summary where available.
-- Decide and document whether `get_symbol` reads committed watched source or the current Working candidate. If it reads Working, the response must say so clearly and tests must prove the behavior.
-- Collapse generated/noisy regions with visible markers:
-  - WinForms designer fields;
-  - `InitializeComponent`;
-  - `Dispose(bool)` designer override;
-  - common interface/designer plumbing;
-  - Razor generated render plumbing;
-  - AI-history/change attributes where they only add noise.
-- Do not silently drop content. Every filter/truncation needs a marker.
+- Owner is `AIMonitor.Workflow` / `RoslynEditService`. Source maps are live Roslyn/source-shape discovery, not persisted solution-index data.
+- `AIMonitor.McpServer` must remain a thin adapter that exposes request knobs and serializes the shared result shape.
+- CLI only participates if a source-map diagnostic command already exists or is deliberately added later. Do not bend CLI into an MCP-only discovery surface.
+- Raw `.razor` markup remains outside this source-map contract unless a specific source-mapped Razor implementation is added. `.razor.cs` and normal C# files are in scope.
+
+CMB behavior to restore:
+
+- `auto` mode resolves to `selector` for file scope and `navigation` for folder/project/namespace scope.
+- Mode purpose is explicit:
+  - `navigation`: broad orientation;
+  - `selector`: stable symbol selection;
+  - `detail`: contract detail;
+  - `full`: audit/debug.
+- Per-mode shaping is real:
+  - `navigation` strips stable keys, hashes, signatures/parameter detail, and source paths where they are not needed;
+  - `selector` keeps stable symbol keys, hashes, parameters, usings/namespaces, and enough selector metadata for `get_symbol`;
+  - `detail` keeps contract detail and attribute arguments without forcing full audit payload;
+  - `full` keeps the complete source-map row, including source path/hash/length.
+- Budget metadata is returned:
+  - `estimatedTokenProxy`;
+  - `budgetLimit`;
+  - `wasTruncated`.
+- Over-budget maps return explicit `suggestedNarrowing` and `suggestedNextCalls` instead of dumping an unbounded payload.
+- Source maps preserve useful file-header attributes such as `AIFileContext` and `FileVersion`, while filtering legacy workflow-history attributes such as `AIChange`, `AIHistory`, `AIInstructions`, `UserHistory`, and other `AI*` noise from the map only. Source code is not modified.
+
+Execution slices:
+
+1. **Source-map contract shape**
+   - Add nullable/defaulted fields to `RoslynSourceMapResult`, `RoslynSourceMapFile`, and `RoslynSourceMapSymbol` so existing consumers remain compatible.
+   - Add source-map diagnostics, attributes, narrowing suggestions, and next-call records.
+   - Keep top-level response names close to CMB where possible: `modePurpose`, `estimatedTokenProxy`, `budgetLimit`, `wasTruncated`, `suggestedNarrowing`, `suggestedNextCalls`.
+
+2. **Auto mode and mode shaping**
+   - Pass effective mode through the mapping pipeline.
+   - Resolve `auto` to a concrete mode before mapping.
+   - Shape file and symbol fields by mode.
+   - Keep `full` as the audit escape hatch.
+
+3. **Metadata and selector richness**
+   - Return file hash, file length, diagnostic summary, and richer symbol metadata where Roslyn can provide it cheaply.
+   - Include base types, documentation/attribute flags, static/async/override/virtual/partial flags, and attribute summaries where appropriate for the selected mode.
+   - Ensure stable selector metadata continues to match `get_symbol`.
+
+4. **Budget, truncation, and navigation guidance**
+   - Estimate token proxy from serialized response size.
+   - Apply mode-specific budget limits.
+   - On overflow, return a bounded envelope with `wasTruncated = true`, no giant `files` payload, and ranked `suggestedNarrowing`.
+   - Add `suggestedNextCalls` for navigation-to-selector and selector-to-symbol flows, plus namespace-neighborhood calls from usings.
+
+5. **Noise filtering**
+   - Filter AI-history attributes from source-map output only.
+   - Collapse generated/designer noise with explicit markers where source-map traversal sees it:
+     - WinForms `InitializeComponent`;
+     - designer `Dispose(bool)` override;
+     - designer fields and common generated plumbing;
+     - generated Razor render plumbing only if the current source-map surface actually sees generated C# for the file.
+   - Do not silently drop user-authored members.
+
+6. **`get_symbol` source-of-truth proof**
+   - State in the response whether the symbol body came from the monitor-owned Working candidate or watched source.
+   - Add tests proving the behavior so stale assumptions do not reappear.
+
+Tests:
+
+- Workflow/Roslyn test: `auto` resolves to `selector` for file scope and `navigation` for project/folder/namespace scope.
+- Workflow/Roslyn test: `navigation`, `selector`, `detail`, and `full` produce observably different field sets.
+- Workflow/Roslyn test: selector output contains stable selector data that `get_symbol` can read.
+- Workflow/Roslyn test: file metadata includes hash, length, and diagnostic summary when available.
+- Workflow/Roslyn test: over-budget map reports `wasTruncated`, `estimatedTokenProxy`, `budgetLimit`, and `suggestedNarrowing`.
+- Workflow/Roslyn test: `suggestedNextCalls` include file selector calls from navigation mode and symbol body calls from selector mode.
+- Workflow/Roslyn test: AI-history attributes are filtered from source-map output while normal user attributes remain visible.
+- Workflow/Roslyn test: WinForms designer fixture collapses generated/designer noise in default/navigation output and keeps user members.
+- Razor boundary test: raw `.razor` source-map requests fail or return a clear unsupported-boundary message; `.razor.cs` works as C#.
+- MCP smoke: `get_source_map(mode=navigation)` and `get_source_map(mode=full)` produce different payload sizes and visible mode metadata.
+- MCP smoke: a large scope returns bounded truncation guidance instead of an unbounded response.
+- MCP smoke: `get_symbol` response includes the source-of-truth marker.
+
+Progress:
+
+- 2026-06-02: Phase 3 restored for the C# Roslyn source-map surface. `get_source_map` now resolves `auto` to concrete modes, shapes navigation/selector/detail/full payloads differently, returns budget metadata, truncates oversized maps with `suggestedNarrowing`, and emits `suggestedNextCalls` for navigation-to-selector and selector-to-symbol flows. Source-map files now carry hash, length, and diagnostic summaries where available. Symbols now expose richer metadata for selector/detail/full modes, filter legacy AI-history attributes from the map only, and collapse WinForms designer/render-plumbing noise with explicit elision markers instead of silently dropping it. `get_symbol` now reports `sourceKind = working-candidate`, matching its monitor-owned Working-file behavior. Raw `.razor` markup remains an explicit unsupported boundary for Roslyn source maps; `.razor.cs` remains covered as C#.
+- Proof added: Workflow/Roslyn unit tests cover auto mode, mode shaping, oversized truncation, AI-attribute filtering, WinForms designer elision, and `get_symbol` Working-candidate source behavior. MCP smoke proves mode metadata, selector next-call guidance, full-project truncation guidance, and `sourceKind` through the real MCP server adapter.
 
 MCP exposure:
 
@@ -251,18 +308,6 @@ MCP exposure:
 CLI exposure:
 
 - Only expose source-map knobs in CLI if the CLI already has or needs a source-map diagnostic command.
-
-Tests:
-
-- WinForms designer fixture: default/navigation map collapses designer noise and keeps user members.
-- Razor fixture: generated render plumbing is collapsed and `.razor.cs`/user-authored code remains visible.
-- AI-attribute fixture: noisy AI attributes are filtered or collapsed without hiding real user attributes.
-- Mode test: `navigation` and `selector` are smaller than `full` and omit/collapse expected generated details.
-- Budget test: oversized map truncates with explicit marker and suggested narrowing.
-- MCP smoke: `get_source_map(mode=navigation)` and `get_source_map(mode=full)` produce observably different payloads.
-- `auto` mode test proving it resolves to a concrete mode.
-- File metadata test proving hash/length/diagnostic summary is present when available.
-- `get_symbol` test proving the chosen source-of-truth behavior is explicit.
 
 ## Phase 4 - Roslyn Outline And Tool Guidance
 
@@ -312,6 +357,10 @@ Tests:
 - Guidance test that fails if staging guide omits validation, WinMerge, record-decision, or post-accept index refresh.
 - Tool-manifest test that proves actual tool names and safety notes are present.
 
+Progress:
+
+- 2026-06-02: Phase 4 restored. `get_file_outline` was already Roslyn-backed and tested. `get_tool_manifest` now reflects the live MCP tool methods and emits per-tool names, descriptions, parameters, and safety notes instead of returning generic architecture prose. `get_staging_guide` now returns the current safe-edit sequence, including refresh/new, Working edits, source-map/symbol targeting, staging, pre-merge validation, WinMerge review, `record_diff_decision`, and post-accept `indexRefresh`. MCP smoke verifies the guidance contains the expected tool names and safety terms.
+
 ## Phase 5 - Self-Check Truthfulness And Guardrails
 
 Owns:
@@ -344,6 +393,10 @@ Tests:
 - Guardrail service test for deliberate path collision.
 - MCP smoke that proves `get_self_check` reports real checks or honestly reports unavailable checks.
 - Description/contract test if practical: no description claims unsupported guardrails.
+
+Progress:
+
+- 2026-06-02: Phase 5 restored in the MCP support layer. `get_self_check` now returns typed guardrail rows and an `overallStatus` instead of a fixed safety summary. Checks cover configured roots, watched solution/project existence, runtime/Working/History/Staged placement, diff-tool availability, and runtime-under-watched-source collision detection. MCP smoke deliberately places runtime under watched source and verifies the failed guardrail row and failed overall status.
 
 ## Phase 6 - Per-Edit Feedback And Structured Edit Results
 

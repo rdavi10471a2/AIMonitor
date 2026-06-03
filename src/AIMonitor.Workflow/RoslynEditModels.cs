@@ -28,7 +28,8 @@ public sealed record RoslynSymbolReadResult(
     string Name,
     int StartLine,
     int EndLine,
-    string Text);
+    string Text,
+    string SourceKind = "working-candidate");
 
 public sealed record RoslynSourceMapResult(
     string Scope,
@@ -38,33 +39,77 @@ public sealed record RoslynSourceMapResult(
     string? RequestedNamespace,
     int FileCount,
     int SymbolCount,
-    IReadOnlyList<RoslynSourceMapFile> Files);
+    IReadOnlyList<RoslynSourceMapFile> Files,
+    long EstimatedTokenProxy = 0,
+    int BudgetLimit = 0,
+    bool WasTruncated = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? WatchedProjectAlias = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? WatchedProjectFolder = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<RoslynSourceMapNarrowingSuggestion>? SuggestedNarrowing = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<RoslynSourceMapNextCall>? SuggestedNextCalls = null);
 
 public sealed record RoslynSourceMapFile(
-    string SourceFilePath,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SourceFilePath,
     string RelativePath,
     string ParseStatus,
     int DiagnosticCount,
-    IReadOnlyList<string> Usings,
-    IReadOnlyList<string> Namespaces,
-    IReadOnlyList<RoslynSourceMapSymbol> Symbols);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? Usings,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? Namespaces,
+    IReadOnlyList<RoslynSourceMapSymbol> Symbols,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Sha256 = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Length = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<RoslynSourceMapDiagnostic>? DiagnosticsSummary = null);
+
+public sealed record RoslynSourceMapDiagnostic(
+    string Id,
+    string Severity,
+    string Message,
+    int StartLine,
+    int EndLine);
 
 public sealed record RoslynSourceMapSymbol(
     string Kind,
     string Name,
-    string StableSymbolKey,
-    string Signature,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? StableSymbolKey,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Signature,
     string? Namespace,
     string? ContainingType,
     int StartLine,
     int EndLine,
-    string TextHash,
-    IReadOnlyList<string> Modifiers,
-    string? ReturnType,
-    IReadOnlyList<string> ParameterTypes,
-    IReadOnlyList<string> ParameterNames,
-    int Arity,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SyntaxKind = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TextHash,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? Modifiers,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ReturnType,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? ParameterTypes,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? ParameterNames,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Arity,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SyntaxKind = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? BaseTypes = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<RoslynSourceMapAttribute>? Attributes = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? HasDocumentation = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? HasAttributes = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? IsStatic = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? IsAsync = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? IsOverride = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? IsVirtual = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? IsPartial = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? IsElided = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ElisionReason = null);
+
+public sealed record RoslynSourceMapAttribute(
+    string Name,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? Arguments = null);
+
+public sealed record RoslynSourceMapNarrowingSuggestion(
+    string RelativePath,
+    string Reason,
+    int SymbolCount,
+    int DiagnosticCount);
+
+public sealed record RoslynSourceMapNextCall(
+    int Rank,
+    string Tool,
+    string Reason,
+    IReadOnlyDictionary<string, string> Arguments);
 
 public sealed record RoslynFileOutlineResult(
     string SourceFilePath,

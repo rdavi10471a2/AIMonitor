@@ -58,8 +58,9 @@ The items below are the hand-verified restore set from the finding. They are saf
 
 - **Owner:** Core/Runtime or MCP shared support
 - **Adapter surface:** MCP `get_self_check`
-- **Current status:** Stub/misleading
+- **Current status:** Restored in MCP support
 - **Required proof:** Either run guardrail/collision checks or change tool description/result so it does not claim them.
+- **Proof added:** `get_self_check` now returns `overallStatus` and typed `guardrails` with passed/warning/failed statuses for configured roots, runtime/Working/History/Staged placement, watched source existence, diff-tool availability, and runtime-under-watched-source collisions. MCP smoke creates a deliberate runtime-under-watched-source collision and verifies a failed guardrail row.
 
 ### CMB-PARITY-005 — Index Staleness And Counts
 
@@ -89,15 +90,17 @@ The items below are the hand-verified restore set from the finding. They are saf
 
 - **Owner:** Workflow/Roslyn
 - **Adapter surface:** MCP source-map tool, CLI if exposed
-- **Current status:** Missing
+- **Current status:** Restored for the C# Roslyn source-map surface
 - **Required proof:** Modes actually shape payload; over-budget maps report explicit truncation/narrowing.
+- **Proof added:** `RoslynEditService.GetSourceMap` resolves `auto` to concrete modes, shapes navigation/selector/detail/full payloads, returns `estimatedTokenProxy`/`budgetLimit`/`wasTruncated`, truncates oversized payloads with `suggestedNarrowing`, and emits `suggestedNextCalls`. Workflow unit tests prove mode shaping and truncation; MCP smoke proves mode metadata, selector next-call guidance, and full-project truncation through the server adapter.
 
 ### CMB-PARITY-009 — WinForms/Razor Source-Map Noise Filter
 
 - **Owner:** Workflow/Roslyn
 - **Adapter surface:** MCP source-map tool, CLI if exposed
-- **Current status:** Missing
+- **Current status:** Restored for C# / `.razor.cs`; raw `.razor` markup remains an explicit boundary
 - **Required proof:** Generated/designer noise is collapsed with visible elision markers; full/detail override can include generated members.
+- **Proof added:** Source-map symbols now filter legacy AI-history attributes from the map only, preserve useful attributes such as `AIFileContext` and `FileVersion`, and mark WinForms designer plumbing with explicit `isElided`/`elisionReason` fields. Workflow unit tests prove AI-attribute filtering and designer elision. Raw `.razor` requests continue to return explicit MCP guidance to use text/file workflow tools or `.razor.cs` for Roslyn.
 
 ### CMB-PARITY-010 — Roslyn-Backed File Outline
 
@@ -119,8 +122,9 @@ The items below are the hand-verified restore set from the finding. They are saf
 
 - **Owner:** Docs/MCP
 - **Adapter surface:** MCP guidance tools
-- **Current status:** Thin
+- **Current status:** Restored in MCP support
 - **Required proof:** Tool manifest and staging guide are composed from current shipped docs/tool contracts, not generic architecture prose.
+- **Proof added:** `get_tool_manifest` now reflects over live MCP tool methods and emits per-tool names, descriptions, and parameters plus safety notes. `get_staging_guide` now returns a current safe-edit sequence covering refresh/new, Working edits, source-map/symbol targeting, staging, pre-merge validation, WinMerge review, record decision, and post-accept index refresh. MCP smoke verifies the expected tool names and workflow safety terms.
 
 ## Larger Inventory Categories
 
