@@ -456,6 +456,8 @@ Progress:
 
 ## Phase 7 - Monitor History, Runs, And Prune Policy
 
+Status: Deferred by operator decision on 2026-06-03.
+
 Owns:
 
 - High appendix: `get_monitor_run` last-500/case-sensitive behavior.
@@ -491,7 +493,13 @@ Tests:
 - Prune command test proves either explicit archive/prune behavior or honest intentional no-op response.
 - Documentation decision updated if archival remains intentionally deferred.
 
+Progress:
+
+- 2026-06-03: Deferred as a future feature. `prune_monitor_history` should continue to be honest about no-op behavior rather than pretending CMB archival was restored. Adapter-resident history reads are accepted as low-impact until Phase 7 is intentionally reopened. See `CmbMcpCapabilityParity.md` tracked deferrals and `docs/findings/Phase8HarnessClosureReview-2026-06-03.md`.
+
 ## Phase 8 - Final Parity Closure
+
+Status: Completed for current scope on 2026-06-03, with tracked deferrals.
 
 Purpose: prove there are no hidden missing/high/medium parity losses left.
 
@@ -519,6 +527,10 @@ Final test gate:
   - failed pre-merge validation with human override path.
 - Live WinForms telemetry check for at least one MCP workflow run after the parity changes.
 
+Progress:
+
+- 2026-06-03: Closure review recorded parity restore as passed for CMB-PARITY-001 through CMB-PARITY-012 and the missing/high/medium appendix scope, with Phase 7, HIGH-2 monitor-session service extraction, MEDIUM-1 self-check service extraction, and degraded-low tail items explicitly tracked as deferrals. The live safety gap for native Claude watched-source writes was closed with the watched-source guard hook/setup step.
+
 ## Suggested Execution Order
 
 1. Phase 0: parity harness and failing/skipped tests.
@@ -528,8 +540,8 @@ Final test gate:
 5. Phase 4: outline and guidance. Lower risk and improves Claude usability quickly.
 6. Phase 5: self-check truthfulness. Small but important because lying tool descriptions are poisonous.
 7. Phase 6: per-edit feedback. Useful, but lower safety urgency than the hard pre-merge gate.
-8. Phase 7: monitor history/prune policy.
-9. Phase 8: final parity closure and external review.
+8. Phase 7: monitor history/prune policy. Deferred by operator decision.
+9. Phase 8: final parity closure and external review. Completed for current scope with tracked deferrals.
 
 ## Done Definition
 
