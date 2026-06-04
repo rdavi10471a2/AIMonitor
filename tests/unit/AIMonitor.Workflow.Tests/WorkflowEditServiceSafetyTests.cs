@@ -6,6 +6,42 @@ namespace AIMonitor.Workflow.Tests;
 public sealed class WorkflowEditServiceSafetyTests
 {
     [Fact]
+    public void Refresh_creates_exact_retrieval_backup_before_working_candidate()
+    {
+        WorkflowFixture fixture = CreateFixture();
+        WorkflowEditService service = new(fixture.Settings);
+        byte[] watchedBytes = "namespace Example { internal static class Program { public static string Value => \"watched\"; } }"u8.ToArray();
+        File.WriteAllBytes(fixture.ProgramFilePath, watchedBytes);
+
+        EditSessionStatus refresh = service.Refresh(fixture.ProgramFilePath);
+
+        Assert.False(string.IsNullOrWhiteSpace(refresh.LastRetrievalBackupPath));
+        Assert.True(File.Exists(refresh.LastRetrievalBackupPath));
+        Assert.StartsWith(fixture.Settings.RuntimeRoot, refresh.LastRetrievalBackupPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(Path.Combine("retrieval-backups", "Program.cs"), refresh.LastRetrievalBackupPath, StringComparison.OrdinalIgnoreCase);
+        Assert.EndsWith(".cs.bak", refresh.LastRetrievalBackupPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(watchedBytes, File.ReadAllBytes(refresh.LastRetrievalBackupPath));
+        Assert.Equal(refresh.OriginalHash, refresh.LastRetrievalBackupHash);
+        Assert.False(string.IsNullOrWhiteSpace(refresh.LastRetrievalBackupAtUtc));
+    }
+
+    [Fact]
+    public void NewFile_does_not_create_retrieval_backup()
+    {
+        WorkflowFixture fixture = CreateFixture();
+        WorkflowEditService service = new(fixture.Settings);
+        string newFilePath = Path.Combine(Path.GetDirectoryName(fixture.ProgramFilePath)!, "Generated.cs");
+
+        EditSessionStatus newFile = service.NewFile(newFilePath);
+
+        Assert.True(string.IsNullOrWhiteSpace(newFile.LastRetrievalBackupPath));
+        Assert.True(string.IsNullOrWhiteSpace(newFile.LastRetrievalBackupHash));
+        Assert.False(Directory.Exists(Path.Combine(
+            MonitorWorkspacePaths.GetWatchedSolutionWorkspaceRoot(fixture.Settings),
+            "retrieval-backups")));
+    }
+
+    [Fact]
     public void Accepted_decision_requires_recorded_premerge_validation()
     {
         WorkflowFixture fixture = CreateFixture();

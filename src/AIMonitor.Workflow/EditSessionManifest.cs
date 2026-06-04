@@ -20,6 +20,12 @@ public sealed class EditSessionManifest
 
     public string RefreshedAtUtc { get; set; } = string.Empty;
 
+    public string LastRetrievalBackupPath { get; set; } = string.Empty;
+
+    public string LastRetrievalBackupHash { get; set; } = string.Empty;
+
+    public string LastRetrievalBackupAtUtc { get; set; } = string.Empty;
+
     public string LastDecision { get; set; } = string.Empty;
 
     public string LastDecisionAtUtc { get; set; } = string.Empty;

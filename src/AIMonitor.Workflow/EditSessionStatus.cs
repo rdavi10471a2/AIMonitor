@@ -22,6 +22,12 @@ public sealed class EditSessionStatus
 
     public string OriginalHash { get; set; } = string.Empty;
 
+    public string LastRetrievalBackupPath { get; set; } = string.Empty;
+
+    public string LastRetrievalBackupHash { get; set; } = string.Empty;
+
+    public string LastRetrievalBackupAtUtc { get; set; } = string.Empty;
+
     public string StagedHash { get; set; } = string.Empty;
 
     public string WatchedHash { get; set; } = string.Empty;

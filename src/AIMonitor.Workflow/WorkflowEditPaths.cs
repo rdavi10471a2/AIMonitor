@@ -30,6 +30,10 @@ public sealed class WorkflowEditPaths
         "workflow",
         "staged");
 
+    public string RetrievalBackupsRoot => Path.Combine(
+        MonitorWorkspacePaths.GetWatchedSolutionWorkspaceRoot(Settings),
+        "retrieval-backups");
+
     public string StagedRecordsRoot => Path.Combine(StagedRoot, "records");
 
     public string GetRelativeWatchedPath(string watchedFilePath)
@@ -48,6 +52,11 @@ public sealed class WorkflowEditPaths
     public string GetWorkingFilePath(string watchedFilePath)
     {
         return Path.Combine(WorkingRoot, GetRelativeWatchedPath(watchedFilePath));
+    }
+
+    public string GetRetrievalBackupDirectory(string watchedFilePath)
+    {
+        return Path.Combine(RetrievalBackupsRoot, GetRelativeWatchedPath(watchedFilePath));
     }
 
     public string GetMetadataPath(string watchedFilePath)

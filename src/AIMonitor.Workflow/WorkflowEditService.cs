@@ -32,8 +32,11 @@ public sealed class WorkflowEditService
             throw new FileNotFoundException("Watched file was not found.", fullWatchedPath);
         }
 
-        string workingFilePath = paths.GetWorkingFilePath(fullWatchedPath);
         EditSessionManifest? previousManifest = LoadManifest(fullWatchedPath);
+        string originalHash = FileHash.Compute(fullWatchedPath);
+        DateTimeOffset refreshedAtUtc = DateTimeOffset.UtcNow;
+        string retrievalBackupPath = CreateRetrievalBackup(fullWatchedPath, originalHash, refreshedAtUtc);
+        string workingFilePath = paths.GetWorkingFilePath(fullWatchedPath);
         Directory.CreateDirectory(Path.GetDirectoryName(workingFilePath) ?? ".");
         File.Copy(fullWatchedPath, workingFilePath, overwrite: true);
 
@@ -42,11 +45,14 @@ public sealed class WorkflowEditService
             WatchedFilePath = fullWatchedPath,
             WorkingFilePath = workingFilePath,
             RelativePath = paths.GetRelativeWatchedPath(fullWatchedPath),
-            OriginalHash = FileHash.Compute(fullWatchedPath),
+            OriginalHash = originalHash,
             OriginalNormalizedHash = FileHash.ComputeNormalizedFile(fullWatchedPath),
             RequiresRefresh = false,
             IndexStale = previousManifest?.IndexStale ?? false,
-            RefreshedAtUtc = DateTimeOffset.UtcNow.ToString("O")
+            RefreshedAtUtc = refreshedAtUtc.ToString("O"),
+            LastRetrievalBackupPath = retrievalBackupPath,
+            LastRetrievalBackupHash = originalHash,
+            LastRetrievalBackupAtUtc = refreshedAtUtc.ToString("O")
         };
         SaveManifest(fullWatchedPath, manifest);
         return GetStatus(fullWatchedPath);
@@ -84,6 +90,24 @@ public sealed class WorkflowEditService
         return GetStatus(fullWatchedPath);
     }
 
+    private string CreateRetrievalBackup(string fullWatchedPath, string originalHash, DateTimeOffset capturedAtUtc)
+    {
+        string backupDirectory = paths.GetRetrievalBackupDirectory(fullWatchedPath);
+        Directory.CreateDirectory(backupDirectory);
+
+        string extension = Path.GetExtension(fullWatchedPath);
+        string hashPrefix = originalHash.Length >= 12 ? originalHash[..12] : originalHash;
+        string timestamp = capturedAtUtc.UtcDateTime.ToString("yyyyMMdd-HHmmssfff'Z'");
+        string uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
+        string backupFileName = string.IsNullOrWhiteSpace(extension)
+            ? $"{timestamp}-{hashPrefix}-{uniqueSuffix}.bak"
+            : $"{timestamp}-{hashPrefix}-{uniqueSuffix}{extension}.bak";
+        string backupPath = Path.Combine(backupDirectory, backupFileName);
+
+        File.Copy(fullWatchedPath, backupPath, overwrite: false);
+        return backupPath;
+    }
+
     public EditSessionStatus GetStatus(string watchedFilePath)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
@@ -102,6 +126,9 @@ public sealed class WorkflowEditService
             RequiresRefresh = manifest?.RequiresRefresh ?? false,
             IndexStale = manifest?.IndexStale ?? false,
             OriginalHash = manifest?.OriginalHash ?? string.Empty,
+            LastRetrievalBackupPath = manifest?.LastRetrievalBackupPath ?? string.Empty,
+            LastRetrievalBackupHash = manifest?.LastRetrievalBackupHash ?? string.Empty,
+            LastRetrievalBackupAtUtc = manifest?.LastRetrievalBackupAtUtc ?? string.Empty,
             LastDecision = manifest?.LastDecision ?? string.Empty,
             LastDecisionAtUtc = manifest?.LastDecisionAtUtc ?? string.Empty,
             LastCompareRunId = manifest?.LastCompareRunId ?? string.Empty,

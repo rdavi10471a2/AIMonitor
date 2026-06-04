@@ -68,6 +68,8 @@ MCP parity is a contract surface. When a CMB/MonitorBaseClaude capability still 
 
 Post-accept index refresh is part of the safety boundary. Accepted or accepted-normalized decisions mark the file's workflow session as index-stale until a rebuild succeeds. If a rebuild fails, the decision may still be durable, but the operator/agent must not trust index rows until `refresh_solution_index` or an equivalent rebuild succeeds. A successful full rebuild clears stale workflow flags for the watched workspace so the documented recovery path is self-healing.
 
+Existing-file refresh captures a retrieval backup before updating the monitor-owned Working candidate. The backup is exact watched-source bytes, lives under the runtime watched-solution workspace, and is only a recovery/safety aid; it does not affect staging, validation, WinMerge review, or decision classification.
+
 Index rebuilds must not destroy a useful index with a degraded empty load. A zero-project snapshot is allowed only when there was no populated index to preserve; otherwise the swap aborts before clearing existing rows and surfaces a failed refresh.
 
 ## Local Composition Contract
