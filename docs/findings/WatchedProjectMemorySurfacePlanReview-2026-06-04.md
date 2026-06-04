@@ -58,6 +58,34 @@ publish-time human review is the *only* protection that agent will ever have. Co
 - **Name the feedback loop as the central risk** (generated guidance steering future generation), not just an Option-B
   con. Provenance markers + mandatory publish review are the right mitigations; the plan has them — call the loop out.
 
+## Storage flaw: the virtual memory workspace is gitignored / unbacked
+
+The plan stores virtual memory under `runtime/watched-solutions/<solution-id>/memory/...` (plan lines 195-201) and
+makes authoring there the default (Option A / Phase 1). But `runtime/` is **gitignored** (`.gitignore` → `runtime/`)
+because it was designed for **ephemeral, regenerable** state — indexes, Working candidates, logs — disposable by design
+and intentionally excluded from version control.
+
+Virtual memory is the opposite of that: **durable, curated content**, including hand-authored `Human Notes`, that
+represents real intellectual work and is meant to persist and be shared. Storing it under `runtime/` means it:
+
+- has **no off-machine backup** (disk loss = every unpublished draft and Human Note is gone — and publish is gated
+  behind human review, so valuable drafts can sit unpublished and unbacked for a long time);
+- is **not shareable** between machines or people before publish;
+- inherits **"disposable / regenerable" semantics it does not deserve** — a `runtime/` clean could wipe it.
+
+The plan elevates authoring-in-the-unbacked-area to a near-requirement, so it institutionalizes an unbacked store for
+the one content type that can least afford it. This **stacks with the no-objective-gate point above**: memory is the
+single artifact that is neither mechanically validatable (no build/test) **nor** (as planned) backed up.
+
+**Recommendation — decide this in Phase 0, before Phase 1 builds on the runtime path:** give the memory workspace a
+**persisted, version-controlled store distinct from `runtime/`'s disposable state**. Options: (a) a committed memory
+location (e.g. a tracked `memory/` per solution, or under a non-ignored path) so drafts are backed up and shareable
+*before* publish; (b) have the structured-memory store (records + Markdown projections) write to a backed/synced store
+rather than ephemeral runtime. The principle: **durable curated memory must not inherit ephemeral-runtime persistence
+semantics.** (Related, operator-owned: the watched solution itself is a local git repo with checkpoint commits but no
+remote — a separate backup gap. The memory feature should define its own persistence/backup contract rather than
+assuming the runtime area is safe to keep authored work in.)
+
 ## Smaller flags
 
 - **Host duplication (`CLAUDE.md` vs `AGENTS.md`):** resolve the open question toward one structured source projected to
