@@ -86,6 +86,34 @@ semantics.** (Related, operator-owned: the watched solution itself is a local gi
 remote — a separate backup gap. The memory feature should define its own persistence/backup contract rather than
 assuming the runtime area is safe to keep authored work in.)
 
+## Candidate resolution — docs-only branch (UNDER CONSIDERATION, not decided)
+
+Operator idea (2026-06-04, still being thought through): **each watched solution carries a docs-only branch** (e.g.
+`aimonitor-memory`) that gets pushed. The virtual memory lives on that branch instead of in gitignored `runtime/`. This
+is better than a backup patch — it upgrades the plan's virtual-first storage layer: the branch becomes a **backed,
+versioned, co-located virtual store** replacing the disposable runtime workspace. It solves backup (it's pushed),
+co-location (memory travels with the solution it describes — serves the self-describing north-star), build-isolation
+(a separate branch never touches `master`/the build/checkpoint flow), and gives git-native diffable history.
+
+Things to settle before adopting it:
+
+1. **A branch isolates the *build* risk, not the *steering* risk.** A docs branch guarantees bad memory can't break the
+   app (never merged, never built) — but memory's real danger is misguiding future agents, which has no objective gate
+   on any branch. So the docs branch does **not** license skipping human review of memory *content*, especially docs
+   the no-monitor agent will read. "It's just a docs branch" must not become "so don't review it."
+2. **The north-star wants the *published* docs in `master`, not the docs branch.** A normal no-monitor checkout sees
+   `master`, not `aimonitor-memory`. So host-discoverable folder docs (`src/X/AGENTS.md`) must land in the main tree.
+   Clean two-stage shape, mapping onto the plan's virtual→publish: **docs branch = backed virtual/draft store**
+   (low-friction, build-isolated, backed); **main-tree folder docs = reviewed, host-discoverable published end-state.**
+   "Virtual" becomes a real backed branch; "publish" becomes a branch→tree promotion.
+3. **Depends on the watched repo having a remote** (currently it has local checkpoint commits but no remote). Fixing the
+   watched-repo backup gap and backing the memory are then the same fix.
+4. **Mechanics (Phase 0):** worktree vs separate clone for the docs branch; and does committing to the docs branch run
+   through the safe-edit floor, or is it the legitimate lower-friction zone (quarantined from source) with the reviewed
+   gate applied at publish-to-`master`? Likely the latter for drafts.
+
+Status: operator is weighing this; recorded as the leading candidate to resolve the storage flaw, not yet a decision.
+
 ## Smaller flags
 
 - **Host duplication (`CLAUDE.md` vs `AGENTS.md`):** resolve the open question toward one structured source projected to
