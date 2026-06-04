@@ -25,7 +25,19 @@
       "Bash(git -C c:/VSCodeProjects/AIMonitor commit -q -m 'Add finding: workflow cost + no incremental rebuild \\(live test\\) *)",
       "Bash(git -C \"c:/VSCodeProjects/AIMonitor\" pull --rebase -q origin main)",
       "Bash(git -C \"c:/VSCodeProjects/AIMonitor\" push origin main)",
-      "PowerShell(dotnet build \"C:\\\\Schema Studio - DBV2\\\\SchemaStudio.csproj\" -c Debug -v minimal 2>&1)"
+      "PowerShell(dotnet build \"C:\\\\Schema Studio - DBV2\\\\SchemaStudio.csproj\" -c Debug -v minimal 2>&1)",
+      "Read(//c/VSCodeProjects/MonitorBaseClaude/**)",
+      "Bash(xargs grep -l \"class MonitorCandidateEditResult\\\\|record MonitorCandidateEditResult\")",
+      "Bash(xargs grep -l \"class RoslynEditResult\\\\|record RoslynEditResult\")",
+      "Bash(echo \"=== razor files in watched solution \\(proves Blazor\\) ===\"; find \"C:/SchemaStudioWebViewer V 1.1 - Monitor\" -name \"*.razor\" 2>/dev/null | head -8; echo \"=== count cs vs razor ===\"; echo \"cs: $\\(find 'C:/SchemaStudioWebViewer V 1.1 - Monitor' -name '*.cs' 2>/dev/null | grep -v -E '/obj/|/bin/' | wc -l\\)  razor: $\\(find 'C:/SchemaStudioWebViewer V 1.1 - Monitor' -name '*.razor' 2>/dev/null | grep -v -E '/obj/|/bin/' | wc -l\\)\"; echo \"=== sample .cs \\(non-gen\\) ===\"; find \"C:/SchemaStudioWebViewer V 1.1 - Monitor\" -name \"*.cs\" 2>/dev/null | grep -v -E '/obj/|/bin/' | head -5)",
+      "Read(//c/SchemaStudioWebViewer V 1.1 - Monitor/**)",
+      "Bash(dotnet test *)",
+      "Bash(grep -rln \"Supersede\\\\|superseded\\\\|EnsureRecordNotDecided\\\\|SupersededBy\" tests/)",
+      "Bash(ls tests/)",
+      "Bash(timeout 300 dotnet tests/smoke/AIMonitor.ToolSmokeTests/bin/Debug/net10.0/AIMonitor.ToolSmokeTests.dll --fixture-index-matrix)",
+      "Bash(dotnet run *)",
+      "Bash(Get-ChildItem -Recurse \"C:\\\\VSCodeProjects\\\\AIMonitor\\\\samples\\\\watched-solutions\\\\WorkflowHarnessSample\")",
+      "Bash(Select-Object FullName)"
     ],
     "deny": [
       "Edit(//c/Schema Studio - DBV2/**)",
@@ -33,5 +45,18 @@
       "NotebookEdit(//c/Schema Studio - DBV2/**)"
     ],
     "defaultMode": "bypassPermissions"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"$CLAUDE_PROJECT_DIR\\.claude\\hooks\\guard-watched-source.ps1\""
+          }
+        ]
+      }
+    ]
   }
 }
