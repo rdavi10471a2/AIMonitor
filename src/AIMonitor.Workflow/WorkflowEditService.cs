@@ -95,13 +95,13 @@ public sealed class WorkflowEditService
         string backupDirectory = paths.GetRetrievalBackupDirectory(fullWatchedPath);
         Directory.CreateDirectory(backupDirectory);
 
+        string fileNameWithoutExtension = MonitorWorkspacePaths.GetSafePathSegment(
+            Path.GetFileNameWithoutExtension(fullWatchedPath));
         string extension = Path.GetExtension(fullWatchedPath);
-        string hashPrefix = originalHash.Length >= 12 ? originalHash[..12] : originalHash;
         string timestamp = capturedAtUtc.UtcDateTime.ToString("yyyyMMdd-HHmmssfff'Z'");
-        string uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
         string backupFileName = string.IsNullOrWhiteSpace(extension)
-            ? $"{timestamp}-{hashPrefix}-{uniqueSuffix}.bak"
-            : $"{timestamp}-{hashPrefix}-{uniqueSuffix}{extension}.bak";
+            ? $"{fileNameWithoutExtension}_{timestamp}.bak"
+            : $"{fileNameWithoutExtension}_{timestamp}{extension}.bak";
         string backupPath = Path.Combine(backupDirectory, backupFileName);
 
         File.Copy(fullWatchedPath, backupPath, overwrite: false);
