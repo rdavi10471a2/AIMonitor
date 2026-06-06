@@ -97,6 +97,70 @@ public sealed class SolutionIndexQueryServiceTests
     }
 
     [Fact]
+    public void FindSymbols_scopes_qualified_member_text_to_containing_type()
+    {
+        string tempRoot = CreateTempRoot();
+        string watchedRoot = Path.Combine(tempRoot, "Watched");
+        string orderFilePath = Path.Combine(watchedRoot, "OrderRepository.cs");
+        string customerFilePath = Path.Combine(watchedRoot, "CustomerRepository.cs");
+        Directory.CreateDirectory(watchedRoot);
+        File.WriteAllText(orderFilePath, "namespace Example.Data { public sealed class OrderRepository { public void GetByIdAsync() { } } }");
+        File.WriteAllText(customerFilePath, "namespace Example.Data { public sealed class CustomerRepository { public void GetByIdAsync() { } } }");
+        MonitorSettings settings = MonitorSettings.Create(
+            tempRoot,
+            Path.Combine(watchedRoot, "Example.sln"),
+            Path.Combine(tempRoot, "runtime"));
+        SolutionIndexStore store = new(new SolutionIndexDatabase(MonitorDataPaths.GetDefaultIndexDatabasePath(settings)));
+        store.SaveSnapshot(new MSBuildSolutionSnapshot(
+            settings.WatchedSolutionPath,
+            [
+                new MSBuildProjectSnapshot(
+                    "project:example",
+                    "Example",
+                    Path.Combine(watchedRoot, "Example.csproj"),
+                    "C#",
+                    "net10.0",
+                    "",
+                    "Library",
+                    "Microsoft.NET.Sdk",
+                    "Example",
+                    "Example.Data",
+                    "enable",
+                    "enable",
+                    "latest",
+                    [
+                        new MSBuildDocumentSnapshot("document:order", "OrderRepository.cs", orderFilePath, [], ComputeFileHash(orderFilePath)),
+                        new MSBuildDocumentSnapshot("document:customer", "CustomerRepository.cs", customerFilePath, [], ComputeFileHash(customerFilePath))
+                    ],
+                    [
+                        new MSBuildSymbolSnapshot("symbol:order-type", "OrderRepository", "NamedType", "Example.Data", "", orderFilePath, 1, 1, "Example.Data.OrderRepository"),
+                        new MSBuildSymbolSnapshot("symbol:order-get", "GetByIdAsync", "Method", "Example.Data", "OrderRepository", orderFilePath, 1, 1, "Example.Data.OrderRepository.GetByIdAsync()"),
+                        new MSBuildSymbolSnapshot("symbol:customer-type", "CustomerRepository", "NamedType", "Example.Data", "", customerFilePath, 1, 1, "Example.Data.CustomerRepository"),
+                        new MSBuildSymbolSnapshot("symbol:customer-get", "GetByIdAsync", "Method", "Example.Data", "CustomerRepository", customerFilePath, 1, 1, "Example.Data.CustomerRepository.GetByIdAsync()")
+                    ],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [])
+            ],
+            []));
+        SolutionIndexQueryService service = SolutionIndexQueryService.Create(settings);
+
+        IndexedSymbolSearchResult broadResult = service.FindSymbols("GetByIdAsync", kind: "Method");
+        IndexedSymbolSearchResult qualifiedResult = service.FindSymbols("OrderRepository.GetByIdAsync", kind: "Method");
+        IndexedSymbolSearchResult explicitContainingTypeResult = service.FindSymbols("GetByIdAsync", kind: "Method", containingType: "Example.Data.CustomerRepository");
+
+        Assert.Equal(2, broadResult.TotalSymbolCount);
+        IndexedSymbolQueryItem qualifiedItem = Assert.Single(qualifiedResult.Symbols);
+        Assert.Equal("symbol:order-get", qualifiedItem.Symbol.StableKey);
+        IndexedSymbolQueryItem explicitItem = Assert.Single(explicitContainingTypeResult.Symbols);
+        Assert.Equal("symbol:customer-get", explicitItem.Symbol.StableKey);
+    }
+
+    [Fact]
     public void QueryIndex_uses_path_aware_folder_scope_and_clamps_limits()
     {
         string tempRoot = CreateTempRoot();
