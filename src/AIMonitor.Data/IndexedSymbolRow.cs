@@ -10,4 +10,11 @@ public sealed record IndexedSymbolRow(
     string FilePath,
     int StartLine,
     int EndLine,
-    string Signature);
+    string Signature,
+    string Accessibility = "",
+    bool IsStatic = false,
+    bool IsAbstract = false,
+    bool IsSealed = false,
+    bool IsVirtual = false,
+    bool IsOverride = false,
+    string MethodKind = "");

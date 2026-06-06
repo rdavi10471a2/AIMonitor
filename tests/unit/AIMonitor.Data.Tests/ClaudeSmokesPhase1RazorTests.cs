@@ -60,6 +60,8 @@ public sealed class ClaudeSmokesPhase1RazorTests
         Assert.NotEmpty(razorReferences);
         Assert.Contains(razorReferences, reference => reference.ReferenceKind == "razor:InvocationExpression");
         Assert.Contains(razorReferences, reference => reference.Snippet.Contains("Greet", StringComparison.Ordinal));
+        Assert.Contains(razorReferences, reference => reference.ReferenceKind == "razor-generated:IdentifierName"
+            && reference.Snippet.Contains("Model.Title", StringComparison.Ordinal));
 
         // (B) The razor references PERSIST through the production store mapped to the .razor path.
         string databasePath = Path.Combine(root, "index.sqlite");

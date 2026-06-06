@@ -116,7 +116,10 @@ public sealed class SolutionIndexStore
         command.CommandText = """
             select projects.project_path, symbols.stable_key, symbols.name, symbols.kind,
                    symbols.namespace, symbols.containing_type, symbols.file_path,
-                   symbols.start_line, symbols.end_line, symbols.signature
+                   symbols.start_line, symbols.end_line, symbols.signature,
+                   symbols.accessibility, symbols.is_static, symbols.is_abstract,
+                   symbols.is_sealed, symbols.is_virtual, symbols.is_override,
+                   symbols.method_kind
             from symbols
             inner join projects on projects.id = symbols.project_id
             order by symbols.file_path, symbols.start_line, symbols.name;
@@ -136,7 +139,14 @@ public sealed class SolutionIndexStore
                 reader.GetString(6),
                 reader.GetInt32(7),
                 reader.GetInt32(8),
-                reader.GetString(9)));
+                reader.GetString(9),
+                reader.GetString(10),
+                reader.GetInt32(11) != 0,
+                reader.GetInt32(12) != 0,
+                reader.GetInt32(13) != 0,
+                reader.GetInt32(14) != 0,
+                reader.GetInt32(15) != 0,
+                reader.GetString(16)));
         }
 
         return rows;
@@ -522,9 +532,13 @@ public sealed class SolutionIndexStore
         {
             Execute(connection, transaction, """
                 insert into symbols(project_id, stable_key, name, kind, namespace, containing_type,
-                                    file_path, start_line, end_line, signature)
+                                    file_path, start_line, end_line, signature, accessibility,
+                                    is_static, is_abstract, is_sealed, is_virtual, is_override,
+                                    method_kind)
                 values ($projectId, $stableKey, $name, $kind, $namespace, $containingType,
-                        $filePath, $startLine, $endLine, $signature);
+                        $filePath, $startLine, $endLine, $signature, $accessibility,
+                        $isStatic, $isAbstract, $isSealed, $isVirtual, $isOverride,
+                        $methodKind);
                 """,
                 ("$projectId", projectId),
                 ("$stableKey", symbol.StableKey),
@@ -535,7 +549,14 @@ public sealed class SolutionIndexStore
                 ("$filePath", symbol.FilePath),
                 ("$startLine", symbol.StartLine),
                 ("$endLine", symbol.EndLine),
-                ("$signature", symbol.Signature));
+                ("$signature", symbol.Signature),
+                ("$accessibility", symbol.Accessibility),
+                ("$isStatic", symbol.IsStatic ? 1 : 0),
+                ("$isAbstract", symbol.IsAbstract ? 1 : 0),
+                ("$isSealed", symbol.IsSealed ? 1 : 0),
+                ("$isVirtual", symbol.IsVirtual ? 1 : 0),
+                ("$isOverride", symbol.IsOverride ? 1 : 0),
+                ("$methodKind", symbol.MethodKind));
         }
     }
 

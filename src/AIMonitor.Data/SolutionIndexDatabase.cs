@@ -88,9 +88,23 @@ public sealed class SolutionIndexDatabase
                 file_path text not null,
                 start_line integer not null,
                 end_line integer not null,
-                signature text not null
+                signature text not null,
+                accessibility text not null default '',
+                is_static integer not null default 0,
+                is_abstract integer not null default 0,
+                is_sealed integer not null default 0,
+                is_virtual integer not null default 0,
+                is_override integer not null default 0,
+                method_kind text not null default ''
             );
             """);
+        AddColumnIfMissing(connection, transaction, "symbols", "accessibility", "text not null default ''");
+        AddColumnIfMissing(connection, transaction, "symbols", "is_static", "integer not null default 0");
+        AddColumnIfMissing(connection, transaction, "symbols", "is_abstract", "integer not null default 0");
+        AddColumnIfMissing(connection, transaction, "symbols", "is_sealed", "integer not null default 0");
+        AddColumnIfMissing(connection, transaction, "symbols", "is_virtual", "integer not null default 0");
+        AddColumnIfMissing(connection, transaction, "symbols", "is_override", "integer not null default 0");
+        AddColumnIfMissing(connection, transaction, "symbols", "method_kind", "text not null default ''");
 
         Execute(connection, transaction, """
             create table if not exists symbol_references (
