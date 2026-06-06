@@ -51,7 +51,14 @@ public sealed class SolutionIndexStoreTests
                             @"C:\Example\Program.cs",
                             5,
                             7,
-                            "Example.Program.GetValue()"),
+                            "Example.Program.GetValue()",
+                            "Public",
+                            false,
+                            false,
+                            false,
+                            true,
+                            false,
+                            "Ordinary"),
                         new MSBuildSymbolSnapshot(
                             "symbol:target-method",
                             "TargetMethod",
@@ -114,6 +121,11 @@ public sealed class SolutionIndexStoreTests
         Assert.Equal("project:test", projects[0].StableKey);
         Assert.Equal("net10.0", projects[0].TargetFramework);
         Assert.Equal(3, symbols.Count);
+        IndexedSymbolRow getValue = Assert.Single(symbols, symbol => symbol.StableKey == "symbol:get-value");
+        Assert.Equal("Public", getValue.Accessibility);
+        Assert.True(getValue.IsVirtual);
+        Assert.False(getValue.IsSealed);
+        Assert.Equal("Ordinary", getValue.MethodKind);
         Assert.Contains(references, reference => reference.ReferenceKind == "IdentifierName");
         Assert.Contains(references, reference => reference.ReferenceKind == "partial_declaration");
         IndexedCallSiteRow callSite = Assert.Single(callSites);

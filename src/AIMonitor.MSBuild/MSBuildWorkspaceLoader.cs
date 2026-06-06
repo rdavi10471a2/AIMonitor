@@ -323,7 +323,14 @@ public sealed record MSBuildSymbolSnapshot(
     string FilePath,
     int StartLine,
     int EndLine,
-    string Signature);
+    string Signature,
+    string Accessibility = "",
+    bool IsStatic = false,
+    bool IsAbstract = false,
+    bool IsSealed = false,
+    bool IsVirtual = false,
+    bool IsOverride = false,
+    string MethodKind = "");
 
 public sealed record MSBuildReferenceSnapshot(
     string TargetStableKey,
@@ -806,6 +813,10 @@ internal sealed class ProjectSymbolIndex
                     continue;
                 }
 
+                string referenceKindPrefix = IsRazorCodeBlockMappedLine(mappedSpan.Path, mappedSpan.StartLinePosition.Line)
+                    ? "razor"
+                    : "razor-generated";
+
                 AddReference(
                     references,
                     referenceIdentities,
@@ -813,7 +824,7 @@ internal sealed class ProjectSymbolIndex
                     mappedSpan.Path,
                     mappedSpan.StartLinePosition.Line + 1,
                     mappedSpan.StartLinePosition.Character + 1,
-                    $"razor-generated:{node.Kind()}",
+                    $"{referenceKindPrefix}:{node.Kind()}",
                     GetFileLineSnippet(mappedSpan.Path, mappedSpan.StartLinePosition.Line));
             }
         }
@@ -1142,6 +1153,83 @@ internal sealed class ProjectSymbolIndex
             && !MSBuildWorkspaceLoader.PathHasIgnoredDirectory(mappedSpan.Path);
     }
 
+    private static bool IsRazorCodeBlockMappedLine(string filePath, int zeroBasedLine)
+    {
+        if (filePath.EndsWith(".razor.cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!filePath.EndsWith(".razor", StringComparison.OrdinalIgnoreCase) || !File.Exists(filePath))
+        {
+            return false;
+        }
+
+        string[] lines;
+        try
+        {
+            lines = File.ReadAllLines(filePath);
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (zeroBasedLine < 0 || zeroBasedLine >= lines.Length)
+        {
+            return false;
+        }
+
+        bool inCodeBlock = false;
+        int braceDepth = 0;
+        for (int lineIndex = 0; lineIndex <= zeroBasedLine; lineIndex++)
+        {
+            string line = lines[lineIndex];
+            int scanStart = 0;
+            if (!inCodeBlock)
+            {
+                int codeIndex = line.IndexOf("@code", StringComparison.Ordinal);
+                if (codeIndex < 0)
+                {
+                    continue;
+                }
+
+                inCodeBlock = true;
+                scanStart = codeIndex + "@code".Length;
+            }
+
+            for (int charIndex = scanStart; charIndex < line.Length; charIndex++)
+            {
+                if (line[charIndex] == '{')
+                {
+                    braceDepth++;
+                }
+                else if (line[charIndex] == '}')
+                {
+                    braceDepth--;
+                    if (braceDepth <= 0)
+                    {
+                        if (lineIndex == zeroBasedLine)
+                        {
+                            return true;
+                        }
+
+                        inCodeBlock = false;
+                        braceDepth = 0;
+                        break;
+                    }
+                }
+            }
+
+            if (lineIndex == zeroBasedLine)
+            {
+                return inCodeBlock;
+            }
+        }
+
+        return false;
+    }
+
     private static string GetFileLineSnippet(string filePath, int zeroBasedLine)
     {
         if (!File.Exists(filePath))
@@ -1233,7 +1321,14 @@ internal sealed class ProjectSymbolIndex
             filePath,
             span.StartLinePosition.Line + 1,
             span.EndLinePosition.Line + 1,
-            signature);
+            signature,
+            symbol.DeclaredAccessibility.ToString(),
+            symbol.IsStatic,
+            symbol.IsAbstract,
+            symbol.IsSealed,
+            symbol.IsVirtual,
+            symbol.IsOverride,
+            GetMethodKind(symbol));
     }
 
     private static MSBuildSymbolSnapshot CreateMappedSymbolSnapshot(
@@ -1257,7 +1352,21 @@ internal sealed class ProjectSymbolIndex
             filePath,
             span.StartLinePosition.Line + 1,
             span.EndLinePosition.Line + 1,
-            signature);
+            signature,
+            symbol.DeclaredAccessibility.ToString(),
+            symbol.IsStatic,
+            symbol.IsAbstract,
+            symbol.IsSealed,
+            symbol.IsVirtual,
+            symbol.IsOverride,
+            GetMethodKind(symbol));
+    }
+
+    private static string GetMethodKind(ISymbol symbol)
+    {
+        return symbol is IMethodSymbol method
+            ? method.MethodKind.ToString()
+            : string.Empty;
     }
 }
 
