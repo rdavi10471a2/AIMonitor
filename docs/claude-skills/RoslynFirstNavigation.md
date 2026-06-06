@@ -11,15 +11,17 @@ Use when a C# task mentions symbols, references, callers, implementations, diagn
 - Apply this per target file or edit cycle. Do not shortcut with "I already discovered this earlier" when the target file or coupled edit set changes.
 - Treat empty `find_indexed_references` / `find_indexed_callers` as a result to verify, not proof of absence, before API renames or signature changes.
 - Before writing a call site to a referenced type, load that type's real callable surface with `find_indexed_symbols`, `get_source_map`, or `get_symbol`.
+- For a **member**, query `find_indexed_symbols` with the qualified `Type.Member` text (or pass `containingType`) instead of the bare member name. The bare name substring-matches every homonym (e.g. `DatabaseId` resolves on 10 types, `GetByIdAsync` on 8), fanning out a large response; the qualified form binds to the one declaring type. This is a deliberate token optimization — prefer it for member navigation.
+- `find_indexed_references` returns the **lean** shape by default (omits `projectPath` and `fileContentHash` per row) to cut MCP token cost; pass `responseShape: "rich"` only when you actually need those fields. Lean is the right default for navigation.
 - If pre-merge validation diagnostics expose a missed call site, use text search only as a diagnostic fallback, then return to AIMonitor structure and stage the missed file in the same session.
 
 ## Usual Flow
 
 ```text
 query_solution_index
-find_indexed_symbols(text)
+find_indexed_symbols(text)                 # member? use "Type.Member" or containingType: to avoid homonym fanout
 get_indexed_symbol(stableSymbolKey)
-find_indexed_references(stableSymbolKey)
+find_indexed_references(stableSymbolKey)   # lean by default; responseShape: "rich" only if you need projectPath/fileContentHash
 find_indexed_callers(stableSymbolKey), when behavior/signature changes
 find_indexed_relationships(stableSymbolKey), when partials/inheritance/contracts may matter
 get_source_map(scope: "file", mode: "selector")

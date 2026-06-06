@@ -65,7 +65,30 @@ tokens = bytes / 4.
   total should fall and the "qualified returns 0" counter should drop toward ~0.
 - **Fix #2 (leaner reference rows)** shrinks the references payload, which dominates MCP cost for high-fanout symbols.
 
-**To produce the after-fix numbers:** with the fixes merged, rebuild and rerun
-`dotnet test tests/unit/AIMonitor.Data.Tests/AIMonitor.Data.Tests.csproj --filter FullCoverage_mcp_vs_grep_token_baseline`,
-then diff `runtime/token-benchmark/baseline-summary.txt` against this baseline. Because the harness calls the real
-query path, the fixes are reflected automatically with no harness edits.
+## After fixes (commit e185fb5) — MEASURED
+
+Both fixes merged; identical harness rebuilt + rerun (only harness change: mirror the tool's new default **lean**
+reference shape, since fix #2 trims in the tool layer the harness bypasses). All 2,688 symbols:
+
+| metric | before | after | Δ |
+|---|--:|--:|--:|
+| MCP total tokens | 8,376,909 | 4,346,062 | **−48%** (nearly halved) |
+| aggregate grep-full / MCP | 20.0× | 38.6× | ~2× |
+| aggregate grep-min / MCP | 5.8× | 11.1× | ~2× |
+| median per-symbol full ratio | 17.8× | 32.0× | |
+| MCP cheaper than grep-full | 95.6% | 96.3% | |
+| MCP cheaper than grep-min | 75.0% | 91.0% | |
+| members forcing homonym fallback | 2,533 (100%) | 91 (3.6%) | fix #1 resolved 96.4% |
+
+- **Fix #1 (qualified `Type.Member` lookup)** cut forced-homonym fallbacks 2,533 → 91; a `Name` member dropped from
+  ~30k tok to ~289 tok.
+- **Fix #2 (lean reference rows)** trimmed `projectPath` + `fileContentHash` from every row (now default
+  `responseShape: "lean"`).
+- **Combined: MCP context cost ~halved, advantage ~doubled.** Conservative floor (vs grep's candidate view) is now
+  11× aggregate, MCP winning 91% of symbols outright.
+- **Residual:** 91 members (3.6%) still fall back — qualified lookup did not resolve them (nested types / matching edge
+  cases). Optional follow-up toward ~0.
+
+After-fix data: `runtime/token-benchmark-afterfix/`. Reproduce either side with
+`dotnet test tests/unit/AIMonitor.Data.Tests/AIMonitor.Data.Tests.csproj --filter FullCoverage_mcp_vs_grep_token_baseline`
+(set `BENCH_OUT` to keep both).

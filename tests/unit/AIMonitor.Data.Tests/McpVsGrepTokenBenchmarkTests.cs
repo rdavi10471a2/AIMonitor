@@ -134,7 +134,10 @@ public sealed class McpVsGrepTokenBenchmarkTests
                 }
 
                 IndexedReferenceRow[] references = referencesByTarget[symbol.StableKey].Take(500).ToArray();
-                int referenceBytes = JsonSerializer.Serialize(references, json).Length;
+                // Mirror the MCP tool's DEFAULT lean reference shape (drops ProjectPath + FileContentHash) so fix #2
+                // (responseShape="lean") is reflected. The tool returns this projection by default now.
+                LeanReferenceRow[] leanReferences = references.Select(ToLeanReference).ToArray();
+                int referenceBytes = JsonSerializer.Serialize(leanReferences, json).Length;
                 int mcpBytes = lookupBytes + referenceBytes;
 
                 if (!grepCache.TryGetValue(name, out GrepCost grep))
@@ -257,6 +260,36 @@ public sealed class McpVsGrepTokenBenchmarkTests
         Console.WriteLine($"[token-bench] wrote {csvPath} and {summaryPath}");
 
         Assert.True(total > 0, "No symbols measured.");
+    }
+
+    // Mirrors AIMonitor.McpServer's AIMonitorIndexedReferenceResult (the default "lean" find_indexed_references shape).
+    private sealed record LeanReferenceRow(
+        string TargetStableKey,
+        string FilePath,
+        int Line,
+        int Column,
+        string ReferenceKind,
+        string Snippet,
+        string TargetName,
+        string TargetKind,
+        string CallerStableKey,
+        string CallerName,
+        string CallerKind);
+
+    private static LeanReferenceRow ToLeanReference(IndexedReferenceRow reference)
+    {
+        return new LeanReferenceRow(
+            reference.TargetStableKey,
+            reference.FilePath,
+            reference.Line,
+            reference.Column,
+            reference.ReferenceKind,
+            reference.Snippet,
+            reference.TargetName,
+            reference.TargetKind,
+            reference.CallerStableKey,
+            reference.CallerName,
+            reference.CallerKind);
     }
 
     private sealed record SourceFile(string AbsPath, string[] Lines, long Size);
