@@ -240,10 +240,10 @@ public sealed class McpVsGrepTokenBenchmarkTests
         summary.AppendLine($"MCP cheaper than grep-full on: {winFull}/{total} ({(total > 0 ? 100.0 * winFull / total : 0):F1}%)");
         summary.AppendLine($"MCP cheaper than grep-min  on: {winMin}/{total} ({(total > 0 ? 100.0 * winMin / total : 0):F1}%)");
         summary.AppendLine();
-        summary.AppendLine("## Fix #1 target (qualified Type.Member lookup)");
+        summary.AppendLine("## Qualified Type.Member lookup");
         summary.AppendLine($"members measured: {memberCount}");
-        summary.AppendLine($"members whose qualified 'Type.Member' query returns 0 TODAY (forced homonym fallback): {memberQualifiedZeroToday}");
-        summary.AppendLine("  -> after fix #1 these resolve directly; rerun should drop this toward ~0 and lower MCP totals.");
+        summary.AppendLine($"members whose qualified 'Type.Member' query still returns 0 (forced homonym fallback): {memberQualifiedZeroToday}");
+        summary.AppendLine("  -> lower is better; remaining misses identify nested type or matching edge cases.");
         summary.AppendLine();
         summary.AppendLine("## Top 15 by grep-full cost (where the index saves most)");
         foreach ((string Name, long GrepFull, long Mcp) entry in worst.Take(15))
