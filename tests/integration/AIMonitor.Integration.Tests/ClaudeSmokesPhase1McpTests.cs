@@ -32,6 +32,12 @@ public sealed class ClaudeSmokesPhase1McpTests
             ExtractToolText(await client.CallToolAsync("find_indexed_symbols", new Dictionary<string, object?> { ["text"] = "Run" })),
             element => element.GetProperty("name").GetString() == "Run"
                 && (element.GetProperty("containingType").GetString() ?? string.Empty).EndsWith("Derived", StringComparison.Ordinal));
+        string qualifiedRunJson = ExtractToolText(await client.CallToolAsync(
+            "find_indexed_symbols",
+            new Dictionary<string, object?> { ["text"] = "Derived.Run", ["kind"] = "Method" }));
+        Assert.Contains("\"name\":\"Run\"", qualifiedRunJson, StringComparison.Ordinal);
+        Assert.Contains("Derived", qualifiedRunJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Other", qualifiedRunJson, StringComparison.Ordinal);
 
         // find_indexed_callers — REAL caller identity (FindContainingSymbol), not ReferenceKind substring fakery.
         string callersJson = ExtractToolText(await client.CallToolAsync(
@@ -39,11 +45,17 @@ public sealed class ClaudeSmokesPhase1McpTests
         Assert.Contains("\"callKind\":\"InvocationExpression\"", callersJson, StringComparison.Ordinal);
         Assert.Contains("\"callerName\":\"CallSite\"", callersJson, StringComparison.Ordinal);
 
-        // find_indexed_references — rich row with real caller + file content hash.
+        // find_indexed_references: lean by default, with rich row evidence available on request.
         string referencesJson = ExtractToolText(await client.CallToolAsync(
             "find_indexed_references", new Dictionary<string, object?> { ["stableSymbolKey"] = runKey }));
         Assert.Contains("\"callerName\":\"CallSite\"", referencesJson, StringComparison.Ordinal);
-        Assert.Contains("\"fileContentHash\"", referencesJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"fileContentHash\"", referencesJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"projectPath\"", referencesJson, StringComparison.Ordinal);
+        string richReferencesJson = ExtractToolText(await client.CallToolAsync(
+            "find_indexed_references",
+            new Dictionary<string, object?> { ["stableSymbolKey"] = runKey, ["responseShape"] = "rich" }));
+        Assert.Contains("\"fileContentHash\"", richReferencesJson, StringComparison.Ordinal);
+        Assert.Contains("\"projectPath\"", richReferencesJson, StringComparison.Ordinal);
 
         // find_indexed_relationships — real rows, not Array.Empty.
         string derivedKey = FindStableKey(
@@ -161,6 +173,7 @@ public sealed class ClaudeSmokesPhase1McpTests
             public sealed class Widget { public Widget() { } }
 
             public class Greeter { public void Greet() { } }
+            public class Other { public void Run() { } }
             """);
         await File.WriteAllTextAsync(Path.Combine(watchedRoot, "DomainPart.cs"), """
             namespace ClaudeSmokesFixture;

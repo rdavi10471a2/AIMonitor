@@ -165,10 +165,24 @@ public sealed class SolutionIndexQueryService
         string text,
         string? kind = null,
         string? namespaceName = null,
+        string? containingType = null,
         int maxResults = 100)
     {
+        string searchText = text ?? string.Empty;
+        string? containingTypeFilter = containingType;
+        bool exactName = false;
+        if (string.IsNullOrWhiteSpace(containingTypeFilter)
+            && TryParseQualifiedMemberSearch(searchText, out string parsedContainingType, out string parsedName))
+        {
+            containingTypeFilter = parsedContainingType;
+            searchText = parsedName;
+            exactName = true;
+        }
+
         IEnumerable<IndexedSymbolRow> symbols = ListSymbols()
-            .Where(symbol => symbol.Name.Contains(text, StringComparison.OrdinalIgnoreCase));
+            .Where(symbol => exactName
+                ? symbol.Name.Equals(searchText, StringComparison.OrdinalIgnoreCase)
+                : symbol.Name.Contains(searchText, StringComparison.OrdinalIgnoreCase));
         if (!string.IsNullOrWhiteSpace(kind))
         {
             symbols = symbols.Where(symbol => symbol.Kind.Equals(kind, StringComparison.OrdinalIgnoreCase));
@@ -179,6 +193,11 @@ public sealed class SolutionIndexQueryService
             symbols = symbols.Where(symbol => symbol.Namespace.Equals(namespaceName, StringComparison.Ordinal));
         }
 
+        if (!string.IsNullOrWhiteSpace(containingTypeFilter))
+        {
+            symbols = symbols.Where(symbol => MatchesContainingType(symbol, containingTypeFilter));
+        }
+
         IndexedSymbolRow[] matchedSymbols = symbols.ToArray();
         (int clampedLimit, bool limitClamped) = ClampLimit(maxResults, MaxSymbolLimit);
         return new IndexedSymbolSearchResult(
@@ -186,6 +205,53 @@ public sealed class SolutionIndexQueryService
             matchedSymbols.Length,
             clampedLimit,
             limitClamped);
+    }
+
+    private static bool TryParseQualifiedMemberSearch(string text, out string containingType, out string name)
+    {
+        containingType = string.Empty;
+        name = string.Empty;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        string trimmed = text.Trim();
+        int separatorIndex = trimmed.LastIndexOf('.');
+        if (separatorIndex <= 0 || separatorIndex >= trimmed.Length - 1)
+        {
+            return false;
+        }
+
+        containingType = trimmed[..separatorIndex];
+        name = trimmed[(separatorIndex + 1)..];
+        return true;
+    }
+
+    private static bool MatchesContainingType(IndexedSymbolRow symbol, string containingType)
+    {
+        string filter = containingType.Trim();
+        if (filter.Length == 0)
+        {
+            return true;
+        }
+
+        if (symbol.ContainingType.Equals(filter, StringComparison.OrdinalIgnoreCase)
+            || symbol.ContainingType.EndsWith("." + filter, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        string qualifiedContainingType = string.IsNullOrWhiteSpace(symbol.Namespace)
+            ? symbol.ContainingType
+            : symbol.Namespace + "." + symbol.ContainingType;
+        if (qualifiedContainingType.Equals(filter, StringComparison.OrdinalIgnoreCase)
+            || qualifiedContainingType.EndsWith("." + filter, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return symbol.Signature.StartsWith(filter + "." + symbol.Name, StringComparison.OrdinalIgnoreCase);
     }
 
     public IReadOnlyList<IndexedReferenceRow> ListReferences(string? stableKey = null)

@@ -252,15 +252,16 @@ public sealed class AIMonitorTools
     }
 
     [McpServerTool]
-    [Description("Find indexed C# symbols by name text, optional kind, and optional exact namespace using the monitor-owned watched solution index.")]
+    [Description("Find indexed C# symbols by name text, optional kind, optional exact namespace, and optional containing type using the monitor-owned watched solution index. Qualified Type.Member text is treated as a containing-type member lookup.")]
     public IndexedSymbolSearchResult FindIndexedSymbols(
-        [Description("Symbol name text to search for.")] string text,
+        [Description("Symbol name text to search for. Use Type.Member to avoid homonym fanout for members.")] string text,
         [Description("Optional exact symbol kind, such as class, method, property, field, constructor, enum, delegate, interface, struct, or record.")] string? kind = null,
         [Description("Optional exact namespace filter.")] string? namespaceName = null,
+        [Description("Optional containing type filter, such as OrderRepository or My.Namespace.OrderRepository.")] string? containingType = null,
         [Description("Maximum symbols to return.")] int maxResults = 100)
     {
         runtimeState.Touch();
-        return queryService.FindSymbols(text, kind, namespaceName, maxResults);
+        return queryService.FindSymbols(text, kind, namespaceName, containingType, maxResults);
     }
 
     [McpServerTool]
@@ -280,10 +281,11 @@ public sealed class AIMonitorTools
     }
 
     [McpServerTool]
-    [Description("Return persisted indexed reference sites for one stable C# symbol key.")]
+    [Description("Return persisted indexed reference sites for one stable C# symbol key. Lean shape omits repeated project path and file hash fields; rich shape returns complete stored rows.")]
     public object FindIndexedReferences(
         [Description("Stable symbol key returned by query_solution_index, find_indexed_symbols, or get_indexed_symbol.")] string stableSymbolKey,
-        [Description("Maximum reference rows to return.")] int maxResults = 500)
+        [Description("Maximum reference rows to return.")] int maxResults = 500,
+        [Description("Response shape: lean or rich. Lean is optimized for MCP token cost; rich preserves every persisted reference row field.")] string responseShape = "lean")
     {
         runtimeState.Touch();
         if (TryCreateIndexedStableSymbolKeyError(stableSymbolKey) is { } error)
@@ -291,7 +293,13 @@ public sealed class AIMonitorTools
             return error;
         }
 
-        return queryService.ListReferences(stableSymbolKey).Take(maxResults).ToArray();
+        IndexedReferenceRow[] references = queryService.ListReferences(stableSymbolKey).Take(maxResults).ToArray();
+        if (responseShape.Equals("rich", StringComparison.OrdinalIgnoreCase))
+        {
+            return references;
+        }
+
+        return references.Select(ToMcpReferenceRow).ToArray();
     }
 
     [McpServerTool]
@@ -1324,6 +1332,22 @@ public sealed class AIMonitorTools
             stableSymbolKey);
     }
 
+    private static AIMonitorIndexedReferenceResult ToMcpReferenceRow(IndexedReferenceRow reference)
+    {
+        return new AIMonitorIndexedReferenceResult(
+            reference.TargetStableKey,
+            reference.FilePath,
+            reference.Line,
+            reference.Column,
+            reference.ReferenceKind,
+            reference.Snippet,
+            reference.TargetName,
+            reference.TargetKind,
+            reference.CallerStableKey,
+            reference.CallerName,
+            reference.CallerKind);
+    }
+
     private static bool IsRecoverableRoslynGuidanceError(InvalidOperationException ex)
     {
         return ex.Message.Contains("Razor markup", StringComparison.OrdinalIgnoreCase)
@@ -1396,6 +1420,19 @@ public sealed record AIMonitorToolErrorResult(
     string Message,
     string Expected,
     string? Received);
+
+public sealed record AIMonitorIndexedReferenceResult(
+    string TargetStableKey,
+    string FilePath,
+    int Line,
+    int Column,
+    string ReferenceKind,
+    string Snippet,
+    string TargetName,
+    string TargetKind,
+    string CallerStableKey,
+    string CallerName,
+    string CallerKind);
 
 public sealed record AIMonitorSolutionIndexTree(
     IReadOnlyList<IndexedProjectRow> Projects,
