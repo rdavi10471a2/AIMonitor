@@ -311,6 +311,65 @@ namespace AIMonitor.Planning.Tests
         }
 
         [Fact]
+        public void CompleteIteration_closes_current_iteration_and_refreshes_context()
+        {
+            using (PlanningTestWorkspace workspace = PlanningTestWorkspace.Create())
+            {
+                PlanningService service = new PlanningService(workspace.Settings);
+                PlanningTaskRow task = service.CreateTask(new CreatePlanningTaskRequest
+                {
+                    Title = "Complete iteration",
+                    Goal = "Track iteration completion as planning state."
+                });
+                service.MakeCurrent(task.TaskId, "Start task.");
+                PlanningIterationAppendResult appended = service.AppendIterationGoalToCurrentTask("finish post-accept planning gate");
+
+                PlanningIterationCompletionResult result = service.CompleteIteration(
+                    appended.Iteration!.IterationId,
+                    "Accepted review covered the iteration goal.");
+
+                Assert.True(result.Completed);
+                Assert.NotNull(result.Iteration);
+                Assert.Equal("completed", result.Iteration.Status);
+                Assert.False(string.IsNullOrWhiteSpace(result.Iteration.CompletedAtUtc));
+
+                CurrentTaskContext context = service.GetCurrentTaskContext();
+                Assert.Null(context.CurrentIteration);
+                Assert.Equal(string.Empty, context.CurrentIterationGoal);
+                Assert.Contains("#1 [completed] finish post-accept planning gate", context.IterationSummary, StringComparison.Ordinal);
+
+                string markdown = File.ReadAllText(task.TaskMemoryMarkdownPath);
+                Assert.Contains("[completed] finish post-accept planning gate", markdown, StringComparison.Ordinal);
+            }
+        }
+
+        [Fact]
+        public void ApplyPostAcceptPlanningAction_appends_next_iteration_after_completion()
+        {
+            using (PlanningTestWorkspace workspace = PlanningTestWorkspace.Create())
+            {
+                PlanningService service = new PlanningService(workspace.Settings);
+                PlanningTaskRow task = service.CreateTask(new CreatePlanningTaskRequest
+                {
+                    Title = "Apply post accept action",
+                    Goal = "Route resolver choices through Planning."
+                });
+                service.MakeCurrent(task.TaskId, "Start task.");
+
+                PostAcceptPlanningActionResult result = service.ApplyPostAcceptPlanningAction(
+                    "append-next-iteration",
+                    null,
+                    "run the next MCP smoke",
+                    null);
+
+                Assert.True(result.Applied);
+                Assert.NotNull(result.IterationAppend);
+                Assert.Equal("run the next MCP smoke", result.IterationAppend.IterationGoal);
+                Assert.Equal("run the next MCP smoke", service.GetCurrentTaskContext().CurrentIterationGoal);
+            }
+        }
+
+        [Fact]
         public void AttachWorkflowDecisionToCurrentTask_records_decision_and_refreshes_task_memory()
         {
             using (PlanningTestWorkspace workspace = PlanningTestWorkspace.Create())

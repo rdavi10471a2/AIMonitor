@@ -490,6 +490,202 @@ namespace AIMonitor.Planning
             }
         }
 
+        public PlanningIterationCompletionResult CompleteIteration(string iterationId, string completionNote)
+        {
+            if (string.IsNullOrWhiteSpace(iterationId))
+            {
+                throw new ArgumentException("Iteration id is required.", nameof(iterationId));
+            }
+
+            if (string.IsNullOrWhiteSpace(completionNote))
+            {
+                throw new ArgumentException("A completion note is required.", nameof(completionNote));
+            }
+
+            database.EnsureCreated();
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteTransaction transaction = connection.BeginTransaction())
+                {
+                    PlanningIterationRow? iteration = TryGetIteration(connection, transaction, iterationId);
+                    if (iteration is null)
+                    {
+                        transaction.Commit();
+                        return new PlanningIterationCompletionResult
+                        {
+                            IterationId = iterationId,
+                            Message = "Iteration was not found. No Planning iteration was completed."
+                        };
+                    }
+
+                    PlanningTaskRow? task = TryGetTask(connection, transaction, iteration.TaskId);
+                    if (task is null)
+                    {
+                        transaction.Commit();
+                        return new PlanningIterationCompletionResult
+                        {
+                            IterationId = iterationId,
+                            Iteration = iteration,
+                            Message = "The iteration's task was not found. No Planning iteration was completed."
+                        };
+                    }
+
+                    if (iteration.Status.Equals("completed", StringComparison.Ordinal))
+                    {
+                        transaction.Commit();
+                        return new PlanningIterationCompletionResult
+                        {
+                            Completed = true,
+                            TaskId = task.TaskId,
+                            Title = task.Title,
+                            IterationId = iteration.IterationId,
+                            Iteration = iteration,
+                            TaskMemoryMarkdownPath = task.TaskMemoryMarkdownPath,
+                            Message = "Iteration was already completed."
+                        };
+                    }
+
+                    string now = DateTimeOffset.UtcNow.ToString("O");
+                    using (SqliteCommand command = connection.CreateCommand())
+                    {
+                        command.Transaction = transaction;
+                        command.CommandText = """
+                            update task_iterations
+                            set status = 'completed',
+                                completed_at_utc = $completed_at_utc
+                            where iteration_id = $iteration_id;
+                            """;
+                        command.Parameters.AddWithValue("$completed_at_utc", now);
+                        command.Parameters.AddWithValue("$iteration_id", iterationId);
+                        command.ExecuteNonQuery();
+                    }
+
+                    using (SqliteCommand command = connection.CreateCommand())
+                    {
+                        command.Transaction = transaction;
+                        command.CommandText = """
+                            update tasks
+                            set updated_at_utc = $updated_at_utc
+                            where task_id = $task_id;
+                            """;
+                        command.Parameters.AddWithValue("$updated_at_utc", now);
+                        command.Parameters.AddWithValue("$task_id", task.TaskId);
+                        command.ExecuteNonQuery();
+                    }
+
+                    iteration.Status = "completed";
+                    iteration.CompletedAtUtc = now;
+                    task.UpdatedAtUtc = now;
+                    InsertEvent(
+                        connection,
+                        transaction,
+                        task.TaskId,
+                        "iteration-completed",
+                        "Iteration completed. " + completionNote.Trim(),
+                        now,
+                        JsonSerializer.Serialize(
+                            new { iterationId = iteration.IterationId, completionNote = completionNote.Trim() },
+                            JsonOptions));
+                    transaction.Commit();
+
+                    taskMemoryWriter.Refresh(
+                        task,
+                        BuildIterationSummary(task.TaskId),
+                        BuildReviewEvidenceSummary(task.TaskId),
+                        "Iteration completed. " + completionNote.Trim());
+                    return new PlanningIterationCompletionResult
+                    {
+                        Completed = true,
+                        TaskId = task.TaskId,
+                        Title = task.Title,
+                        IterationId = iteration.IterationId,
+                        Iteration = iteration,
+                        TaskMemoryMarkdownPath = task.TaskMemoryMarkdownPath,
+                        Message = "Planning iteration completed."
+                    };
+                }
+            }
+        }
+
+        public PostAcceptPlanningActionResult ApplyPostAcceptPlanningAction(
+            string action,
+            string? currentIterationId,
+            string? nextIterationGoal,
+            string? statusNote)
+        {
+            string normalizedAction = string.IsNullOrWhiteSpace(action) ? "stop" : action.Trim();
+            if (normalizedAction.Equals("stop", StringComparison.OrdinalIgnoreCase)
+                || normalizedAction.Equals("keep-current-iteration-open", StringComparison.OrdinalIgnoreCase))
+            {
+                return new PostAcceptPlanningActionResult
+                {
+                    Applied = false,
+                    Action = normalizedAction,
+                    Message = "No Planning mutation was requested."
+                };
+            }
+
+            if (normalizedAction.Equals("complete-current-iteration", StringComparison.OrdinalIgnoreCase))
+            {
+                PlanningIterationCompletionResult completion = CompleteIteration(
+                    RequireCurrentIterationId(currentIterationId),
+                    RequireStatusNote(statusNote, "Completion note is required."));
+                return new PostAcceptPlanningActionResult
+                {
+                    Applied = completion.Completed,
+                    Action = normalizedAction,
+                    IterationCompletion = completion,
+                    Message = completion.Message
+                };
+            }
+
+            if (normalizedAction.Equals("append-next-iteration", StringComparison.OrdinalIgnoreCase))
+            {
+                PlanningIterationAppendResult append = AppendIterationGoalToCurrentTask(RequireIterationGoal(nextIterationGoal));
+                return new PostAcceptPlanningActionResult
+                {
+                    Applied = append.Appended,
+                    Action = normalizedAction,
+                    IterationAppend = append,
+                    Message = append.Message
+                };
+            }
+
+            if (normalizedAction.Equals("replace-current-iteration", StringComparison.OrdinalIgnoreCase))
+            {
+                PlanningIterationUpdateResult update = UpdateIterationGoal(
+                    RequireCurrentIterationId(currentIterationId),
+                    RequireIterationGoal(nextIterationGoal));
+                return new PostAcceptPlanningActionResult
+                {
+                    Applied = update.Updated,
+                    Action = normalizedAction,
+                    IterationUpdate = update,
+                    Message = update.Message
+                };
+            }
+
+            if (normalizedAction.Equals("pause-task", StringComparison.OrdinalIgnoreCase))
+            {
+                PlanningTaskRow task = ChangeCurrentTaskStatus(PlanningTaskStatus.Paused, statusNote);
+                return CreateTaskStatusAction(normalizedAction, task);
+            }
+
+            if (normalizedAction.Equals("close-task", StringComparison.OrdinalIgnoreCase))
+            {
+                PlanningTaskRow task = ChangeCurrentTaskStatus(PlanningTaskStatus.Closed, statusNote);
+                return CreateTaskStatusAction(normalizedAction, task);
+            }
+
+            if (normalizedAction.Equals("cancel-task", StringComparison.OrdinalIgnoreCase))
+            {
+                PlanningTaskRow task = ChangeCurrentTaskStatus(PlanningTaskStatus.Canceled, statusNote);
+                return CreateTaskStatusAction(normalizedAction, task);
+            }
+
+            throw new ArgumentException("Unknown post-accept Planning action: " + action, nameof(action));
+        }
+
         public PlanningTaskRow MakeCurrent(string taskId, string switchContextSummary)
         {
             if (string.IsNullOrWhiteSpace(switchContextSummary))
@@ -537,6 +733,58 @@ namespace AIMonitor.Planning
                     return nextTask;
                 }
             }
+        }
+
+        private PlanningTaskRow ChangeCurrentTaskStatus(string status, string? statusNote)
+        {
+            PlanningTaskRow? task = GetCurrentTask();
+            if (task is null)
+            {
+                throw new InvalidOperationException("No Current task is selected. Task status was not changed.");
+            }
+
+            return ChangeStatus(task.TaskId, status, RequireStatusNote(statusNote, "A status note is required."));
+        }
+
+        private static PostAcceptPlanningActionResult CreateTaskStatusAction(string action, PlanningTaskRow task)
+        {
+            return new PostAcceptPlanningActionResult
+            {
+                Applied = true,
+                Action = action,
+                TaskStatusChange = task,
+                Message = "Current task moved to " + task.Status + "."
+            };
+        }
+
+        private static string RequireCurrentIterationId(string? currentIterationId)
+        {
+            if (string.IsNullOrWhiteSpace(currentIterationId))
+            {
+                throw new ArgumentException("Current iteration id is required for this Planning action.", nameof(currentIterationId));
+            }
+
+            return currentIterationId.Trim();
+        }
+
+        private static string RequireIterationGoal(string? iterationGoal)
+        {
+            if (string.IsNullOrWhiteSpace(iterationGoal))
+            {
+                throw new ArgumentException("Iteration goal is required for this Planning action.", nameof(iterationGoal));
+            }
+
+            return iterationGoal;
+        }
+
+        private static string RequireStatusNote(string? statusNote, string message)
+        {
+            if (string.IsNullOrWhiteSpace(statusNote))
+            {
+                throw new ArgumentException(message, nameof(statusNote));
+            }
+
+            return statusNote.Trim();
         }
 
         public PlanningTaskRow ChangeStatus(string taskId, string status, string statusNote)

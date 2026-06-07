@@ -8,8 +8,11 @@ using AIMonitor.Workflow;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using System.ComponentModel;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -126,6 +129,65 @@ public sealed class AIMonitorTools
             indexStatus.RelationshipCount,
             indexStatus.StaleFileCount,
             indexStatus.DiagnosticCount);
+    }
+
+    [McpServerTool]
+    [Description("Probe whether the connected MCP client advertises and handles form elicitation. This tool does not mutate monitor or watched-project state.")]
+    public async Task<AIMonitorElicitationProbeResult> TestElicitation(
+        ModelContextProtocol.Server.McpServer server,
+        CancellationToken cancellationToken)
+    {
+        runtimeState.Touch();
+        bool advertisesElicitation = server.ClientCapabilities?.Elicitation is not null;
+        bool advertisesFormElicitation = server.ClientCapabilities?.Elicitation?.Form is not null;
+        string clientName = server.ClientInfo?.Name ?? string.Empty;
+        string clientVersion = server.ClientInfo?.Version ?? string.Empty;
+
+        if (!advertisesElicitation)
+        {
+            return new AIMonitorElicitationProbeResult(
+                clientName,
+                clientVersion,
+                advertisesElicitation,
+                advertisesFormElicitation,
+                false,
+                "capability-missing",
+                false,
+                string.Empty,
+                "The connected MCP client did not advertise elicitation support.");
+        }
+
+        try
+        {
+            ElicitResult<AIMonitorElicitationProbeInput> response = await server.ElicitAsync<AIMonitorElicitationProbeInput>(
+                "AIMonitor elicitation probe: confirm that the connected MCP client can render a small dynamic form.",
+                null,
+                cancellationToken);
+            string contentJson = response.Content is null ? string.Empty : JsonSerializer.Serialize(response.Content, JsonOptions);
+            return new AIMonitorElicitationProbeResult(
+                clientName,
+                clientVersion,
+                advertisesElicitation,
+                advertisesFormElicitation,
+                true,
+                response.Action,
+                response.IsAccepted,
+                contentJson,
+                string.Empty);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException || ex is McpException)
+        {
+            return new AIMonitorElicitationProbeResult(
+                clientName,
+                clientVersion,
+                advertisesElicitation,
+                advertisesFormElicitation,
+                true,
+                "error",
+                false,
+                string.Empty,
+                ex.Message);
+        }
     }
 
     [McpServerTool]
@@ -867,22 +929,240 @@ public sealed class AIMonitorTools
 
     [McpServerTool]
     [Description("Classify a completed WinMerge review for a staged edit. Accepted decisions require the expected staged hash.")]
-    public ReviewDecisionWithIndexRefreshResult RecordDiffDecision(
+    public async Task<ReviewDecisionWithIndexRefreshResult> RecordDiffDecision(
+        ModelContextProtocol.Server.McpServer server,
         [Description("Staged edit record id returned by stage_candidate_for_review.")] string stagedRecordId,
         [Description("Operator-reported outcome: accepted or rejected.")] string decision,
         [Description("Expected staged hash for accepted decisions.")] string? expectedStagedHash = null,
-        [Description("Return the full staged record inline for debugging. Defaults to compact response.")] bool verbose = false)
+        [Description("Return the full staged record inline for debugging. Defaults to compact response.")] bool verbose = false,
+        CancellationToken cancellationToken = default)
     {
         runtimeState.Touch();
-        return new StagedDecisionWorkflow().Record(
-            settings,
-            logger,
-            workflowService,
-            stagedRecordId,
-            decision,
-            expectedStagedHash,
-            "AIMonitor.McpServer",
-            verbose);
+        try
+        {
+            ReviewDecisionWithIndexRefreshResult result = new StagedDecisionWorkflow().Record(
+                settings,
+                logger,
+                workflowService,
+                stagedRecordId,
+                decision,
+                expectedStagedHash,
+                "AIMonitor.McpServer",
+                verbose);
+            result.PostAcceptPlanning = await TryRunPostAcceptPlanningAsync(server, result, cancellationToken);
+            if (result.PostAcceptPlanning?.Pending == true)
+            {
+                result.NextStep = result.NextStep + " Post-accept Planning is pending; call resolve_post_accept_planning_decision before mutating Planning.";
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            logger.Write(
+                MonitorLogLevel.Error,
+                "AIMonitor.McpServer",
+                "adapter.mcp.record-diff-decision.failed",
+                ex.ToString(),
+                new Dictionary<string, string>
+                {
+                    ["stagedRecordId"] = stagedRecordId,
+                    ["decision"] = decision,
+                    ["hasExpectedStagedHash"] = string.IsNullOrWhiteSpace(expectedStagedHash) ? "false" : "true"
+                });
+            throw;
+        }
+    }
+
+    [McpServerTool]
+    [Description("Complete a Planning iteration after explicit operator confirmation.")]
+    public PlanningIterationCompletionResult CompleteTaskIteration(
+        [Description("The Planning iteration id returned by get_current_task_context.")] string iterationId,
+        [Description("One compact note explaining why the iteration is complete.")] string completionNote)
+    {
+        runtimeState.Touch();
+        return planningService.CompleteIteration(iterationId, completionNote);
+    }
+
+    [McpServerTool]
+    [Description("Resolve a pending post-accept Planning decision returned by record_diff_decision when elicitation was unavailable or canceled.")]
+    public PostAcceptPlanningDecisionResult ResolvePostAcceptPlanningDecision(
+        [Description("Pending decision id returned in record_diff_decision.postAcceptPlanning.pendingDecisionId.")] string pendingDecisionId,
+        [Description("Planning action to apply: stop, keep-current-iteration-open, complete-current-iteration, append-next-iteration, replace-current-iteration, pause-task, close-task, or cancel-task.")] string action,
+        [Description("One compact goal line for append-next-iteration or replace-current-iteration.")] string? nextIterationGoal = null,
+        [Description("Required note for completing an iteration or moving the task to paused, closed, or canceled.")] string? statusNote = null)
+    {
+        runtimeState.Touch();
+        PendingPostAcceptPlanningDecision pending = runtimeState.TakePendingPlanningDecision(pendingDecisionId);
+        PostAcceptPlanningActionResult applied = planningService.ApplyPostAcceptPlanningAction(
+            action,
+            pending.CurrentIterationId,
+            nextIterationGoal,
+            statusNote);
+        return new PostAcceptPlanningDecisionResult
+        {
+            Required = true,
+            ElicitationAttempted = false,
+            ElicitationAccepted = false,
+            ElicitationAction = "resolved",
+            Pending = false,
+            PendingDecisionId = pendingDecisionId,
+            ResolverTool = "resolve_post_accept_planning_decision",
+            AppliedAction = applied,
+            Message = applied.Message
+        };
+    }
+
+    private async Task<PostAcceptPlanningDecisionResult?> TryRunPostAcceptPlanningAsync(
+        ModelContextProtocol.Server.McpServer server,
+        ReviewDecisionWithIndexRefreshResult decision,
+        CancellationToken cancellationToken)
+    {
+        if (decision.Classification is not ("accepted" or "accepted-normalized"))
+        {
+            return null;
+        }
+
+        CurrentTaskContext context = planningService.GetCurrentTaskContext();
+        if (!context.HasCurrentTask)
+        {
+            return new PostAcceptPlanningDecisionResult
+            {
+                Required = false,
+                Message = "No Current task is selected; post-accept Planning discussion was not requested."
+            };
+        }
+
+        if (server.ClientCapabilities?.Elicitation is null)
+        {
+            return CreatePendingPostAcceptPlanningDecision(
+                decision.StagedRecordId,
+                context,
+                false,
+                "capability-missing",
+                "The connected MCP client did not advertise elicitation. Resolve post-accept Planning explicitly.");
+        }
+
+        try
+        {
+            ElicitResult<PostAcceptPlanningElicitationInput> elicitation = await server.ElicitAsync<PostAcceptPlanningElicitationInput>(
+                CreatePostAcceptPlanningPrompt(decision, context),
+                null,
+                cancellationToken);
+            if (!elicitation.IsAccepted || elicitation.Content is null)
+            {
+                return CreatePendingPostAcceptPlanningDecision(
+                    decision.StagedRecordId,
+                    context,
+                    true,
+                    elicitation.Action,
+                    "Post-accept Planning elicitation was not accepted. Resolve post-accept Planning explicitly.");
+            }
+
+            string action = ToPostAcceptPlanningAction(elicitation.Content);
+            PostAcceptPlanningActionResult applied = planningService.ApplyPostAcceptPlanningAction(
+                action,
+                context.CurrentIteration?.IterationId,
+                elicitation.Content.NextIterationGoal,
+                elicitation.Content.StatusNote);
+            return new PostAcceptPlanningDecisionResult
+            {
+                Required = true,
+                ElicitationAttempted = true,
+                ElicitationAccepted = true,
+                ElicitationAction = elicitation.Action,
+                Pending = false,
+                ResolverTool = "resolve_post_accept_planning_decision",
+                AppliedAction = applied,
+                Message = applied.Message
+            };
+        }
+        catch (Exception ex)
+        {
+            return CreatePendingPostAcceptPlanningDecision(
+                decision.StagedRecordId,
+                context,
+                true,
+                "error",
+                "Post-accept Planning elicitation failed: " + ex.Message + " Resolve post-accept Planning explicitly.");
+        }
+    }
+
+    private PostAcceptPlanningDecisionResult CreatePendingPostAcceptPlanningDecision(
+        string stagedRecordId,
+        CurrentTaskContext context,
+        bool elicitationAttempted,
+        string elicitationAction,
+        string message)
+    {
+        PendingPostAcceptPlanningDecision pending = runtimeState.AddPendingPlanningDecision(stagedRecordId, context);
+        return new PostAcceptPlanningDecisionResult
+        {
+            Required = true,
+            ElicitationAttempted = elicitationAttempted,
+            ElicitationAccepted = false,
+            ElicitationAction = elicitationAction,
+            Pending = true,
+            PendingDecisionId = pending.PendingDecisionId,
+            ResolverTool = "resolve_post_accept_planning_decision",
+            Message = message
+        };
+    }
+
+    private static string CreatePostAcceptPlanningPrompt(
+        ReviewDecisionWithIndexRefreshResult decision,
+        CurrentTaskContext context)
+    {
+        string iteration = string.IsNullOrWhiteSpace(context.CurrentIterationGoal)
+            ? "No current iteration is open."
+            : "Current iteration: " + context.CurrentIterationGoal;
+        return "AIMonitor post-accept Planning: " + decision.RelativePath + " was " + decision.Classification + ". "
+            + iteration + " Choose whether the iteration is complete and the next Planning action.";
+    }
+
+    private static string ToPostAcceptPlanningAction(PostAcceptPlanningElicitationInput input)
+    {
+        if (input.CurrentIterationComplete)
+        {
+            return "complete-current-iteration";
+        }
+
+        if (input.NextAction == PostAcceptPlanningNextAction.KeepCurrentIterationOpen)
+        {
+            return "keep-current-iteration-open";
+        }
+
+        if (input.NextAction == PostAcceptPlanningNextAction.CompleteCurrentIteration)
+        {
+            return "complete-current-iteration";
+        }
+
+        if (input.NextAction == PostAcceptPlanningNextAction.AppendNextIteration)
+        {
+            return "append-next-iteration";
+        }
+
+        if (input.NextAction == PostAcceptPlanningNextAction.ReplaceCurrentIteration)
+        {
+            return "replace-current-iteration";
+        }
+
+        if (input.NextAction == PostAcceptPlanningNextAction.PauseTask)
+        {
+            return "pause-task";
+        }
+
+        if (input.NextAction == PostAcceptPlanningNextAction.CloseTask)
+        {
+            return "close-task";
+        }
+
+        if (input.NextAction == PostAcceptPlanningNextAction.CancelTask)
+        {
+            return "cancel-task";
+        }
+
+        return "stop";
     }
 
     [McpServerTool]
@@ -1614,9 +1894,40 @@ public sealed record AIMonitorServerShutdownResult(
     DateTimeOffset RequestedAtUtc,
     string Reason);
 
+public sealed record AIMonitorElicitationProbeResult(
+    string ClientName,
+    string ClientVersion,
+    bool AdvertisesElicitation,
+    bool AdvertisesFormElicitation,
+    bool RequestAttempted,
+    string Action,
+    bool IsAccepted,
+    string ContentJson,
+    string Error);
+
+public sealed class AIMonitorElicitationProbeInput
+{
+    [Description("Whether the client-rendered elicitation form reached the operator.")]
+    public bool ContinueProbe { get; set; }
+
+    [Description("A small operator note returned from the MCP client.")]
+    public string Note { get; set; } = string.Empty;
+
+    [Description("The next action to take after this proof request.")]
+    public AIMonitorElicitationProbeNextAction NextAction { get; set; }
+}
+
+public enum AIMonitorElicitationProbeNextAction
+{
+    Stop,
+    ContinuePlanning,
+    ContinueImplementation
+}
+
 public sealed class AIMonitorMcpRuntimeState
 {
     private readonly IMonitorLogger logger;
+    private readonly ConcurrentDictionary<string, PendingPostAcceptPlanningDecision> pendingPlanningDecisions = new(StringComparer.Ordinal);
     private long lastActivityTicks = DateTimeOffset.UtcNow.UtcTicks;
     private int shutdownRequested;
 
@@ -1628,6 +1939,37 @@ public sealed class AIMonitorMcpRuntimeState
     public DateTimeOffset LastActivityUtc => new(Interlocked.Read(ref lastActivityTicks), TimeSpan.Zero);
 
     public bool ShutdownRequested => Volatile.Read(ref shutdownRequested) == 1;
+
+    public PendingPostAcceptPlanningDecision AddPendingPlanningDecision(string stagedRecordId, CurrentTaskContext context)
+    {
+        PendingPostAcceptPlanningDecision pending = new PendingPostAcceptPlanningDecision
+        {
+            PendingDecisionId = "planning-decision-" + Guid.NewGuid().ToString("N"),
+            StagedRecordId = stagedRecordId,
+            TaskId = context.TaskId,
+            TaskTitle = context.Title,
+            CurrentIterationId = context.CurrentIteration?.IterationId ?? string.Empty,
+            CurrentIterationGoal = context.CurrentIterationGoal,
+            CreatedAtUtc = DateTimeOffset.UtcNow.ToString("O")
+        };
+        pendingPlanningDecisions[pending.PendingDecisionId] = pending;
+        return pending;
+    }
+
+    public PendingPostAcceptPlanningDecision TakePendingPlanningDecision(string pendingDecisionId)
+    {
+        if (string.IsNullOrWhiteSpace(pendingDecisionId))
+        {
+            throw new ArgumentException("Pending decision id is required.", nameof(pendingDecisionId));
+        }
+
+        if (pendingPlanningDecisions.TryRemove(pendingDecisionId, out PendingPostAcceptPlanningDecision? pending))
+        {
+            return pending;
+        }
+
+        throw new InvalidOperationException("Pending post-accept Planning decision was not found: " + pendingDecisionId);
+    }
 
     public void Touch([CallerMemberName] string toolName = "")
     {

@@ -29,5 +29,7 @@ public sealed class ReviewDecisionWithIndexRefreshResult
 
     public PlanningEvidenceAttachmentResult? PlanningEvidence { get; set; }
 
+    public PostAcceptPlanningDecisionResult? PostAcceptPlanning { get; set; }
+
     public string NextStep { get; set; } = string.Empty;
 }
