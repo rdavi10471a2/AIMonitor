@@ -20,6 +20,8 @@ namespace AIMonitor.Planning
 
         public string Message { get; set; } = string.Empty;
 
+        public string LedgerSummary { get; set; } = string.Empty;
+
         public string DecidedAtUtc { get; set; } = string.Empty;
 
         public bool IsNewFile { get; set; }

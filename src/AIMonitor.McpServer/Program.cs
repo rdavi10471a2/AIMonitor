@@ -151,6 +151,15 @@ public sealed class AIMonitorTools
     }
 
     [McpServerTool]
+    [Description("Append one operator-provided iteration goal line to the Current task. Agents should ask the operator for the next iteration line before calling this tool.")]
+    public PlanningIterationAppendResult AppendCurrentTaskIteration(
+        [Description("One compact line describing the next iteration goal to append to the Current task.")] string iterationGoal)
+    {
+        runtimeState.Touch();
+        return planningService.AppendIterationGoalToCurrentTask(iterationGoal);
+    }
+
+    [McpServerTool]
     [Description("Return evaluated self-check guardrails for configured roots, working folders, diff tool availability, and watched-source safety boundaries.")]
     public AIMonitorSelfCheckResult GetSelfCheck()
     {

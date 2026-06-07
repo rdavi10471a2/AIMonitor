@@ -231,6 +231,51 @@ namespace AIMonitor.Planning.Tests
         }
 
         [Fact]
+        public void AppendIterationGoalToCurrentTask_adds_one_normalized_iteration_row()
+        {
+            using (PlanningTestWorkspace workspace = PlanningTestWorkspace.Create())
+            {
+                PlanningService service = new PlanningService(workspace.Settings);
+                PlanningTaskRow task = service.CreateTask(new CreatePlanningTaskRequest
+                {
+                    Title = "Iteration task",
+                    Goal = "Initial goal."
+                });
+                service.MakeCurrent(task.TaskId, "Start task.");
+
+                PlanningIterationAppendResult result = service.AppendIterationGoalToCurrentTask(" run a focused\r\niteration test ");
+
+                Assert.True(result.Appended);
+                Assert.Equal("run a focused iteration test", result.IterationGoal);
+                Assert.NotNull(result.Iteration);
+                Assert.Equal(1, result.Iteration.Sequence);
+                Assert.Equal("open", result.Iteration.Status);
+                CurrentTaskContext context = service.GetCurrentTaskContext();
+                Assert.Equal("Initial goal.", context.Goal);
+                Assert.NotNull(context.CurrentIteration);
+                Assert.Equal(result.Iteration.IterationId, context.CurrentIteration.IterationId);
+                Assert.Equal("run a focused iteration test", context.CurrentIterationGoal);
+                Assert.Contains("#1 [open] run a focused iteration test", context.IterationSummary, StringComparison.Ordinal);
+                string markdown = File.ReadAllText(task.TaskMemoryMarkdownPath);
+                Assert.Contains("run a focused iteration test", markdown, StringComparison.Ordinal);
+            }
+        }
+
+        [Fact]
+        public void AppendIterationGoalToCurrentTask_reports_when_no_task_is_current()
+        {
+            using (PlanningTestWorkspace workspace = PlanningTestWorkspace.Create())
+            {
+                PlanningService service = new PlanningService(workspace.Settings);
+
+                PlanningIterationAppendResult result = service.AppendIterationGoalToCurrentTask("Run next test.");
+
+                Assert.False(result.Appended);
+                Assert.Contains("No Current task", result.Message, StringComparison.Ordinal);
+            }
+        }
+
+        [Fact]
         public void AttachWorkflowDecisionToCurrentTask_records_decision_and_refreshes_task_memory()
         {
             using (PlanningTestWorkspace workspace = PlanningTestWorkspace.Create())
@@ -253,6 +298,7 @@ namespace AIMonitor.Planning.Tests
                     Classification = "accepted",
                     Status = "accepted",
                     Message = "Accepted.",
+                    LedgerSummary = "Add repository method so task execution can fetch selected schema rows.",
                     DecidedAtUtc = "2026-06-07T15:30:00.0000000Z",
                     PreMergeValidationStatus = "passed",
                     IndexRefreshStatus = "completed"
@@ -264,10 +310,15 @@ namespace AIMonitor.Planning.Tests
                 CurrentTaskContext context = service.GetCurrentTaskContext();
                 Assert.Contains("Repositories/SchemaMCPRepository.cs", context.ReviewEvidenceSummary, StringComparison.Ordinal);
                 Assert.Contains("stage-1", context.ReviewEvidenceSummary, StringComparison.Ordinal);
+                string selectedTaskSummary = service.GetTaskReviewEvidenceSummary(task.TaskId);
+                Assert.Contains("Repositories/SchemaMCPRepository.cs", selectedTaskSummary, StringComparison.Ordinal);
+                Assert.Contains("stage-1", selectedTaskSummary, StringComparison.Ordinal);
+                Assert.Contains("Add repository method", selectedTaskSummary, StringComparison.Ordinal);
 
                 string markdown = File.ReadAllText(task.TaskMemoryMarkdownPath);
                 Assert.Contains("Repositories/SchemaMCPRepository.cs", markdown, StringComparison.Ordinal);
                 Assert.Contains("accepted / accepted", markdown, StringComparison.Ordinal);
+                Assert.Contains("Add repository method", markdown, StringComparison.Ordinal);
             }
         }
 

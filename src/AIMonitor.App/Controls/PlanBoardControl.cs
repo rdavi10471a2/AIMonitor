@@ -175,7 +175,7 @@ namespace AIMonitor.App.Controls
                     ClearTaskMemoryPreview();
                 }
 
-                taskGitLabel.Text = "Task Git is synced from accepted/rejected workflow decisions. No reviewed records have been loaded into this shell yet.";
+                UpdateReviewEvidencePanel();
                 UpdateActionState();
             }
             catch (Exception ex)
@@ -555,6 +555,7 @@ namespace AIMonitor.App.Controls
         private void ClearTaskMemoryPreview()
         {
             taskMemoryPreview.SetMarkdown(string.Empty);
+            UpdateReviewEvidencePanel();
         }
 
         private void ShowSelectedTaskMemory()
@@ -569,16 +570,43 @@ namespace AIMonitor.App.Controls
             {
                 PlanningTaskRow task = planningService.GetTask(taskId);
                 SetTaskMemoryMarkdown(File.ReadAllText(task.TaskMemoryMarkdownPath));
+                UpdateReviewEvidencePanel();
             }
             catch (Exception ex)
             {
                 ShowDiagnosticText("Selected task memory failed to load." + Environment.NewLine + Environment.NewLine + ex);
+                taskGitLabel.Text = "Selected task review evidence failed to load." + Environment.NewLine + Environment.NewLine + ex;
             }
         }
 
         private void ShowDiagnosticText(string text)
         {
             taskMemoryPreview.ShowDiagnostic(text);
+        }
+
+        private void UpdateReviewEvidencePanel()
+        {
+            string taskId = GetSelectedTaskId();
+            if (planningService is null)
+            {
+                taskGitLabel.Text = "Planning is not available.";
+                return;
+            }
+
+            if (taskId.Length == 0)
+            {
+                taskGitLabel.Text = "Select a task to see accepted/rejected workflow evidence.";
+                return;
+            }
+
+            try
+            {
+                taskGitLabel.Text = planningService.GetTaskReviewEvidenceSummary(taskId);
+            }
+            catch (Exception ex)
+            {
+                taskGitLabel.Text = "Selected task review evidence failed to load." + Environment.NewLine + Environment.NewLine + ex;
+            }
         }
 
         private void CreateTask()

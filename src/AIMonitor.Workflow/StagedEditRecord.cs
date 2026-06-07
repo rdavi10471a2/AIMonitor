@@ -42,6 +42,8 @@ public sealed class StagedEditRecord
 
     public string Message { get; set; } = string.Empty;
 
+    public string LedgerSummary { get; set; } = string.Empty;
+
     public string LaunchStatus { get; set; } = string.Empty;
 
     public string LaunchMessage { get; set; } = string.Empty;

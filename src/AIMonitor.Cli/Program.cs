@@ -33,6 +33,7 @@ internal static class Program
             Console.WriteLine("  index references-in-file --file <path> [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  index packages [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  plan current [--repo-root <path>] [--config <path>]");
+            Console.WriteLine("  plan add-iteration --goal <text> [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  edit refresh --file <path> [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  edit new --file <future-path> [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  edit replace-text --file <path> --old-text <text>|--old-text-file <path> --new-text <text>|--new-text-file <path> [--expected-matches <n>] [--expected-working-hash <hash>] [--repo-root <path>] [--config <path>]");
@@ -113,13 +114,14 @@ internal static class Program
 
     private static int Plan(string[] args)
     {
-        return ExecuteJsonCommand(args, () =>
+        return ExecuteJsonCommand<object>(args, () =>
         {
             MonitorSettings settings = LoadSettings(args);
             PlanningService service = new PlanningService(settings);
             return args[1].ToLowerInvariant() switch
             {
                 "current" => service.GetCurrentTaskContext(),
+                "add-iteration" => service.AppendIterationGoalToCurrentTask(RequireOption(args, "--goal")),
                 _ => throw new InvalidOperationException($"Unknown plan command: {args[1]}")
             };
         });

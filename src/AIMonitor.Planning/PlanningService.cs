@@ -111,6 +111,7 @@ namespace AIMonitor.Planning
 
             taskMemoryWriter.Refresh(
                 task,
+                "No iteration goals recorded yet.",
                 "No reviewed workflow evidence has been attached yet.",
                 "Task created. No agent notes recorded yet.");
             return task;
@@ -169,6 +170,7 @@ namespace AIMonitor.Planning
             taskMemoryWriter.SaveHumanNotes(
                 task,
                 task.HumanContext,
+                BuildIterationSummary(task.TaskId),
                 "Review evidence is synced from accepted/rejected workflow records.");
             return task;
         }
@@ -256,6 +258,7 @@ namespace AIMonitor.Planning
                 };
             }
 
+            PlanningIterationRow? currentIteration = GetLatestOpenIteration(task.TaskId);
             return new CurrentTaskContext
             {
                 HasCurrentTask = true,
@@ -265,10 +268,123 @@ namespace AIMonitor.Planning
                 Goal = task.Goal,
                 Constraints = task.Constraints,
                 AcceptanceCriteria = task.AcceptanceCriteria,
+                CurrentIteration = currentIteration,
+                CurrentIterationGoal = currentIteration?.Goal ?? string.Empty,
+                IterationSummary = BuildIterationSummary(task.TaskId),
                 ReviewEvidenceSummary = BuildReviewEvidenceSummary(task.TaskId),
                 TaskMemoryMarkdownPath = task.TaskMemoryMarkdownPath,
                 Message = "Human notes are intentionally excluded from the AI-facing Current task context."
             };
+        }
+
+        public string GetTaskReviewEvidenceSummary(string taskId)
+        {
+            _ = GetTask(taskId);
+            return BuildReviewEvidenceSummary(taskId);
+        }
+
+        public PlanningIterationAppendResult AppendIterationGoalToCurrentTask(string iterationGoal)
+        {
+            if (string.IsNullOrWhiteSpace(iterationGoal))
+            {
+                throw new ArgumentException("Iteration goal is required.", nameof(iterationGoal));
+            }
+
+            database.EnsureCreated();
+            string normalizedIterationGoal = NormalizeIterationGoal(iterationGoal);
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteTransaction transaction = connection.BeginTransaction())
+                {
+                    string activeTaskId = GetActiveTaskId(connection, transaction);
+                    PlanningTaskRow? task = string.IsNullOrWhiteSpace(activeTaskId)
+                        ? null
+                        : TryGetTask(connection, transaction, activeTaskId);
+                    if (task is null)
+                    {
+                        transaction.Commit();
+                        return new PlanningIterationAppendResult
+                        {
+                            Appended = false,
+                            IterationGoal = normalizedIterationGoal,
+                            Message = "No Current task is selected. The iteration goal was not appended."
+                        };
+                    }
+
+                    string now = DateTimeOffset.UtcNow.ToString("O");
+                    int sequence = GetNextIterationSequence(connection, transaction, task.TaskId);
+                    string iterationId = "iteration-" + Guid.NewGuid().ToString("N");
+                    PlanningIterationRow iteration = new PlanningIterationRow
+                    {
+                        IterationId = iterationId,
+                        TaskId = task.TaskId,
+                        Sequence = sequence,
+                        Goal = normalizedIterationGoal,
+                        Status = "open",
+                        CreatedAtUtc = now,
+                        CompletedAtUtc = string.Empty
+                    };
+                    using (SqliteCommand command = connection.CreateCommand())
+                    {
+                        command.Transaction = transaction;
+                        command.CommandText = """
+                            insert into task_iterations (
+                                iteration_id,
+                                task_id,
+                                sequence,
+                                goal,
+                                status,
+                                created_at_utc,
+                                completed_at_utc
+                            )
+                            values (
+                                $iteration_id,
+                                $task_id,
+                                $sequence,
+                                $goal,
+                                $status,
+                                $created_at_utc,
+                                ''
+                            );
+                            """;
+                        command.Parameters.AddWithValue("$iteration_id", iterationId);
+                        command.Parameters.AddWithValue("$task_id", task.TaskId);
+                        command.Parameters.AddWithValue("$sequence", iteration.Sequence);
+                        command.Parameters.AddWithValue("$goal", iteration.Goal);
+                        command.Parameters.AddWithValue("$status", iteration.Status);
+                        command.Parameters.AddWithValue("$created_at_utc", iteration.CreatedAtUtc);
+                        command.ExecuteNonQuery();
+                    }
+
+                    InsertEvent(
+                        connection,
+                        transaction,
+                        task.TaskId,
+                        "iteration-added",
+                        "Iteration goal appended from prompt.",
+                        now,
+                        JsonSerializer.Serialize(
+                            new { iterationGoal = normalizedIterationGoal },
+                            JsonOptions));
+                    transaction.Commit();
+
+                    taskMemoryWriter.Refresh(
+                        task,
+                        BuildIterationSummary(task.TaskId),
+                        BuildReviewEvidenceSummary(task.TaskId),
+                        "Iteration goal appended from prompt.");
+                    return new PlanningIterationAppendResult
+                    {
+                        Appended = true,
+                        TaskId = task.TaskId,
+                        Title = task.Title,
+                        IterationGoal = normalizedIterationGoal,
+                        Iteration = iteration,
+                        TaskMemoryMarkdownPath = task.TaskMemoryMarkdownPath,
+                        Message = "Iteration goal appended to the Current task."
+                    };
+                }
+            }
         }
 
         public PlanningTaskRow MakeCurrent(string taskId, string switchContextSummary)
@@ -305,6 +421,7 @@ namespace AIMonitor.Planning
                     nextTask.UpdatedAtUtc = now;
                     taskMemoryWriter.Refresh(
                         nextTask,
+                        BuildIterationSummary(nextTask.TaskId),
                         "Review evidence is synced from accepted/rejected workflow records.",
                         "Task is Current. Continue from the latest human notes and review evidence.");
                     taskMemoryWriter.AppendHumanStatusNote(
@@ -312,6 +429,7 @@ namespace AIMonitor.Planning
                         $"Moved task to {PlanningTaskStatus.Current}",
                         switchContextSummary,
                         now,
+                        BuildIterationSummary(nextTask.TaskId),
                         "Review evidence is synced from accepted/rejected workflow records.");
                     return nextTask;
                 }
@@ -382,6 +500,7 @@ namespace AIMonitor.Planning
                         $"Moved task to {status}",
                         statusNote,
                         now,
+                        BuildIterationSummary(task.TaskId),
                         "Review evidence is synced from accepted/rejected workflow records.");
                     return task;
                 }
@@ -391,7 +510,7 @@ namespace AIMonitor.Planning
         public void RefreshTaskMemory(string taskId, string currentStateSummary)
         {
             PlanningTaskRow task = GetTask(taskId);
-            taskMemoryWriter.Refresh(task, currentStateSummary);
+            taskMemoryWriter.Refresh(task, BuildIterationSummary(task.TaskId), currentStateSummary);
         }
 
         public PlanningEvidenceAttachmentResult AttachWorkflowDecisionToCurrentTask(PlanningDecisionEvidence evidence)
@@ -428,7 +547,7 @@ namespace AIMonitor.Planning
                 }
 
                 string reviewEvidenceSummary = BuildReviewEvidenceSummary(currentTask.TaskId);
-                taskMemoryWriter.Refresh(currentTask, reviewEvidenceSummary);
+                taskMemoryWriter.Refresh(currentTask, BuildIterationSummary(currentTask.TaskId), reviewEvidenceSummary);
                 return new PlanningEvidenceAttachmentResult
                 {
                     Attached = true,
@@ -484,6 +603,7 @@ namespace AIMonitor.Planning
             taskMemoryWriter.SaveHumanNotes(
                 task,
                 humanNotes,
+                BuildIterationSummary(task.TaskId),
                 "Review evidence is synced from accepted/rejected workflow records.");
         }
 
@@ -849,7 +969,7 @@ namespace AIMonitor.Planning
                 using (SqliteCommand command = connection.CreateCommand())
                 {
                     command.CommandText = """
-                        select decided_at_utc, relative_path, decision, classification, staged_record_id, status
+                        select decided_at_utc, relative_path, decision, classification, staged_record_id, status, payload_json
                         from task_decisions
                         where task_id = $task_id
                         order by decided_at_utc, id;
@@ -859,8 +979,15 @@ namespace AIMonitor.Planning
                     {
                         while (reader.Read())
                         {
-                            lines.Add(
-                                $"- {reader.GetString(0)}: {reader.GetString(2)} / {reader.GetString(3)} `{reader.GetString(1)}` ({reader.GetString(5)}, staged `{reader.GetString(4)}`)");
+                            string line =
+                                $"- {reader.GetString(0)}: {reader.GetString(2)} / {reader.GetString(3)} `{reader.GetString(1)}` ({reader.GetString(5)}, staged `{reader.GetString(4)}`)";
+                            string ledgerSummary = ReadLedgerSummary(reader);
+                            if (!string.IsNullOrWhiteSpace(ledgerSummary))
+                            {
+                                line += Environment.NewLine + $"  - Summary: {ledgerSummary}";
+                            }
+
+                            lines.Add(line);
                         }
                     }
                 }
@@ -873,7 +1000,12 @@ namespace AIMonitor.Planning
 
         private static string CreateDecisionSummary(PlanningDecisionEvidence evidence)
         {
-            return $"Workflow decision {evidence.Decision}/{evidence.Classification} for {evidence.RelativePath} ({evidence.StagedRecordId}).";
+            if (string.IsNullOrWhiteSpace(evidence.LedgerSummary))
+            {
+                return $"Workflow decision {evidence.Decision}/{evidence.Classification} for {evidence.RelativePath} ({evidence.StagedRecordId}).";
+            }
+
+            return $"Workflow decision {evidence.Decision}/{evidence.Classification} for {evidence.RelativePath} ({evidence.StagedRecordId}): {evidence.LedgerSummary}";
         }
 
         private static string GetEvidenceTimestamp(PlanningDecisionEvidence evidence)
@@ -881,6 +1013,142 @@ namespace AIMonitor.Planning
             return string.IsNullOrWhiteSpace(evidence.DecidedAtUtc)
                 ? DateTimeOffset.UtcNow.ToString("O")
                 : evidence.DecidedAtUtc;
+        }
+
+        private static string NormalizeIterationGoal(string iterationGoal)
+        {
+            return string.Join(
+                " ",
+                iterationGoal
+                    .Replace("\r", " ", StringComparison.Ordinal)
+                    .Replace("\n", " ", StringComparison.Ordinal)
+                    .Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        }
+
+        private int GetNextIterationSequence(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string taskId)
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = """
+                    select coalesce(max(sequence), 0) + 1
+                    from task_iterations
+                    where task_id = $task_id;
+                    """;
+                command.Parameters.AddWithValue("$task_id", taskId);
+                object? result = command.ExecuteScalar();
+                return Convert.ToInt32(result);
+            }
+        }
+
+        private PlanningIterationRow? GetLatestOpenIteration(string taskId)
+        {
+            database.EnsureCreated();
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteCommand command = connection.CreateCommand())
+                {
+                    command.CommandText = """
+                        select
+                            iteration_id,
+                            task_id,
+                            sequence,
+                            goal,
+                            status,
+                            created_at_utc,
+                            completed_at_utc
+                        from task_iterations
+                        where task_id = $task_id
+                          and status = 'open'
+                        order by sequence desc
+                        limit 1;
+                        """;
+                    command.Parameters.AddWithValue("$task_id", taskId);
+                    using (SqliteDataReader reader = command.ExecuteReader())
+                    {
+                        return reader.Read() ? ReadIteration(reader) : null;
+                    }
+                }
+            }
+        }
+
+        private string BuildIterationSummary(string taskId)
+        {
+            database.EnsureCreated();
+            List<string> lines = new List<string>();
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteCommand command = connection.CreateCommand())
+                {
+                    command.CommandText = """
+                        select
+                            iteration_id,
+                            task_id,
+                            sequence,
+                            goal,
+                            status,
+                            created_at_utc,
+                            completed_at_utc
+                        from task_iterations
+                        where task_id = $task_id
+                        order by sequence, created_at_utc, iteration_id;
+                        """;
+                    command.Parameters.AddWithValue("$task_id", taskId);
+                    using (SqliteDataReader reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            PlanningIterationRow iteration = ReadIteration(reader);
+                            lines.Add($"- #{iteration.Sequence} [{iteration.Status}] {iteration.Goal}");
+                        }
+                    }
+                }
+            }
+
+            return lines.Count == 0
+                ? "No iteration goals recorded yet."
+                : string.Join(Environment.NewLine, lines);
+        }
+
+        private static PlanningIterationRow ReadIteration(SqliteDataReader reader)
+        {
+            return new PlanningIterationRow
+            {
+                IterationId = reader.GetString(0),
+                TaskId = reader.GetString(1),
+                Sequence = reader.GetInt32(2),
+                Goal = reader.GetString(3),
+                Status = reader.GetString(4),
+                CreatedAtUtc = reader.GetString(5),
+                CompletedAtUtc = reader.GetString(6)
+            };
+        }
+
+        private static string ReadLedgerSummary(SqliteDataReader reader)
+        {
+            if (reader.IsDBNull(6))
+            {
+                return string.Empty;
+            }
+
+            string payloadJson = reader.GetString(6);
+            if (string.IsNullOrWhiteSpace(payloadJson))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                PlanningDecisionEvidence? evidence = JsonSerializer.Deserialize<PlanningDecisionEvidence>(payloadJson, JsonOptions);
+                return evidence?.LedgerSummary ?? string.Empty;
+            }
+            catch (JsonException)
+            {
+                return string.Empty;
+            }
         }
     }
 }

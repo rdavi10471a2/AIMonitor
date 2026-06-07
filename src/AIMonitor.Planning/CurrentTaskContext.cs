@@ -16,6 +16,12 @@ namespace AIMonitor.Planning
 
         public string AcceptanceCriteria { get; set; } = string.Empty;
 
+        public PlanningIterationRow? CurrentIteration { get; set; }
+
+        public string CurrentIterationGoal { get; set; } = string.Empty;
+
+        public string IterationSummary { get; set; } = string.Empty;
+
         public string ReviewEvidenceSummary { get; set; } = string.Empty;
 
         public string TaskMemoryMarkdownPath { get; set; } = string.Empty;

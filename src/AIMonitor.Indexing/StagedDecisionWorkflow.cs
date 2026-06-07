@@ -79,6 +79,7 @@ public sealed class StagedDecisionWorkflow
             Classification = record.Classification,
             Status = record.Status,
             Message = record.Message,
+            LedgerSummary = record.LedgerSummary,
             DecidedAtUtc = record.DecisionAtUtc,
             IsNewFile = record.IsNewFile,
             PreMergeValidationStatus = record.PreMergeValidationStatus,

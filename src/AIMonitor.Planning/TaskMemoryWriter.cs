@@ -19,13 +19,14 @@ namespace AIMonitor.Planning
 
         public void Refresh(
             PlanningTaskRow task,
+            string iterationSummary,
             string reviewEvidenceSummary,
             string initialAiNotes = "No agent notes recorded.")
         {
             Directory.CreateDirectory(Path.GetDirectoryName(task.TaskMemoryMarkdownPath) ?? ".");
 
             TaskMemorySections sections = ReadSections(task, initialAiNotes);
-            File.WriteAllText(task.TaskMemoryMarkdownPath, BuildMarkdown(task, sections, reviewEvidenceSummary));
+            File.WriteAllText(task.TaskMemoryMarkdownPath, BuildMarkdown(task, sections, iterationSummary, reviewEvidenceSummary));
         }
 
         public void AppendHumanStatusNote(
@@ -33,6 +34,7 @@ namespace AIMonitor.Planning
             string statusDescription,
             string comment,
             string createdAtUtc,
+            string iterationSummary,
             string reviewEvidenceSummary)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(task.TaskMemoryMarkdownPath) ?? ".");
@@ -51,7 +53,7 @@ namespace AIMonitor.Planning
                     : sections.StatusUpdates + Environment.NewLine + Environment.NewLine + appended;
             }
 
-            File.WriteAllText(task.TaskMemoryMarkdownPath, BuildMarkdown(task, sections, reviewEvidenceSummary));
+            File.WriteAllText(task.TaskMemoryMarkdownPath, BuildMarkdown(task, sections, iterationSummary, reviewEvidenceSummary));
         }
 
         public string ReadHumanNotes(PlanningTaskRow task)
@@ -63,13 +65,14 @@ namespace AIMonitor.Planning
         public void SaveHumanNotes(
             PlanningTaskRow task,
             string humanNotes,
+            string iterationSummary,
             string reviewEvidenceSummary)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(task.TaskMemoryMarkdownPath) ?? ".");
 
             TaskMemorySections sections = ReadSections(task, "No agent notes recorded.");
             sections.HumanNotes = humanNotes;
-            File.WriteAllText(task.TaskMemoryMarkdownPath, BuildMarkdown(task, sections, reviewEvidenceSummary));
+            File.WriteAllText(task.TaskMemoryMarkdownPath, BuildMarkdown(task, sections, iterationSummary, reviewEvidenceSummary));
         }
 
         private static TaskMemorySections ReadSections(PlanningTaskRow task, string initialAiNotes)
@@ -104,6 +107,7 @@ namespace AIMonitor.Planning
         private static string BuildMarkdown(
             PlanningTaskRow task,
             TaskMemorySections sections,
+            string iterationSummary,
             string reviewEvidenceSummary)
         {
             return $$"""
@@ -125,6 +129,10 @@ namespace AIMonitor.Planning
                 ## Acceptance Criteria
 
                 {{task.AcceptanceCriteria}}
+
+                ## Iteration Goals
+
+                {{iterationSummary}}
 
                 ## Human Notes + Status Updates
 

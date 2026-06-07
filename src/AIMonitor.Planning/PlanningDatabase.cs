@@ -84,6 +84,19 @@ namespace AIMonitor.Planning
                         """);
 
                     Execute(connection, transaction, """
+                        create table if not exists task_iterations (
+                            iteration_id text primary key,
+                            task_id text not null references tasks(task_id) on delete cascade,
+                            sequence integer not null,
+                            goal text not null,
+                            status text not null,
+                            created_at_utc text not null,
+                            completed_at_utc text not null default '',
+                            unique(task_id, sequence)
+                        );
+                        """);
+
+                    Execute(connection, transaction, """
                         create table if not exists task_staged_records (
                             id integer primary key autoincrement,
                             task_id text not null references tasks(task_id) on delete cascade,
@@ -114,6 +127,7 @@ namespace AIMonitor.Planning
 
                     Execute(connection, transaction, "create index if not exists idx_tasks_status on tasks(status);");
                     Execute(connection, transaction, "create index if not exists idx_task_events_task on task_events(task_id);");
+                    Execute(connection, transaction, "create index if not exists idx_task_iterations_task on task_iterations(task_id, sequence);");
                     Execute(connection, transaction, "create index if not exists idx_task_staged_records_task on task_staged_records(task_id);");
                     Execute(connection, transaction, "create index if not exists idx_task_decisions_task on task_decisions(task_id);");
                     Execute(connection, transaction, "create index if not exists idx_task_decisions_staged_record on task_decisions(staged_record_id);");
