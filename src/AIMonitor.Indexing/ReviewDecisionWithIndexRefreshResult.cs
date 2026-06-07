@@ -31,5 +31,7 @@ public sealed class ReviewDecisionWithIndexRefreshResult
 
     public PostAcceptPlanningDecisionResult? PostAcceptPlanning { get; set; }
 
+    public ReviewDecisionSessionProgress? SessionProgress { get; set; }
+
     public string NextStep { get; set; } = string.Empty;
 }

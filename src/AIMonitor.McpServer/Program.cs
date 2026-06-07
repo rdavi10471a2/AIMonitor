@@ -449,6 +449,52 @@ public sealed class AIMonitorTools
     }
 
     [McpServerTool]
+    [Description("Set the planned task/iteration file list for a monitor session before watched-source edits begin.")]
+    public AIMonitorSessionState SetMonitorSessionPlan(
+        [Description("Session handle returned by start_monitor_session.")] string sessionId,
+        [Description("Current Planning task id from get_current_task_context.")] string taskId,
+        [Description("Current Planning iteration id from get_current_task_context.")] string iterationId,
+        [Description("Ordered planned files for this edit session. Each file needs a watched path, owning MSBuild project, role, and reason.")] IReadOnlyList<AIMonitorSessionPlannedFileInput> filesPlanned)
+    {
+        runtimeState.Touch();
+        if (string.IsNullOrWhiteSpace(taskId))
+        {
+            throw new ArgumentException("Task id is required.", nameof(taskId));
+        }
+
+        if (string.IsNullOrWhiteSpace(iterationId))
+        {
+            throw new ArgumentException("Iteration id is required.", nameof(iterationId));
+        }
+
+        if (filesPlanned is null || filesPlanned.Count == 0)
+        {
+            throw new ArgumentException("At least one planned file is required.", nameof(filesPlanned));
+        }
+
+        AIMonitorSessionState session = LoadSessionById(sessionId)
+            ?? throw new InvalidOperationException($"Monitor session was not found: {sessionId}");
+        string now = DateTimeOffset.UtcNow.ToString("O");
+        AIMonitorSessionPlannedFile[] plannedFiles = filesPlanned
+            .Select((file, index) => CreatePlannedFile(file, index + 1))
+            .ToArray();
+        AIMonitorSessionState updated = session with
+        {
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+            Plan = new AIMonitorSessionPlan
+            {
+                TaskId = taskId.Trim(),
+                IterationId = iterationId.Trim(),
+                CreatedAtUtc = string.IsNullOrWhiteSpace(session.Plan?.CreatedAtUtc) ? now : session.Plan.CreatedAtUtc,
+                UpdatedAtUtc = now,
+                FilesPlanned = plannedFiles
+            }
+        };
+        SaveSession(updated);
+        return updated;
+    }
+
+    [McpServerTool]
     [Description("List durable monitor session handles known to this MCP server.")]
     public IReadOnlyList<AIMonitorSessionSummary> ListMonitorSessions()
     {
@@ -802,6 +848,7 @@ public sealed class AIMonitorTools
         StagedEditRecord record = workflowService.Stage(ResolveWatchedPath(path), ledgerSummary, sessionId);
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
+            MarkSessionPlannedFileStaged(sessionId, record);
             RecordMonitorSessionEvent(sessionId, "stage-candidate-for-review", record.StagedRecordId, JsonSerializer.Serialize(record, JsonOptions));
         }
 
@@ -950,6 +997,7 @@ public sealed class AIMonitorTools
                 "AIMonitor.McpServer",
                 verbose);
             result.PostAcceptPlanning = await TryRunPostAcceptPlanningAsync(server, result, cancellationToken);
+            result.SessionProgress = UpdateSessionProgressForDecision(result);
             if (result.PostAcceptPlanning?.Pending == true)
             {
                 result.NextStep = result.NextStep + " Post-accept Planning is pending; call resolve_post_accept_planning_decision before mutating Planning.";
@@ -1538,6 +1586,198 @@ public sealed class AIMonitorTools
         File.WriteAllText(GetSessionPath(session.SessionId), JsonSerializer.Serialize(session, JsonOptions));
     }
 
+    private AIMonitorSessionPlannedFile CreatePlannedFile(AIMonitorSessionPlannedFileInput input, int sequence)
+    {
+        if (string.IsNullOrWhiteSpace(input.Path))
+        {
+            throw new ArgumentException("Every planned file needs a path.", nameof(input));
+        }
+
+        if (string.IsNullOrWhiteSpace(input.OwningProjectPath))
+        {
+            throw new ArgumentException("Every planned file needs an owning MSBuild project path.", nameof(input));
+        }
+
+        string fullPath = ResolveWatchedPath(input.Path);
+        return new AIMonitorSessionPlannedFile
+        {
+            Sequence = sequence,
+            Path = input.Path.Trim(),
+            FullPath = fullPath,
+            RelativePath = workflowPaths.GetRelativeWatchedPath(fullPath),
+            OwningProjectPath = ResolveProjectPath(input.OwningProjectPath),
+            Role = string.IsNullOrWhiteSpace(input.Role) ? "edit" : input.Role.Trim(),
+            Reason = input.Reason.Trim(),
+            Status = "planned"
+        };
+    }
+
+    private string ResolveProjectPath(string projectPath)
+    {
+        return Path.GetFullPath(Path.IsPathRooted(projectPath)
+            ? projectPath
+            : Path.Combine(settings.WatchedProjectFolder, projectPath));
+    }
+
+    private void MarkSessionPlannedFileStaged(string sessionId, StagedEditRecord record)
+    {
+        AIMonitorSessionState? session = LoadSessionById(sessionId);
+        if (session?.Plan is null)
+        {
+            return;
+        }
+
+        List<AIMonitorSessionPlannedFile> files = ClonePlannedFiles(session.Plan.FilesPlanned);
+        AIMonitorSessionPlannedFile? file = FindPlannedFile(files, record.WatchedFilePath, record.RelativePath);
+        if (file is null)
+        {
+            return;
+        }
+
+        file.Status = "staged";
+        file.StagedRecordId = record.StagedRecordId;
+        SaveSession(UpdateSessionPlan(session, files));
+    }
+
+    private ReviewDecisionSessionProgress? UpdateSessionProgressForDecision(ReviewDecisionWithIndexRefreshResult decision)
+    {
+        StagedEditRecord record = decision.StagedRecord ?? workflowService.GetStagedRecord(decision.StagedRecordId);
+        if (string.IsNullOrWhiteSpace(record.SessionId))
+        {
+            return null;
+        }
+
+        AIMonitorSessionState? session = LoadSessionById(record.SessionId);
+        if (session is null)
+        {
+            return new ReviewDecisionSessionProgress
+            {
+                SessionId = record.SessionId,
+                HasPlan = false,
+                Message = "The staged record has a session id, but the monitor session was not found."
+            };
+        }
+
+        if (session.Plan is null)
+        {
+            return new ReviewDecisionSessionProgress
+            {
+                SessionId = session.SessionId,
+                HasPlan = false,
+                Message = "The monitor session has no planned file set."
+            };
+        }
+
+        List<AIMonitorSessionPlannedFile> files = ClonePlannedFiles(session.Plan.FilesPlanned);
+        AIMonitorSessionPlannedFile? current = FindPlannedFile(files, decision.WatchedFilePath, decision.RelativePath);
+        bool matched = current is not null;
+        if (current is not null)
+        {
+            current.Status = string.IsNullOrWhiteSpace(decision.Classification) ? decision.Decision : decision.Classification;
+            current.StagedRecordId = decision.StagedRecordId;
+            current.Decision = decision.Decision;
+            current.Classification = decision.Classification;
+            current.DecidedAtUtc = record.DecisionAtUtc;
+            SaveSession(UpdateSessionPlan(session, files));
+        }
+
+        int decidedCount = files.Count(file => IsPlannedFileDecided(file));
+        int plannedCount = files.Count;
+        return new ReviewDecisionSessionProgress
+        {
+            SessionId = session.SessionId,
+            HasPlan = true,
+            TaskId = session.Plan.TaskId,
+            IterationId = session.Plan.IterationId,
+            PlannedFileCount = plannedCount,
+            DecidedFileCount = decidedCount,
+            CurrentFileSequence = current?.Sequence ?? 0,
+            CurrentFileRelativePath = current?.RelativePath ?? decision.RelativePath,
+            CurrentFileStatus = current?.Status ?? "not-in-plan",
+            CurrentFileMatchedPlan = matched,
+            IsSessionComplete = plannedCount > 0 && decidedCount == plannedCount,
+            Message = CreateSessionProgressMessage(matched, current, decidedCount, plannedCount)
+        };
+    }
+
+    private AIMonitorSessionState UpdateSessionPlan(AIMonitorSessionState session, IReadOnlyList<AIMonitorSessionPlannedFile> files)
+    {
+        string now = DateTimeOffset.UtcNow.ToString("O");
+        return session with
+        {
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+            Plan = new AIMonitorSessionPlan
+            {
+                TaskId = session.Plan?.TaskId ?? string.Empty,
+                IterationId = session.Plan?.IterationId ?? string.Empty,
+                CreatedAtUtc = session.Plan?.CreatedAtUtc ?? now,
+                UpdatedAtUtc = now,
+                FilesPlanned = files
+            }
+        };
+    }
+
+    private static List<AIMonitorSessionPlannedFile> ClonePlannedFiles(IReadOnlyList<AIMonitorSessionPlannedFile> files)
+    {
+        return files
+            .Select(file => new AIMonitorSessionPlannedFile
+            {
+                Sequence = file.Sequence,
+                Path = file.Path,
+                FullPath = file.FullPath,
+                RelativePath = file.RelativePath,
+                OwningProjectPath = file.OwningProjectPath,
+                Role = file.Role,
+                Reason = file.Reason,
+                Status = file.Status,
+                StagedRecordId = file.StagedRecordId,
+                Decision = file.Decision,
+                Classification = file.Classification,
+                DecidedAtUtc = file.DecidedAtUtc
+            })
+            .ToList();
+    }
+
+    private static AIMonitorSessionPlannedFile? FindPlannedFile(
+        IReadOnlyList<AIMonitorSessionPlannedFile> files,
+        string watchedFilePath,
+        string relativePath)
+    {
+        return files.FirstOrDefault(file =>
+                file.FullPath.Equals(watchedFilePath, StringComparison.OrdinalIgnoreCase))
+            ?? files.FirstOrDefault(file =>
+                file.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase))
+            ?? files.FirstOrDefault(file =>
+                file.Path.Equals(watchedFilePath, StringComparison.OrdinalIgnoreCase)
+                || file.Path.Equals(relativePath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsPlannedFileDecided(AIMonitorSessionPlannedFile file)
+    {
+        return file.Status.Equals("accepted", StringComparison.OrdinalIgnoreCase)
+            || file.Status.Equals("accepted-normalized", StringComparison.OrdinalIgnoreCase)
+            || file.Status.Equals("rejected", StringComparison.OrdinalIgnoreCase)
+            || file.Status.Equals("dirty-unexpected", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrWhiteSpace(file.Decision);
+    }
+
+    private static string CreateSessionProgressMessage(
+        bool matched,
+        AIMonitorSessionPlannedFile? current,
+        int decidedCount,
+        int plannedCount)
+    {
+        if (!matched)
+        {
+            return "Decision recorded, but the decided file was not listed in the monitor session plan.";
+        }
+
+        string currentText = current is null ? "current file" : $"file {current.Sequence} of {plannedCount}";
+        return decidedCount == plannedCount
+            ? $"Decision recorded for {currentText}. All planned session files are decided."
+            : $"Decision recorded for {currentText}. Session has {plannedCount - decidedCount} planned file(s) still undecided.";
+    }
+
     private AIMonitorSessionFileAccess RecordSessionFileAccess(
         string sessionId,
         string sourceFilePath,
@@ -1819,6 +2059,8 @@ public sealed record AIMonitorSessionState(
     IReadOnlyList<AIMonitorSessionEvent> Events)
 {
     public IReadOnlyList<AIMonitorSessionFileAccess> Files { get; init; } = [];
+
+    public AIMonitorSessionPlan? Plan { get; init; }
 }
 
 public sealed record AIMonitorSessionSummary(

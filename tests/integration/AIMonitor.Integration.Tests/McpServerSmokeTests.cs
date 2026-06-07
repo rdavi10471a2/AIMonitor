@@ -42,6 +42,7 @@ public sealed class McpServerSmokeTests
             "find_indexed_callers",
             "find_indexed_relationships",
             "start_monitor_session",
+            "set_monitor_session_plan",
             "list_monitor_sessions",
             "get_monitor_session",
             "record_monitor_session_event",
@@ -1116,6 +1117,37 @@ public sealed class McpServerSmokeTests
         Assert.False(session.IsError == true);
         string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
 
+        CallToolResult plan = await client.CallToolAsync(
+            "set_monitor_session_plan",
+            new Dictionary<string, object?>
+            {
+                ["sessionId"] = sessionId,
+                ["taskId"] = "task-mcp-session",
+                ["iterationId"] = "iteration-mcp-session",
+                ["filesPlanned"] = new object[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["path"] = helperFilePath,
+                        ["owningProjectPath"] = fixture.WatchedSolutionPath,
+                        ["role"] = "edit",
+                        ["reason"] = "Update helper behavior for the multi-file session."
+                    },
+                    new Dictionary<string, object?>
+                    {
+                        ["path"] = fixture.ProgramFilePath,
+                        ["owningProjectPath"] = fixture.WatchedSolutionPath,
+                        ["role"] = "edit",
+                        ["reason"] = "Wire Program to the updated helper behavior."
+                    }
+                }
+            });
+        Assert.False(plan.IsError == true, ExtractToolText(plan));
+        string planJson = ExtractToolText(plan);
+        Assert.Contains("\"taskId\":\"task-mcp-session\"", planJson, StringComparison.Ordinal);
+        Assert.Contains("\"sequence\":1", planJson, StringComparison.Ordinal);
+        Assert.Contains("\"sequence\":2", planJson, StringComparison.Ordinal);
+
         CallToolResult helperSubmit = await client.CallToolAsync(
             "submit_file",
             new Dictionary<string, object?>
@@ -1249,6 +1281,12 @@ public sealed class McpServerSmokeTests
         Assert.Equal(
             "Index was rebuilt after accept. Run edit refresh before further edits to this watched file.",
             ExtractJsonString(helperDecisionJson, "nextStep"));
+        Assert.True(ExtractJsonBool(helperDecisionJson, "hasPlan"));
+        Assert.False(ExtractJsonBool(helperDecisionJson, "isSessionComplete"));
+        Assert.Equal(2, ExtractJsonInt(helperDecisionJson, "plannedFileCount"));
+        Assert.Equal(1, ExtractJsonInt(helperDecisionJson, "decidedFileCount"));
+        Assert.Equal(1, ExtractJsonInt(helperDecisionJson, "currentFileSequence"));
+        Assert.Contains("file 1 of 2", helperDecisionJson, StringComparison.Ordinal);
 
         CallToolResult programLaunch = await client.CallToolAsync(
             "launch_staged_diff",
@@ -1277,6 +1315,24 @@ public sealed class McpServerSmokeTests
         Assert.Equal(
             "Index was rebuilt after accept. Run edit refresh before further edits to this watched file.",
             ExtractJsonString(programDecisionJson, "nextStep"));
+        Assert.True(ExtractJsonBool(programDecisionJson, "hasPlan"));
+        Assert.True(ExtractJsonBool(programDecisionJson, "isSessionComplete"));
+        Assert.Equal(2, ExtractJsonInt(programDecisionJson, "plannedFileCount"));
+        Assert.Equal(2, ExtractJsonInt(programDecisionJson, "decidedFileCount"));
+        Assert.Equal(2, ExtractJsonInt(programDecisionJson, "currentFileSequence"));
+        Assert.Contains("All planned session files are decided", programDecisionJson, StringComparison.Ordinal);
+
+        CallToolResult completedSession = await client.CallToolAsync(
+            "get_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["sessionId"] = sessionId
+            });
+        Assert.False(completedSession.IsError == true, ExtractToolText(completedSession));
+        string completedSessionJson = ExtractToolText(completedSession);
+        Assert.Contains("\"status\":\"accepted\"", completedSessionJson, StringComparison.Ordinal);
+        Assert.Contains(helperStagedRecordId, completedSessionJson, StringComparison.Ordinal);
+        Assert.Contains(programStagedRecordId, completedSessionJson, StringComparison.Ordinal);
 
         Assert.Contains("accepted-helper", await File.ReadAllTextAsync(helperFilePath), StringComparison.Ordinal);
         Assert.Contains("Helper.Value()", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);

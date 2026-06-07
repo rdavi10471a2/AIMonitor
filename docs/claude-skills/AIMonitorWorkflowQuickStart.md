@@ -54,7 +54,7 @@ The index is a broad discovery surface. Source maps and symbols are the precise 
 
 ```text
 start_monitor_session
-record_monitor_session_event(sessionId, "planned-edit-files", ...)
+set_monitor_session_plan(sessionId, taskId, iterationId, filesPlanned)
 refresh_file(sourceFilePath, sessionId)
 edit only the returned Working candidate using MCP tools
 stage_candidate_for_review(path, sessionId)
@@ -64,7 +64,7 @@ record_diff_decision(stagedRecordId, "accepted", expectedStagedHash)
 refresh_file before another edit to the same watched file
 ```
 
-Before the first `refresh_file` / `new_file`, record the session's planned files. Include the Current `taskId`, Current `iterationId`, each planned watched file path, its MSBuild `owningProjectPath`, a short `reason`, and a `role` such as `edit`, `new-file`, `test`, `config`, or `context`. This is the front-door contract for multi-file work and future project-targeted index refresh. Keep it small and pass the same `sessionId` through the edit, stage, launch, and decision tools.
+Before the first `refresh_file` / `new_file`, set the session's planned files on the session DTO. Include the Current `taskId`, Current `iterationId`, each planned watched file path, its MSBuild `owningProjectPath`, a short `reason`, and a `role` such as `edit`, `new-file`, `test`, `config`, or `context`. This is the front-door contract for multi-file work and future project-targeted index refresh. Keep it small and pass the same `sessionId` through the edit, stage, launch, and decision tools. `record_diff_decision` checks that DTO at the back door and reports whether the decided file is 1 of N, 2 of N, or the final planned file.
 
 Safe editing tools include:
 
@@ -84,7 +84,7 @@ Do not edit watched source directly. Do not edit staged runtime files. After sta
 
 ```text
 start_monitor_session
-record_monitor_session_event(sessionId, "planned-edit-files", ...)
+set_monitor_session_plan(sessionId, taskId, iterationId, filesPlanned)
 new_file(sourceFilePath, sessionId)
 submit_file(path, content, sessionId)
 stage_candidate_for_review(path, sessionId)

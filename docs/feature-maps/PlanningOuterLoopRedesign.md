@@ -29,7 +29,7 @@ At the start of a chat or before executing work, the agent should:
 
 The front door should not mutate watched source. It prepares intent for the existing workflow.
 
-Before the first watched-source edit, the agent should create or reuse a monitor session and record the planned edit set:
+Before the first watched-source edit, the agent should create or reuse a monitor session and set the planned edit file list on the session DTO:
 
 ```json
 {
@@ -47,7 +47,7 @@ Before the first watched-source edit, the agent should create or reuse a monitor
 }
 ```
 
-This captures the agent's "I need to edit these files" statement as session intent. It should stay compact, use MSBuild/index truth for project ownership, and flow through the existing `sessionId` on refresh/edit/stage/decision calls. The first practical use is project-targeted index refresh after accepted decisions: rebuild the owning projects for the session's edited/staged/decided files instead of rebuilding the whole watched solution.
+This captures the agent's "I need to edit these files" statement as session intent. It should stay compact, use MSBuild/index truth for project ownership, and flow through the existing `sessionId` on refresh/edit/stage/decision calls. Each planned file is an ordered file in the session, so `record_diff_decision` can report progress such as 1 of N and defer the Planning next-step gate until the final planned file is decided. The next practical use is project-targeted index refresh after accepted decisions: rebuild the owning projects for the session's edited/staged/decided files instead of rebuilding the whole watched solution.
 
 ## Middle: Safe Edit Engine
 
@@ -131,7 +131,7 @@ The spike proved useful pieces but put too much orchestration in `Program.cs`. R
 
 ## Index Refresh Follow-Up
 
-Full post-accept solution rebuilds make the outer loop too slow. The next indexing redesign should use the session plan and staged records:
+Full post-accept solution rebuilds make the outer loop too slow. The next indexing redesign should use the session DTO plan and staged records:
 
 1. `record_diff_decision` always has the decided staged file.
 2. The `sessionId` gives access to the planned file set for the task/iteration.

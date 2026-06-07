@@ -28,12 +28,13 @@ Before executing an existing `currentIteration`, pause for operator confirmation
 
 ## Edit Session Plan
 
-After the operator confirms execution and before the first watched-source edit, create or reuse a monitor session and record the planned edit set. Agents often say "I need to edit these files"; make that statement durable before entering the workflow loop.
+After the operator confirms execution and before the first watched-source edit, create or reuse a monitor session and set the planned edit file list on the session DTO. Agents often say "I need to edit these files"; make that statement durable before entering the workflow loop.
 
-Use `start_monitor_session`, then record a `planned-edit-files` event with this compact JSON shape:
+Use `start_monitor_session`, then `set_monitor_session_plan` with this compact shape:
 
 ```json
 {
+  "sessionId": "<session id>",
   "taskId": "<current task id>",
   "iterationId": "<current iteration id>",
   "filesPlanned": [
@@ -47,7 +48,7 @@ Use `start_monitor_session`, then record a `planned-edit-files` event with this 
 }
 ```
 
-Use `role` values such as `edit`, `new-file`, `test`, `config`, or `context`. Keep `context` rows rare; do not turn broad exploration into a large planned edit set. Prefer MSBuild/index facts for `owningProjectPath` over filesystem guessing. Pass the returned `sessionId` through subsequent workflow tools so staged records can be correlated with the planned task/iteration/file set.
+Use `role` values such as `edit`, `new-file`, `test`, `config`, or `context`. Keep `context` rows rare; do not turn broad exploration into a large planned edit set. Prefer MSBuild/index facts for `owningProjectPath` over filesystem guessing. Pass the returned `sessionId` through subsequent workflow tools so staged records can be correlated with the planned task/iteration/file set. `record_diff_decision` uses this session DTO to report file progress such as 1 of N and to know when the session is ready for the Planning back-door question.
 
 ## Iteration Goals
 
