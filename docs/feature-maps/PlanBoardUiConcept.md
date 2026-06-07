@@ -130,6 +130,8 @@ If Planning fails during this follow-up, the workflow decision remains durable a
 
 The AI-facing doorway into planning is `get_current_task_context` over MCP, with CLI parity through `plan current`. Agents must not browse `runtime/**/planning/task-memory/` directly for active context. Task memory Markdown is storage and review evidence; Planning service responses are the contract. The Current task context intentionally excludes private Human Notes unless a future curated AI context field is added.
 
+Iteration goals are explicit Planning rows, not inferred conversation summary. Agents should restate the exact proposed one-line goal and get operator confirmation before calling `append_current_task_iteration` / `plan add-iteration`. If the operator corrects a captured goal, use `update_task_iteration` / `plan update-iteration` so the row is repaired instead of adding a misleading cleanup row.
+
 The initial task evidence packet should stay small. It is not a replacement for normal source comments and should not try to narrate implementation details line-by-line.
 
 Fields available from the shared decision seam:

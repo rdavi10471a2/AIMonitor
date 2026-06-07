@@ -21,6 +21,7 @@ Planning also replaces legacy AI change/history attributes as the durable memory
 - Task memory Markdown under the planning runtime workspace.
 - Current task state for UI, MCP, CLI, and workflow evidence attachment.
 - AI-facing Current task context through `get_current_task_context` / `plan current`. Human Notes are intentionally excluded from this payload.
+- Explicit iteration goal append/update surfaces for operator-confirmed planning state.
 
 ## Data Flow
 
@@ -46,6 +47,7 @@ Agents should not scan task-memory Markdown folders directly. Task memory files 
 - Task memory sections for Human Notes + Status Updates, Review Evidence, AI Decision History, AI General Notes, and Closure.
 - Post-WinMerge decision evidence attachment from `record_diff_decision`.
 - The AI-readable Current task context shape.
+- Elicitation boundaries for iteration goals: agents must get an explicit operator-confirmed one-line goal before appending or correcting Planning iteration state.
 
 ## Does Not Own
 

@@ -160,6 +160,16 @@ public sealed class AIMonitorTools
     }
 
     [McpServerTool]
+    [Description("Update an existing Planning iteration goal after explicit operator correction. Agents should not use this for ordinary chat; ask the operator to confirm the replacement line first.")]
+    public PlanningIterationUpdateResult UpdateTaskIteration(
+        [Description("The Planning iteration id returned by get_current_task_context or append_current_task_iteration.")] string iterationId,
+        [Description("One compact replacement line for the iteration goal, confirmed by the operator.")] string iterationGoal)
+    {
+        runtimeState.Touch();
+        return planningService.UpdateIterationGoal(iterationId, iterationGoal);
+    }
+
+    [McpServerTool]
     [Description("Return evaluated self-check guardrails for configured roots, working folders, diff tool availability, and watched-source safety boundaries.")]
     public AIMonitorSelfCheckResult GetSelfCheck()
     {

@@ -387,6 +387,109 @@ namespace AIMonitor.Planning
             }
         }
 
+        public PlanningIterationUpdateResult UpdateIterationGoal(string iterationId, string iterationGoal)
+        {
+            if (string.IsNullOrWhiteSpace(iterationId))
+            {
+                throw new ArgumentException("Iteration id is required.", nameof(iterationId));
+            }
+
+            if (string.IsNullOrWhiteSpace(iterationGoal))
+            {
+                throw new ArgumentException("Iteration goal is required.", nameof(iterationGoal));
+            }
+
+            database.EnsureCreated();
+            string normalizedIterationGoal = NormalizeIterationGoal(iterationGoal);
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteTransaction transaction = connection.BeginTransaction())
+                {
+                    PlanningIterationRow? iteration = TryGetIteration(connection, transaction, iterationId);
+                    if (iteration is null)
+                    {
+                        transaction.Commit();
+                        return new PlanningIterationUpdateResult
+                        {
+                            Updated = false,
+                            IterationGoal = normalizedIterationGoal,
+                            Message = "Iteration was not found. The iteration goal was not updated."
+                        };
+                    }
+
+                    PlanningTaskRow? task = TryGetTask(connection, transaction, iteration.TaskId);
+                    if (task is null)
+                    {
+                        transaction.Commit();
+                        return new PlanningIterationUpdateResult
+                        {
+                            Updated = false,
+                            IterationGoal = normalizedIterationGoal,
+                            Iteration = iteration,
+                            Message = "The iteration's task was not found. The iteration goal was not updated."
+                        };
+                    }
+
+                    string now = DateTimeOffset.UtcNow.ToString("O");
+                    using (SqliteCommand command = connection.CreateCommand())
+                    {
+                        command.Transaction = transaction;
+                        command.CommandText = """
+                            update task_iterations
+                            set goal = $goal
+                            where iteration_id = $iteration_id;
+                            """;
+                        command.Parameters.AddWithValue("$goal", normalizedIterationGoal);
+                        command.Parameters.AddWithValue("$iteration_id", iterationId);
+                        command.ExecuteNonQuery();
+                    }
+
+                    using (SqliteCommand command = connection.CreateCommand())
+                    {
+                        command.Transaction = transaction;
+                        command.CommandText = """
+                            update tasks
+                            set updated_at_utc = $updated_at_utc
+                            where task_id = $task_id;
+                            """;
+                        command.Parameters.AddWithValue("$updated_at_utc", now);
+                        command.Parameters.AddWithValue("$task_id", task.TaskId);
+                        command.ExecuteNonQuery();
+                    }
+
+                    iteration.Goal = normalizedIterationGoal;
+                    task.UpdatedAtUtc = now;
+                    InsertEvent(
+                        connection,
+                        transaction,
+                        task.TaskId,
+                        "iteration-updated",
+                        "Iteration goal updated from prompt.",
+                        now,
+                        JsonSerializer.Serialize(
+                            new { iterationId = iteration.IterationId, iterationGoal = normalizedIterationGoal },
+                            JsonOptions));
+                    transaction.Commit();
+
+                    taskMemoryWriter.Refresh(
+                        task,
+                        BuildIterationSummary(task.TaskId),
+                        BuildReviewEvidenceSummary(task.TaskId),
+                        "Iteration goal updated from prompt.");
+                    return new PlanningIterationUpdateResult
+                    {
+                        Updated = true,
+                        TaskId = task.TaskId,
+                        Title = task.Title,
+                        IterationGoal = normalizedIterationGoal,
+                        Iteration = iteration,
+                        TaskMemoryMarkdownPath = task.TaskMemoryMarkdownPath,
+                        Message = "Iteration goal updated."
+                    };
+                }
+            }
+        }
+
         public PlanningTaskRow MakeCurrent(string taskId, string switchContextSummary)
         {
             if (string.IsNullOrWhiteSpace(switchContextSummary))
@@ -1071,6 +1174,35 @@ namespace AIMonitor.Planning
                     {
                         return reader.Read() ? ReadIteration(reader) : null;
                     }
+                }
+            }
+        }
+
+        private static PlanningIterationRow? TryGetIteration(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string iterationId)
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = """
+                    select
+                        iteration_id,
+                        task_id,
+                        sequence,
+                        goal,
+                        status,
+                        created_at_utc,
+                        completed_at_utc
+                    from task_iterations
+                    where iteration_id = $iteration_id
+                    limit 1;
+                    """;
+                command.Parameters.AddWithValue("$iteration_id", iterationId);
+                using (SqliteDataReader reader = command.ExecuteReader())
+                {
+                    return reader.Read() ? ReadIteration(reader) : null;
                 }
             }
         }

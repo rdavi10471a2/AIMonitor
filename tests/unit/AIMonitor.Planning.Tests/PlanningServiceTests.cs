@@ -276,6 +276,41 @@ namespace AIMonitor.Planning.Tests
         }
 
         [Fact]
+        public void UpdateIterationGoal_replaces_existing_iteration_goal_and_refreshes_context()
+        {
+            using (PlanningTestWorkspace workspace = PlanningTestWorkspace.Create())
+            {
+                PlanningService service = new PlanningService(workspace.Settings);
+                PlanningTaskRow task = service.CreateTask(new CreatePlanningTaskRequest
+                {
+                    Title = "Correct iteration",
+                    Goal = "Keep iteration rows deliberate."
+                });
+                service.MakeCurrent(task.TaskId, "Start task.");
+                PlanningIterationAppendResult appended = service.AppendIterationGoalToCurrentTask("wrong product-side goal");
+
+                PlanningIterationUpdateResult updated = service.UpdateIterationGoal(
+                    appended.Iteration!.IterationId,
+                    "add another innocuous watched-project property");
+
+                Assert.True(updated.Updated);
+                Assert.Equal("add another innocuous watched-project property", updated.IterationGoal);
+                Assert.NotNull(updated.Iteration);
+                Assert.Equal(appended.Iteration.IterationId, updated.Iteration.IterationId);
+                Assert.Equal(appended.Iteration.Sequence, updated.Iteration.Sequence);
+
+                CurrentTaskContext context = service.GetCurrentTaskContext();
+                Assert.Equal("add another innocuous watched-project property", context.CurrentIterationGoal);
+                Assert.Contains("#1 [open] add another innocuous watched-project property", context.IterationSummary, StringComparison.Ordinal);
+                Assert.DoesNotContain("wrong product-side goal", context.IterationSummary, StringComparison.Ordinal);
+
+                string markdown = File.ReadAllText(task.TaskMemoryMarkdownPath);
+                Assert.Contains("add another innocuous watched-project property", markdown, StringComparison.Ordinal);
+                Assert.DoesNotContain("wrong product-side goal", markdown, StringComparison.Ordinal);
+            }
+        }
+
+        [Fact]
         public void AttachWorkflowDecisionToCurrentTask_records_decision_and_refreshes_task_memory()
         {
             using (PlanningTestWorkspace workspace = PlanningTestWorkspace.Create())

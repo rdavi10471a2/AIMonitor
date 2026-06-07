@@ -34,6 +34,7 @@ internal static class Program
             Console.WriteLine("  index packages [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  plan current [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  plan add-iteration --goal <text> [--repo-root <path>] [--config <path>]");
+            Console.WriteLine("  plan update-iteration --iteration-id <id> --goal <text> [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  edit refresh --file <path> [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  edit new --file <future-path> [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  edit replace-text --file <path> --old-text <text>|--old-text-file <path> --new-text <text>|--new-text-file <path> [--expected-matches <n>] [--expected-working-hash <hash>] [--repo-root <path>] [--config <path>]");
@@ -122,6 +123,9 @@ internal static class Program
             {
                 "current" => service.GetCurrentTaskContext(),
                 "add-iteration" => service.AppendIterationGoalToCurrentTask(RequireOption(args, "--goal")),
+                "update-iteration" => service.UpdateIterationGoal(
+                    RequireOption(args, "--iteration-id"),
+                    RequireOption(args, "--goal")),
                 _ => throw new InvalidOperationException($"Unknown plan command: {args[1]}")
             };
         });

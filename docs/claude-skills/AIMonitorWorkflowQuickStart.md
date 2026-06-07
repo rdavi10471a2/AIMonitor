@@ -25,6 +25,8 @@ get_tool_manifest
 
 Use `get_current_task_context` for Plan Board task context. Do not inspect task-memory Markdown folders directly; Planning service responses are the AI-facing contract and exclude private Human Notes.
 
+After `get_current_task_context`, briefly tell the operator the Current task title/status and the current iteration goal when present. Keep review evidence to a compact one- or two-line summary unless the operator asks for more.
+
 Use the Solution Index before loading bodies:
 
 ```text
