@@ -987,6 +987,7 @@ public sealed class AIMonitorTools
         runtimeState.Touch();
         try
         {
+            PostAcceptIndexRefreshPlan? indexRefreshPlan = CreateIndexRefreshPlanForStagedRecord(stagedRecordId);
             ReviewDecisionWithIndexRefreshResult result = new StagedDecisionWorkflow().Record(
                 settings,
                 logger,
@@ -995,7 +996,8 @@ public sealed class AIMonitorTools
                 decision,
                 expectedStagedHash,
                 "AIMonitor.McpServer",
-                verbose);
+                verbose,
+                indexRefreshPlan);
             result.PostAcceptPlanning = await TryRunPostAcceptPlanningAsync(server, result, cancellationToken);
             result.SessionProgress = UpdateSessionProgressForDecision(result);
             if (result.PostAcceptPlanning?.Pending == true)
@@ -1020,6 +1022,55 @@ public sealed class AIMonitorTools
                 });
             throw;
         }
+    }
+
+    private PostAcceptIndexRefreshPlan? CreateIndexRefreshPlanForStagedRecord(string stagedRecordId)
+    {
+        StagedEditRecord record = workflowService.GetStagedRecord(stagedRecordId);
+        AIMonitorSessionPlannedFile? plannedFile = FindPlannedFileForRecord(record);
+        if (plannedFile is null || string.IsNullOrWhiteSpace(plannedFile.OwningProjectPath))
+        {
+            return null;
+        }
+
+        return new PostAcceptIndexRefreshPlan
+        {
+            OwningProjectPaths = [plannedFile.OwningProjectPath]
+        };
+    }
+
+    private PreMergeValidationPlan? CreatePreMergeValidationPlanForStagedRecord(string stagedRecordId)
+    {
+        StagedEditRecord record = workflowService.GetStagedRecord(stagedRecordId);
+        AIMonitorSessionPlannedFile? plannedFile = FindPlannedFileForRecord(record);
+        if (plannedFile is null || string.IsNullOrWhiteSpace(plannedFile.OwningProjectPath))
+        {
+            return null;
+        }
+
+        return new PreMergeValidationPlan
+        {
+            OwningProjectPath = plannedFile.OwningProjectPath
+        };
+    }
+
+    private AIMonitorSessionPlannedFile? FindPlannedFileForRecord(StagedEditRecord record)
+    {
+        if (string.IsNullOrWhiteSpace(record.SessionId))
+        {
+            return null;
+        }
+
+        AIMonitorSessionState? session = LoadSessionById(record.SessionId);
+        if (session?.Plan is null)
+        {
+            return null;
+        }
+
+        return FindPlannedFile(
+            session.Plan.FilesPlanned,
+            record.WatchedFilePath,
+            record.RelativePath);
     }
 
     [McpServerTool]
@@ -1222,6 +1273,7 @@ public sealed class AIMonitorTools
         [Description("Return the full staged record inline for debugging. Defaults to compact response.")] bool verbose = false)
     {
         runtimeState.Touch();
+        PreMergeValidationPlan? validationPlan = CreatePreMergeValidationPlanForStagedRecord(stagedRecordId);
         StagedDiffLaunchWorkflowResult result = new StagedDiffLaunchWorkflow().Launch(
             settings,
             logger,
@@ -1230,7 +1282,8 @@ public sealed class AIMonitorTools
             "AIMonitor.McpServer",
             diffToolPath,
             forceValidation,
-            verbose);
+            verbose,
+            validationPlan);
         return new AIMonitorStagedDiffLaunchResult(
             result.StagedRecordSummary,
             result.StagedRecord,

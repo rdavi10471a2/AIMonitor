@@ -54,6 +54,39 @@ public sealed class SolutionIndexStore
         return GetSummary();
     }
 
+    public SolutionIndexSummary ReplaceProjects(MSBuildSolutionSnapshot snapshot)
+    {
+        database.EnsureCreated();
+        if (snapshot.Projects.Count == 0)
+        {
+            throw new InvalidOperationException("Refusing to refresh the solution index with a zero-project project snapshot.");
+        }
+
+        using (SqliteConnection connection = database.OpenConnection())
+        using (SqliteTransaction transaction = connection.BeginTransaction())
+        {
+            foreach (MSBuildProjectSnapshot project in snapshot.Projects)
+            {
+                DeleteProject(connection, transaction, project.ProjectPath);
+                long projectId = InsertProject(connection, transaction, project);
+                InsertDocuments(connection, transaction, projectId, project.Documents);
+                InsertSymbols(connection, transaction, projectId, project.Symbols);
+                InsertReferences(connection, transaction, projectId, project.References);
+                InsertCallSites(connection, transaction, projectId, project.Symbols, project.References);
+                InsertRelationships(connection, transaction, projectId, project.Symbols, project.References);
+                InsertProjectReferences(connection, transaction, projectId, project.ProjectReferences);
+                InsertPackageReferences(connection, transaction, projectId, project.PackageReferences);
+                InsertFrameworkReferences(connection, transaction, projectId, project.FrameworkReferences);
+                InsertGlobalUsings(connection, transaction, projectId, project.GlobalUsings);
+            }
+
+            SaveCurrentSolutionState(connection, transaction, snapshot.InputPath);
+            transaction.Commit();
+        }
+
+        return GetSummary();
+    }
+
     public SolutionIndexSummary GetSummary()
     {
         database.EnsureCreated();
@@ -463,6 +496,39 @@ public sealed class SolutionIndexStore
             ("$projectCount", snapshot.Projects.Count),
             ("$documentCount", snapshot.Projects.Sum(project => project.Documents.Count)),
             ("$diagnosticCount", snapshot.Diagnostics.Count));
+    }
+
+    private static void SaveCurrentSolutionState(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string inputPath)
+    {
+        Execute(connection, transaction, "delete from solution_state;");
+        Execute(connection, transaction, """
+            insert into solution_state(id, input_path, indexed_at_utc, project_count, document_count, diagnostic_count)
+            values (
+                1,
+                $inputPath,
+                $indexedAtUtc,
+                (select count(*) from projects),
+                (select count(*) from documents),
+                (select count(*) from diagnostics)
+            );
+            """,
+            ("$inputPath", inputPath),
+            ("$indexedAtUtc", DateTimeOffset.UtcNow.ToString("O")));
+    }
+
+    private static void DeleteProject(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string projectPath)
+    {
+        Execute(connection, transaction, """
+            delete from projects
+            where project_path = $projectPath;
+            """,
+            ("$projectPath", projectPath));
     }
 
     private static long InsertProject(

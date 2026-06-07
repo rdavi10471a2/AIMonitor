@@ -47,7 +47,7 @@ Before the first watched-source edit, the agent should create or reuse a monitor
 }
 ```
 
-This captures the agent's "I need to edit these files" statement as session intent. It should stay compact, use MSBuild/index truth for project ownership, and flow through the existing `sessionId` on refresh/edit/stage/decision calls. Each planned file is an ordered file in the session, so `record_diff_decision` can report progress such as 1 of N and defer the Planning next-step gate until the final planned file is decided. The next practical use is project-targeted index refresh after accepted decisions: rebuild the owning projects for the session's edited/staged/decided files instead of rebuilding the whole watched solution.
+This captures the agent's "I need to edit these files" statement as session intent. It should stay compact, use MSBuild/index truth for project ownership, and flow through the existing `sessionId` on refresh/edit/stage/decision calls. Each planned file is an ordered file in the session, so `record_diff_decision` can report progress such as 1 of N and defer the Planning next-step gate until the final planned file is decided. The session planned file is also the authoritative project source for validation and post-accept indexing. `launch_staged_diff` may use project-scoped MSBuild validation only when the staged record's exact watched file matches a planned file with `owningProjectPath`; otherwise it falls back to full-solution validation. `record_diff_decision` uses the same exact planned-file match for project-targeted index refresh after accepted decisions.
 
 ## Middle: Safe Edit Engine
 
@@ -131,13 +131,14 @@ The spike proved useful pieces but put too much orchestration in `Program.cs`. R
 
 ## Index Refresh Follow-Up
 
-Full post-accept solution rebuilds make the outer loop too slow. The next indexing redesign should use the session DTO plan and staged records:
+Full post-accept solution rebuilds make the outer loop too slow. The first project-scoped slice now uses the session DTO plan's `owningProjectPath` for normal C# edits and replaces only matching project rows in the durable index. The remaining indexing redesign should broaden that into dependency-aware refresh:
 
 1. `record_diff_decision` always has the decided staged file.
 2. The `sessionId` gives access to the planned file set for the task/iteration.
 3. Planned files include `owningProjectPath`.
-4. Accepted decisions should refresh the union of owning projects for files with roles such as `edit`, `new-file`, `test`, or `config`.
+4. Accepted decisions should refresh the union of owning projects for files with roles such as `edit`, `new-file`, `test`, or `config`; the current first slice refreshes the current planned file's owning project for safe `.cs` edits.
 5. Fall back to full solution rebuild for solution/project file edits, unknown ownership, unsupported Razor/generated boundaries, or failed project refresh.
+6. Reverse-dependent project refresh remains deferred; use existing project-reference rows to expand the affected project set before trusting project-scoped refresh for changed library APIs.
 
 Do not capture all MCP calls as Planning history. Capture the planned file/project set explicitly at the front door.
 

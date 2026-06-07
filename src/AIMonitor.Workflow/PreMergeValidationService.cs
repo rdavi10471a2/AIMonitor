@@ -6,7 +6,10 @@ namespace AIMonitor.Workflow;
 
 public sealed class PreMergeValidationService
 {
-    public PreMergeValidationResult Validate(MonitorSettings settings, StagedEditRecord record)
+    public PreMergeValidationResult Validate(
+        MonitorSettings settings,
+        StagedEditRecord record,
+        PreMergeValidationPlan? validationPlan = null)
     {
         if (!File.Exists(record.StagedFilePath))
         {
@@ -61,9 +64,10 @@ public sealed class PreMergeValidationService
             Directory.CreateDirectory(Path.GetDirectoryName(validationCandidatePath) ?? validationSourceRoot);
             File.Copy(record.StagedFilePath, validationCandidatePath, overwrite: true);
 
+            ValidationTarget validationTarget = ResolveValidationTarget(settings, record, validationPlan, validationSourceRoot, validationSolutionPath);
             ProcessResult build = RunProcess(
                 "dotnet",
-                ["build", validationSolutionPath, "--nologo", "-v:minimal"],
+                ["build", validationTarget.TargetPath, "--nologo", "-v:minimal", "-p:BuildProjectReferences=true"],
                 validationWorkspaceRoot,
                 TimeSpan.FromMinutes(3));
             string output = string.Join(Environment.NewLine, [build.StandardOutput, build.StandardError]);
@@ -81,11 +85,13 @@ public sealed class PreMergeValidationService
                 DiagnosticCount = errorDiagnostics.Length,
                 Diagnostics = errorDiagnostics,
                 ValidationWorkspacePath = validationWorkspaceRoot,
+                ValidationMode = validationTarget.Mode,
+                ValidationTargetPath = validationTarget.TargetPath,
                 Message = build.TimedOut
-                    ? "Pre-merge full solution build timed out."
+                    ? $"Pre-merge {validationTarget.Description} timed out."
                     : failed
-                        ? "Pre-merge full solution build failed."
-                        : "Pre-merge full solution build passed."
+                        ? $"Pre-merge {validationTarget.Description} failed."
+                        : $"Pre-merge {validationTarget.Description} passed."
             };
         }
         catch (Exception ex)
@@ -97,9 +103,48 @@ public sealed class PreMergeValidationService
                 DiagnosticCount = 1,
                 Diagnostics = [ex.Message],
                 ValidationWorkspacePath = validationWorkspaceRoot,
+                ValidationMode = "solution",
+                ValidationTargetPath = validationSolutionPath,
                 Message = "Pre-merge full solution build failed."
             };
         }
+    }
+
+    private static ValidationTarget ResolveValidationTarget(
+        MonitorSettings settings,
+        StagedEditRecord record,
+        PreMergeValidationPlan? validationPlan,
+        string validationSourceRoot,
+        string validationSolutionPath)
+    {
+        string extension = Path.GetExtension(record.WatchedFilePath);
+        if (!extension.Equals(".cs", StringComparison.OrdinalIgnoreCase)
+            || RazorLikePath(record.WatchedFilePath))
+        {
+            return ValidationTarget.Solution(validationSolutionPath);
+        }
+
+        if (validationPlan is null
+            || string.IsNullOrWhiteSpace(validationPlan.OwningProjectPath)
+            || !validationPlan.OwningProjectPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+            || !File.Exists(validationPlan.OwningProjectPath))
+        {
+            return ValidationTarget.Solution(validationSolutionPath);
+        }
+
+        string validationProjectPath = Path.Combine(
+            validationSourceRoot,
+            Path.GetRelativePath(settings.WatchedProjectFolder, validationPlan.OwningProjectPath));
+        return File.Exists(validationProjectPath)
+            ? ValidationTarget.Project(validationProjectPath)
+            : ValidationTarget.Solution(validationSolutionPath);
+    }
+
+    private static bool RazorLikePath(string path)
+    {
+        string fileName = Path.GetFileName(path);
+        return fileName.EndsWith(".razor.cs", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".cshtml.cs", StringComparison.OrdinalIgnoreCase);
     }
 
     private static ExternalValidationInputs CollectExternalValidationInputs(string sourceRoot, IReadOnlyList<string> excludedRoots)
@@ -433,4 +478,20 @@ public sealed class PreMergeValidationService
         string CommonRoot,
         IReadOnlyList<string> Directories,
         IReadOnlyList<string> Files);
+
+    private sealed record ValidationTarget(
+        string Mode,
+        string TargetPath,
+        string Description)
+    {
+        public static ValidationTarget Solution(string solutionPath)
+        {
+            return new ValidationTarget("solution", solutionPath, "full solution build");
+        }
+
+        public static ValidationTarget Project(string projectPath)
+        {
+            return new ValidationTarget("project", projectPath, "project build");
+        }
+    }
 }

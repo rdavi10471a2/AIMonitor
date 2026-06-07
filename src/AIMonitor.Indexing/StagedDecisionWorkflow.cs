@@ -15,7 +15,8 @@ public sealed class StagedDecisionWorkflow
         string decision,
         string? expectedStagedHash,
         string source,
-        bool verbose = false)
+        bool verbose = false,
+        PostAcceptIndexRefreshPlan? indexRefreshPlan = null)
     {
         StagedEditRecord existing = workflowService.GetStagedRecord(stagedRecordId);
         WorkflowEditService.EnsureRecordNotDecided(existing);
@@ -28,7 +29,8 @@ public sealed class StagedDecisionWorkflow
                 settings,
                 logger,
                 record,
-                source);
+                source,
+                indexRefreshPlan);
         }
 
         PlanningEvidenceAttachmentResult planningEvidence = new PlanningService(settings)

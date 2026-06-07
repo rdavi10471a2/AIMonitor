@@ -94,6 +94,81 @@ public sealed class StagedDecisionWorkflowTests
         Assert.True(workflowService.GetStatus(sourcePath).IndexStale);
     }
 
+    [Fact]
+    public void Record_uses_project_scoped_refresh_when_project_plan_is_available()
+    {
+        string tempRoot = Path.Combine(Path.GetTempPath(), "AIMonitorIndexingTests", Guid.NewGuid().ToString("N"));
+        string repositoryRoot = Path.Combine(tempRoot, "Repo");
+        string runtimeRoot = Path.Combine(tempRoot, "Runtime");
+        string watchedRoot = Path.Combine(tempRoot, "Watched");
+        string projectPath = Path.Combine(watchedRoot, "Example.csproj");
+        string sourcePath = Path.Combine(watchedRoot, "Program.cs");
+
+        Directory.CreateDirectory(watchedRoot);
+        File.WriteAllText(
+            projectPath,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <OutputType>Library</OutputType>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.WriteAllText(
+            sourcePath,
+            """
+            namespace Example;
+
+            internal static class Program
+            {
+            }
+            """);
+
+        MonitorSettings settings = MonitorSettings.Create(repositoryRoot, projectPath, runtimeRoot);
+        WorkflowEditService workflowService = new(settings);
+        EditSessionStatus refresh = workflowService.Refresh(sourcePath);
+        File.WriteAllText(
+            refresh.WorkingFilePath,
+            """
+            namespace Example;
+
+            internal static class Program
+            {
+                public static string Value => "candidate";
+            }
+            """);
+        StagedEditRecord record = workflowService.Stage(sourcePath);
+        workflowService.RecordPreMergeValidation(
+            record.StagedRecordId,
+            new PreMergeValidationResult { Status = "passed", IsError = false },
+            forceApproved: false);
+        workflowService.RecordDiffLaunch(record.StagedRecordId, launched: true, "test launch");
+        File.Copy(record.StagedFilePath, sourcePath, overwrite: true);
+
+        ReviewDecisionWithIndexRefreshResult result = new StagedDecisionWorkflow().Record(
+            settings,
+            NullMonitorLogger.Instance,
+            workflowService,
+            record.StagedRecordId,
+            "accepted",
+            record.StagedHash,
+            "AIMonitor.Indexing.Tests",
+            indexRefreshPlan: new PostAcceptIndexRefreshPlan
+            {
+                OwningProjectPaths = [projectPath]
+            });
+
+        Assert.Equal("accepted", result.Classification);
+        Assert.NotNull(result.IndexRefresh);
+        Assert.False(result.IndexRefresh.IsError);
+        Assert.Equal("project", result.IndexRefresh.RefreshMode);
+        Assert.Contains("project index refresh", result.IndexRefresh.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(workflowService.GetStatus(sourcePath).IndexStale);
+    }
+
     private sealed class NullMonitorLogger : IMonitorLogger
     {
         public static readonly NullMonitorLogger Instance = new();

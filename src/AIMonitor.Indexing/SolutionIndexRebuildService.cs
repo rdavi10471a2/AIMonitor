@@ -18,4 +18,15 @@ public sealed class SolutionIndexRebuildService
         new WorkflowEditService(settings).MarkAllIndexesFresh();
         return summary;
     }
+
+    public async Task<SolutionIndexSummary> RefreshProjectsAsync(
+        MonitorSettings settings,
+        IReadOnlyList<string> projectPaths,
+        CancellationToken cancellationToken = default)
+    {
+        string databasePath = MonitorDataPaths.GetDefaultIndexDatabasePath(settings);
+        SolutionIndexStore store = new(new SolutionIndexDatabase(databasePath));
+        SolutionIndexBuilder builder = new(new MSBuildWorkspaceLoader(), store);
+        return await builder.RefreshProjectsAsync(settings, projectPaths, cancellationToken);
+    }
 }

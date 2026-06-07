@@ -218,6 +218,42 @@ public sealed class SolutionIndexStoreTests
         Assert.Equal(1, store.GetSummary().ProjectCount);
     }
 
+    [Fact]
+    public void ReplaceProjects_replaces_only_matching_project_rows()
+    {
+        string databasePath = Path.Combine(Path.GetTempPath(), "AIMonitorTests", Guid.NewGuid().ToString("N"), "index.sqlite");
+        SolutionIndexStore store = new(new SolutionIndexDatabase(databasePath));
+        string inputPath = @"C:\Example\Example.sln";
+
+        store.SaveSnapshot(new MSBuildSolutionSnapshot(
+            inputPath,
+            [
+                CreateProject("project:app-old", "App", @"C:\Example\App.csproj", "App.cs", @"C:\Example\App.cs", "symbol:app-old", "AppType", "App.Package"),
+                CreateProject("project:lib", "Lib", @"C:\Example\Lib.csproj", "Lib.cs", @"C:\Example\Lib.cs", "symbol:lib", "LibType", "Lib.Package")
+            ],
+            ["existing diagnostic"]));
+
+        SolutionIndexSummary summary = store.ReplaceProjects(new MSBuildSolutionSnapshot(
+            inputPath,
+            [
+                CreateProject("project:app-new", "App", @"C:\Example\App.csproj", "App2.cs", @"C:\Example\App2.cs", "symbol:app-new", "AppType2", "App.Package2")
+            ],
+            []));
+
+        Assert.Equal(2, summary.ProjectCount);
+        Assert.Equal(2, summary.DocumentCount);
+        Assert.Equal(1, summary.DiagnosticCount);
+        Assert.DoesNotContain(store.ListProjects(), project => project.StableKey == "project:app-old");
+        Assert.DoesNotContain(store.ListDocuments(), document => document.Name == "App.cs");
+        Assert.DoesNotContain(store.ListSymbols(), symbol => symbol.StableKey == "symbol:app-old");
+        Assert.Contains(store.ListProjects(), project => project.StableKey == "project:app-new");
+        Assert.Contains(store.ListDocuments(), document => document.Name == "App2.cs");
+        Assert.Contains(store.ListSymbols(), symbol => symbol.StableKey == "symbol:app-new");
+        Assert.Contains(store.ListProjects(), project => project.StableKey == "project:lib");
+        Assert.Contains(store.ListDocuments(), document => document.Name == "Lib.cs");
+        Assert.Contains(store.ListSymbols(), symbol => symbol.StableKey == "symbol:lib");
+    }
+
     private static MSBuildSolutionSnapshot CreateSnapshot(
         string inputPath,
         string projectKey,
@@ -279,6 +315,62 @@ public sealed class SolutionIndexStoreTests
                     []),
             ],
             [diagnostic]);
+    }
+
+    private static MSBuildProjectSnapshot CreateProject(
+        string projectKey,
+        string projectName,
+        string projectPath,
+        string documentName,
+        string documentPath,
+        string symbolKey,
+        string symbolName,
+        string packageName)
+    {
+        return new MSBuildProjectSnapshot(
+            projectKey,
+            projectName,
+            projectPath,
+            "C#",
+            "net10.0",
+            "",
+            "Library",
+            "Microsoft.NET.Sdk",
+            projectName,
+            projectName,
+            "enable",
+            "enable",
+            "latest",
+            [
+                new MSBuildDocumentSnapshot($"document:{documentName}", documentName, documentPath, [], documentName)
+            ],
+            [
+                new MSBuildSymbolSnapshot(
+                    symbolKey,
+                    symbolName,
+                    "NamedType",
+                    projectName,
+                    "",
+                    documentPath,
+                    1,
+                    1,
+                    $"{projectName}.{symbolName}")
+            ],
+            [
+                new MSBuildReferenceSnapshot(
+                    symbolKey,
+                    documentPath,
+                    1,
+                    1,
+                    "IdentifierName",
+                    symbolName)
+            ],
+            [],
+            [],
+            [new MSBuildPackageReferenceSnapshot(packageName, "1.0.0")],
+            [],
+            [],
+            []);
     }
 
     private static bool TableExists(string databasePath, string tableName)

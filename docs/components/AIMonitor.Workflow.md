@@ -38,6 +38,8 @@ refresh_file/new_file
 - Staged runtime files.
 - The shared editable-session guard used by text, span, and Roslyn typed-edit surfaces.
 - Pre-merge validation copy creation and `dotnet build` execution.
+- Project-scoped pre-merge validation when the staged record's exact watched file
+  matches a session planned file with an `owningProjectPath`.
 - Vote-plus-hash accept/reject classification.
 - Terminal staged-record guards.
 - Dirty/unexpected recovery signals.
@@ -50,6 +52,7 @@ refresh_file/new_file
 - WinMerge process launch.
 - Post-accept index rebuild implementation.
 - Post-accept index refresh response shaping.
+- Inferring project ownership from the filesystem during validation.
 - Agent-specific command parsing.
 
 ## Key Tests

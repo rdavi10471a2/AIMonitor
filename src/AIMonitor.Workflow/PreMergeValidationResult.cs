@@ -12,5 +12,9 @@ public sealed class PreMergeValidationResult
 
     public string ValidationWorkspacePath { get; set; } = string.Empty;
 
+    public string ValidationMode { get; set; } = string.Empty;
+
+    public string ValidationTargetPath { get; set; } = string.Empty;
+
     public string Message { get; set; } = string.Empty;
 }

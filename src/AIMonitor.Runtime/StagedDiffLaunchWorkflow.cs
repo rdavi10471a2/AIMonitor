@@ -14,12 +14,13 @@ public sealed class StagedDiffLaunchWorkflow
         string source,
         string? diffToolPath = null,
         bool forceValidation = false,
-        bool verbose = false)
+        bool verbose = false,
+        PreMergeValidationPlan? validationPlan = null)
     {
         StagedEditRecord record = workflowService.GetStagedRecord(stagedRecordId);
         WorkflowEditService.EnsureRecordNotDecided(record);
 
-        PreMergeValidationResult validation = new PreMergeValidationService().Validate(settings, record);
+        PreMergeValidationResult validation = new PreMergeValidationService().Validate(settings, record, validationPlan);
         string validationPrompt = "";
         if (validation.IsError && !forceValidation && PreMergeValidationOverridePrompt.CanShow())
         {
@@ -39,6 +40,8 @@ public sealed class StagedDiffLaunchWorkflow
                 ["watchedFilePath"] = record.WatchedFilePath,
                 ["relativePath"] = record.RelativePath,
                 ["validationStatus"] = validation.Status,
+                ["validationMode"] = validation.ValidationMode,
+                ["validationTargetPath"] = validation.ValidationTargetPath,
                 ["diagnosticCount"] = validation.DiagnosticCount.ToString(),
                 ["validationWorkspacePath"] = validation.ValidationWorkspacePath,
                 ["forceValidation"] = forceValidation.ToString().ToLowerInvariant(),
