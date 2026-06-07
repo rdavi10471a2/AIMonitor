@@ -6,6 +6,7 @@
     <ProjectReference Include="..\AIMonitor.Indexing\AIMonitor.Indexing.csproj" />
     <ProjectReference Include="..\AIMonitor.Logging\AIMonitor.Logging.csproj" />
     <ProjectReference Include="..\AIMonitor.MSBuild\AIMonitor.MSBuild.csproj" />
+    <ProjectReference Include="..\AIMonitor.Planning\AIMonitor.Planning.csproj" />
     <ProjectReference Include="..\AIMonitor.Workflow\AIMonitor.Workflow.csproj" />
     <ProjectReference Include="..\AIMonitor.Runtime\AIMonitor.Runtime.csproj" />
   </ItemGroup>
@@ -16,6 +17,9 @@
 
   <ItemGroup>
     <Content Include="Assets\monaco\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\markdown\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

@@ -17,10 +17,13 @@ dotnet <absolute path>\src\AIMonitor.McpStdioBridge\bin\Debug\net10.0\AIMonitor.
 ```text
 get_monitor_status
 get_workflow_status
+get_current_task_context
 get_self_check
 get_staging_guide
 get_tool_manifest
 ```
+
+Use `get_current_task_context` for Plan Board task context. Do not inspect task-memory Markdown folders directly; Planning service responses are the AI-facing contract and exclude private Human Notes.
 
 Use the Solution Index before loading bodies:
 
@@ -95,3 +98,5 @@ Rejected new-file decisions leave watched source absent.
 - No dialog available: ask the operator in chat before using `forceValidation`.
 
 Accepted or accepted-normalized decisions rebuild the solution index and return `indexRefresh`. Check that status before relying on fresh index rows.
+
+`record_diff_decision` also attaches the staged-record decision to the Current task when one exists. If no Current task exists, the safe-edit decision is still recorded but no task memory evidence is attached.

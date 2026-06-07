@@ -1,4 +1,5 @@
 using AIMonitor.Workflow;
+using AIMonitor.Planning;
 
 namespace AIMonitor.Indexing;
 
@@ -25,6 +26,8 @@ public sealed class ReviewDecisionWithIndexRefreshResult
     public StagedEditRecord? StagedRecord { get; set; }
 
     public PostAcceptIndexRefreshResult? IndexRefresh { get; set; }
+
+    public PlanningEvidenceAttachmentResult? PlanningEvidence { get; set; }
 
     public string NextStep { get; set; } = string.Empty;
 }

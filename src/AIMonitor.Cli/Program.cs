@@ -2,6 +2,7 @@ using AIMonitor.Core;
 using AIMonitor.Data;
 using AIMonitor.Indexing;
 using AIMonitor.Logging;
+using AIMonitor.Planning;
 using AIMonitor.Runtime;
 using AIMonitor.Workflow;
 using System.Diagnostics;
@@ -31,6 +32,7 @@ internal static class Program
             Console.WriteLine("  index references [--symbol <stable-key>] [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  index references-in-file --file <path> [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  index packages [--repo-root <path>] [--config <path>]");
+            Console.WriteLine("  plan current [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  edit refresh --file <path> [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  edit new --file <future-path> [--repo-root <path>] [--config <path>]");
             Console.WriteLine("  edit replace-text --file <path> --old-text <text>|--old-text-file <path> --new-text <text>|--new-text-file <path> [--expected-matches <n>] [--expected-working-hash <hash>] [--repo-root <path>] [--config <path>]");
@@ -68,6 +70,11 @@ internal static class Program
             return Edit(args);
         }
 
+        if (IsPlanCommand(args))
+        {
+            return Plan(args);
+        }
+
         Console.Error.WriteLine($"Unknown command: {args[0]}");
         return 2;
     }
@@ -96,6 +103,26 @@ internal static class Program
     {
         return args.Length >= 2
             && string.Equals(args[0], "edit", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsPlanCommand(string[] args)
+    {
+        return args.Length >= 2
+            && string.Equals(args[0], "plan", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int Plan(string[] args)
+    {
+        return ExecuteJsonCommand(args, () =>
+        {
+            MonitorSettings settings = LoadSettings(args);
+            PlanningService service = new PlanningService(settings);
+            return args[1].ToLowerInvariant() switch
+            {
+                "current" => service.GetCurrentTaskContext(),
+                _ => throw new InvalidOperationException($"Unknown plan command: {args[1]}")
+            };
+        });
     }
 
     private static int QueryIndex(string[] args)

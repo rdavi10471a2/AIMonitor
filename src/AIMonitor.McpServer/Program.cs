@@ -2,6 +2,7 @@ using AIMonitor.Core;
 using AIMonitor.Data;
 using AIMonitor.Indexing;
 using AIMonitor.Logging;
+using AIMonitor.Planning;
 using AIMonitor.Runtime;
 using AIMonitor.Workflow;
 using Microsoft.Extensions.Hosting;
@@ -31,6 +32,7 @@ internal static class Program
             new JsonLinesMonitorLogger(MonitorLogPaths.GetDefaultLogPath(settings))));
         builder.Services.AddSingleton(SolutionIndexQueryService.Create(settings));
         builder.Services.AddSingleton(new WorkflowEditService(settings));
+        builder.Services.AddSingleton(new PlanningService(settings));
         builder.Services.AddSingleton(new RoslynEditService(settings));
         builder.Services.AddSingleton(new WorkflowEditPaths(settings));
         builder.Services.AddSingleton<AIMonitorMcpRuntimeState>();
@@ -74,6 +76,7 @@ public sealed class AIMonitorTools
     private readonly MonitorSettings settings;
     private readonly SolutionIndexQueryService queryService;
     private readonly WorkflowEditService workflowService;
+    private readonly PlanningService planningService;
     private readonly RoslynEditService roslynEditService;
     private readonly WorkflowEditPaths workflowPaths;
     private readonly AIMonitorMcpRuntimeState runtimeState;
@@ -84,6 +87,7 @@ public sealed class AIMonitorTools
         MonitorSettings settings,
         SolutionIndexQueryService queryService,
         WorkflowEditService workflowService,
+        PlanningService planningService,
         RoslynEditService roslynEditService,
         WorkflowEditPaths workflowPaths,
         AIMonitorMcpRuntimeState runtimeState,
@@ -93,6 +97,7 @@ public sealed class AIMonitorTools
         this.settings = settings;
         this.queryService = queryService;
         this.workflowService = workflowService;
+        this.planningService = planningService;
         this.roslynEditService = roslynEditService;
         this.workflowPaths = workflowPaths;
         this.runtimeState = runtimeState;
@@ -135,6 +140,14 @@ public sealed class AIMonitorTools
             workflowPaths.WorkingRoot,
             settings.WinMergeCandidatePaths.FirstOrDefault(File.Exists),
             settings.WinMergeCandidatePaths);
+    }
+
+    [McpServerTool]
+    [Description("Return the AI-facing Current task context for the watched solution. Human notes are intentionally excluded; use the Plan Board UI for private operator notes.")]
+    public CurrentTaskContext GetCurrentTaskContext()
+    {
+        runtimeState.Touch();
+        return planningService.GetCurrentTaskContext();
     }
 
     [McpServerTool]

@@ -96,6 +96,10 @@ public sealed class MonitorSettingsLoaderTests
         Assert.Equal(Path.GetFullPath(solutionPath), settings.WatchedSolutionPath);
         Assert.Equal(Path.Combine(root, "runtime"), settings.RuntimeRoot);
         Assert.Equal(@"C:\Tools\WinMerge\WinMergeU.exe", Assert.Single(settings.WinMergeCandidatePaths));
+        PlanningSettings planning = MonitorSettingsLoader.LoadPlanning(root, settingsPath);
+        Assert.False(planning.Enabled);
+        Assert.Equal(string.Empty, planning.DatabasePath);
+        Assert.Equal(string.Empty, planning.TaskMemoryRoot);
     }
 
     [Fact]
@@ -136,5 +140,60 @@ public sealed class MonitorSettingsLoaderTests
         Assert.Equal(
             new[] { "C:\\Program Files\\WinMerge\\WinMergeU.exe", "C:\\Program Files (x86)\\WinMerge\\WinMergeU.exe" },
             settings.WinMergeCandidatePaths);
+    }
+
+    [Fact]
+    public async Task LoadPlanning_defaults_to_disabled_when_section_is_missing()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "AIMonitorTests", Guid.NewGuid().ToString("N"));
+        string config = Path.Combine(root, "config");
+        Directory.CreateDirectory(config);
+        string solutionPath = Path.Combine(root, "Fixture.slnx");
+        string settingsPath = Path.Combine(config, "appsettings.json");
+        await File.WriteAllTextAsync(solutionPath, "<Solution />");
+        await File.WriteAllTextAsync(settingsPath, $$"""
+            {
+              "Monitor": {
+                "WatchedSolutionPath": "{{solutionPath.Replace("\\", "\\\\")}}",
+                "RuntimeRoot": "runtime"
+              }
+            }
+            """);
+
+        PlanningSettings planning = MonitorSettingsLoader.LoadPlanning(root, settingsPath);
+
+        Assert.False(planning.Enabled);
+        Assert.Equal(string.Empty, planning.DatabasePath);
+        Assert.Equal(string.Empty, planning.TaskMemoryRoot);
+    }
+
+    [Fact]
+    public async Task LoadPlanning_reads_enabled_section_and_resolves_paths_from_repository_root()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "AIMonitorTests", Guid.NewGuid().ToString("N"));
+        string config = Path.Combine(root, "config");
+        Directory.CreateDirectory(config);
+        string solutionPath = Path.Combine(root, "Fixture.slnx");
+        string settingsPath = Path.Combine(config, "appsettings.json");
+        await File.WriteAllTextAsync(solutionPath, "<Solution />");
+        await File.WriteAllTextAsync(settingsPath, $$"""
+            {
+              "Monitor": {
+                "WatchedSolutionPath": "{{solutionPath.Replace("\\", "\\\\")}}",
+                "RuntimeRoot": "runtime"
+              },
+              "Planning": {
+                "Enabled": true,
+                "DatabasePath": "runtime/planning/board.sqlite",
+                "TaskMemoryRoot": "runtime/planning/task-memory"
+              }
+            }
+            """);
+
+        PlanningSettings planning = MonitorSettingsLoader.LoadPlanning(root, settingsPath);
+
+        Assert.True(planning.Enabled);
+        Assert.Equal(Path.Combine(root, "runtime", "planning", "board.sqlite"), planning.DatabasePath);
+        Assert.Equal(Path.Combine(root, "runtime", "planning", "task-memory"), planning.TaskMemoryRoot);
     }
 }

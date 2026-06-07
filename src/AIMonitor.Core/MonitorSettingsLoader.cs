@@ -43,6 +43,34 @@ public static class MonitorSettingsLoader
             ResolvePaths(winMergeCandidatePaths, settingsDirectory));
     }
 
+    public static PlanningSettings LoadPlanning(string repositoryRoot, string? settingsPath = null)
+    {
+        string resolvedRepositoryRoot = Path.GetFullPath(repositoryRoot);
+        string resolvedSettingsPath = ResolveSettingsPath(resolvedRepositoryRoot, settingsPath);
+
+        if (!File.Exists(resolvedSettingsPath))
+        {
+            throw new FileNotFoundException("AIMonitor settings file was not found.", resolvedSettingsPath);
+        }
+
+        using FileStream stream = File.OpenRead(resolvedSettingsPath);
+        using JsonDocument document = JsonDocument.Parse(stream);
+        if (!document.RootElement.TryGetProperty("Planning", out JsonElement planning))
+        {
+            return PlanningSettings.Disabled();
+        }
+
+        bool enabled = GetBoolean(planning, "Enabled") ?? false;
+        string databasePath = GetString(planning, "DatabasePath") ?? string.Empty;
+        string taskMemoryRoot = GetString(planning, "TaskMemoryRoot") ?? string.Empty;
+        string settingsDirectory = Path.GetDirectoryName(resolvedSettingsPath) ?? resolvedRepositoryRoot;
+
+        return new PlanningSettings(
+            enabled,
+            string.IsNullOrWhiteSpace(databasePath) ? string.Empty : ResolvePath(databasePath, resolvedRepositoryRoot),
+            string.IsNullOrWhiteSpace(taskMemoryRoot) ? string.Empty : ResolvePath(taskMemoryRoot, resolvedRepositoryRoot));
+    }
+
     public static string SaveLocal(
         string repositoryRoot,
         string watchedSolutionPath,
@@ -64,7 +92,8 @@ public static class MonitorSettingsLoader
             new LocalMonitorSettings(
                 resolvedWatchedSolutionPath,
                 resolvedRuntimeRoot,
-                existingWinMergeCandidatePaths));
+                existingWinMergeCandidatePaths),
+            new LocalPlanningSettings(false, string.Empty, string.Empty));
         File.WriteAllText(resolvedSettingsPath, JsonSerializer.Serialize(file, SerializerOptions) + Environment.NewLine);
         return resolvedSettingsPath;
     }
@@ -91,6 +120,14 @@ public static class MonitorSettingsLoader
         return element.TryGetProperty(propertyName, out JsonElement value)
             && value.ValueKind == JsonValueKind.String
             ? value.GetString()
+            : null;
+    }
+
+    private static bool? GetBoolean(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out JsonElement value)
+            && value.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? value.GetBoolean()
             : null;
     }
 
@@ -185,10 +222,15 @@ public static class MonitorSettingsLoader
             .ToArray();
     }
 
-    private sealed record LocalSettingsFile(LocalMonitorSettings Monitor);
+    private sealed record LocalSettingsFile(LocalMonitorSettings Monitor, LocalPlanningSettings Planning);
 
     private sealed record LocalMonitorSettings(
         string WatchedSolutionPath,
         string RuntimeRoot,
         IReadOnlyList<string> WinMergeCandidatePaths);
+
+    private sealed record LocalPlanningSettings(
+        bool Enabled,
+        string DatabasePath,
+        string TaskMemoryRoot);
 }

@@ -10,6 +10,7 @@ This repository is the AIMonitor implementation.
 - Add tests in parallel with workflow behavior.
 - Prefer MSBuild-loaded project truth over filesystem guessing.
 - Keep generated runtime state under `runtime/` and out of watched projects.
+- For Plan Board context, use the Planning surface (`plan current` in CLI or `get_current_task_context` in MCP). Do not browse `runtime/**/planning/task-memory/` directly for active task context; task memory Markdown is storage/review evidence, and Human Notes are not AI-facing by default.
 - Do not hide data row/result classes inside repositories; schema-shaped POCOs get their own files.
 - Treat MSBuild project/document loading as language-neutral; C# is the first semantic provider, not the whole architecture.
 - Treat `docs/system-memory/README.md` as the authoritative system-memory contract for AIMonitor behavior.
@@ -29,6 +30,7 @@ This repository is the AIMonitor implementation.
 - If an accepted or accepted-normalized decision reports a failed `indexRefresh` or leaves the workflow session index-stale, do not trust solution-index rows for follow-up semantic work until `edit refresh-solution-index`, an equivalent rebuild, or a successful post-accept refresh clears the stale state.
 - If a Working-candidate edit is rejected by C# syntax validation, do not force it to WinMerge. Rewrite the candidate into syntactically valid C# and retry the edit. Reserve validation override for syntax-valid candidates that fail the pre-merge build gate and only after explicit human approval.
 - Accepted decisions rebuild the monitor-owned solution index and emit telemetry. Do not rely on stale index rows after accept.
+- `record-decision` / `record_diff_decision` is also the Planning evidence integration point. After WinMerge accept/reject classification, AIMonitor attaches staged-record decision evidence to the Current task when one exists; Planning attachment failure must not invalidate the safe-edit decision.
 - Runtime history, staged records, validation copies, logs, and index artifacts should remain under `runtime/`. Prefer explicit cleanup/prune commands or UI actions over automatic pruning on every workflow run; clean obvious partial test artifacts deliberately by exact path.
 
 ## Razor Boundary
