@@ -18,6 +18,7 @@ Each component note should answer:
 - `AIMonitor.MSBuild.md`
 - `AIMonitor.Data.md`
 - `AIMonitor.Indexing.md`
+- `AIMonitor.Planning.md`
 - `AIMonitor.Workflow.md`
 - `AIMonitor.Runtime.md`
 - `AIMonitor.Logging.md`

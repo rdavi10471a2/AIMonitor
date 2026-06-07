@@ -11,6 +11,7 @@ Confirm task type from `get_workflow_status` output or the user's task descripti
 - AIMonitor safe edit workflow: `AIMonitorWorkflowQuickStart.md`
 - Semantic discovery: `RoslynFirstNavigation.md`
 - Watched-source edits: `SystemMonitorStaging.md`
+- Current task / Plan Board context: `PlanBoardCurrentTask.md`
 - Coupled multi-file staging/compile: `SessionOverlayValidation.md`
 - WinMerge/pre-merge validation/review block behavior: `ReviewQueueAndGates.md`
 - Adding, replacing, or removing C# symbols: `FormattingOracle.md`

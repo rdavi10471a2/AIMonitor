@@ -1,8 +1,10 @@
 using AIMonitor.Core;
 using AIMonitor.Data;
 using AIMonitor.MSBuild;
+using AIMonitor.Planning;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
+using System.Text.Json;
 
 namespace AIMonitor.Integration.Tests;
 
@@ -40,6 +42,7 @@ public sealed class McpServerSmokeTests
             "find_indexed_callers",
             "find_indexed_relationships",
             "start_monitor_session",
+            "set_monitor_session_plan",
             "list_monitor_sessions",
             "get_monitor_session",
             "record_monitor_session_event",
@@ -70,6 +73,8 @@ public sealed class McpServerSmokeTests
             "remove_symbol",
             "launch_staged_diff",
             "record_diff_decision",
+            "complete_task_iteration",
+            "resolve_post_accept_planning_decision",
             "compare_file",
             "list_monitor_runs",
             "get_monitor_run",
@@ -80,6 +85,7 @@ public sealed class McpServerSmokeTests
             "get_staging_guide",
             "get_smoke_test_catalog",
             "list_watched_projects",
+            "test_elicitation",
             "shutdown_server"
         ];
         foreach (string expectedToolName in expectedToolNames)
@@ -172,6 +178,49 @@ public sealed class McpServerSmokeTests
         Assert.Contains("WinMerge", guideText, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("record_diff_decision", guideText, StringComparison.Ordinal);
         Assert.Contains("indexRefresh", guideText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Mcp_test_elicitation_round_trips_dynamic_form_request()
+    {
+        McpFixture fixture = CreateFixture();
+        int handlerCalls = 0;
+        McpClientOptions clientOptions = new()
+        {
+            Capabilities = new ClientCapabilities
+            {
+                Elicitation = new ElicitationCapability()
+            },
+            Handlers = new McpClientHandlers
+            {
+                ElicitationHandler = (request, cancellationToken) =>
+                {
+                    handlerCalls++;
+                    ElicitResult result = new()
+                    {
+                        Action = "accept",
+                        Content = new Dictionary<string, JsonElement>
+                        {
+                            ["continueProbe"] = JsonSerializer.SerializeToElement(true),
+                            ["note"] = JsonSerializer.SerializeToElement("handled by integration test"),
+                            ["nextAction"] = JsonSerializer.SerializeToElement("ContinuePlanning")
+                        }
+                    };
+                    return ValueTask.FromResult(result);
+                }
+            }
+        };
+        await using McpClient client = await CreateClientAsync(fixture, clientOptions);
+
+        CallToolResult probe = await client.CallToolAsync("test_elicitation");
+
+        Assert.False(probe.IsError == true, ExtractToolText(probe));
+        Assert.Equal(1, handlerCalls);
+        string probeJson = ExtractToolText(probe);
+        Assert.True(ExtractJsonBool(probeJson, "advertisesElicitation"));
+        Assert.True(ExtractJsonBool(probeJson, "requestAttempted"));
+        Assert.True(ExtractJsonBool(probeJson, "isAccepted"));
+        Assert.Contains("handled by integration test", probeJson, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1068,6 +1117,37 @@ public sealed class McpServerSmokeTests
         Assert.False(session.IsError == true);
         string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
 
+        CallToolResult plan = await client.CallToolAsync(
+            "set_monitor_session_plan",
+            new Dictionary<string, object?>
+            {
+                ["sessionId"] = sessionId,
+                ["taskId"] = "task-mcp-session",
+                ["iterationId"] = "iteration-mcp-session",
+                ["filesPlanned"] = new object[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["path"] = helperFilePath,
+                        ["owningProjectPath"] = fixture.WatchedSolutionPath,
+                        ["role"] = "edit",
+                        ["reason"] = "Update helper behavior for the multi-file session."
+                    },
+                    new Dictionary<string, object?>
+                    {
+                        ["path"] = fixture.ProgramFilePath,
+                        ["owningProjectPath"] = fixture.WatchedSolutionPath,
+                        ["role"] = "edit",
+                        ["reason"] = "Wire Program to the updated helper behavior."
+                    }
+                }
+            });
+        Assert.False(plan.IsError == true, ExtractToolText(plan));
+        string planJson = ExtractToolText(plan);
+        Assert.Contains("\"taskId\":\"task-mcp-session\"", planJson, StringComparison.Ordinal);
+        Assert.Contains("\"sequence\":1", planJson, StringComparison.Ordinal);
+        Assert.Contains("\"sequence\":2", planJson, StringComparison.Ordinal);
+
         CallToolResult helperSubmit = await client.CallToolAsync(
             "submit_file",
             new Dictionary<string, object?>
@@ -1201,6 +1281,12 @@ public sealed class McpServerSmokeTests
         Assert.Equal(
             "Index was rebuilt after accept. Run edit refresh before further edits to this watched file.",
             ExtractJsonString(helperDecisionJson, "nextStep"));
+        Assert.True(ExtractJsonBool(helperDecisionJson, "hasPlan"));
+        Assert.False(ExtractJsonBool(helperDecisionJson, "isSessionComplete"));
+        Assert.Equal(2, ExtractJsonInt(helperDecisionJson, "plannedFileCount"));
+        Assert.Equal(1, ExtractJsonInt(helperDecisionJson, "decidedFileCount"));
+        Assert.Equal(1, ExtractJsonInt(helperDecisionJson, "currentFileSequence"));
+        Assert.Contains("file 1 of 2", helperDecisionJson, StringComparison.Ordinal);
 
         CallToolResult programLaunch = await client.CallToolAsync(
             "launch_staged_diff",
@@ -1229,6 +1315,24 @@ public sealed class McpServerSmokeTests
         Assert.Equal(
             "Index was rebuilt after accept. Run edit refresh before further edits to this watched file.",
             ExtractJsonString(programDecisionJson, "nextStep"));
+        Assert.True(ExtractJsonBool(programDecisionJson, "hasPlan"));
+        Assert.True(ExtractJsonBool(programDecisionJson, "isSessionComplete"));
+        Assert.Equal(2, ExtractJsonInt(programDecisionJson, "plannedFileCount"));
+        Assert.Equal(2, ExtractJsonInt(programDecisionJson, "decidedFileCount"));
+        Assert.Equal(2, ExtractJsonInt(programDecisionJson, "currentFileSequence"));
+        Assert.Contains("All planned session files are decided", programDecisionJson, StringComparison.Ordinal);
+
+        CallToolResult completedSession = await client.CallToolAsync(
+            "get_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["sessionId"] = sessionId
+            });
+        Assert.False(completedSession.IsError == true, ExtractToolText(completedSession));
+        string completedSessionJson = ExtractToolText(completedSession);
+        Assert.Contains("\"status\":\"accepted\"", completedSessionJson, StringComparison.Ordinal);
+        Assert.Contains(helperStagedRecordId, completedSessionJson, StringComparison.Ordinal);
+        Assert.Contains(programStagedRecordId, completedSessionJson, StringComparison.Ordinal);
 
         Assert.Contains("accepted-helper", await File.ReadAllTextAsync(helperFilePath), StringComparison.Ordinal);
         Assert.Contains("Helper.Value()", await File.ReadAllTextAsync(fixture.ProgramFilePath), StringComparison.Ordinal);
@@ -1533,6 +1637,135 @@ public sealed class McpServerSmokeTests
     }
 
     [Fact]
+    public async Task Mcp_record_decision_accept_elicits_and_completes_current_iteration()
+    {
+        McpFixture fixture = CreateFixture();
+        PlanningIterationRow iteration = CreateCurrentTaskWithIteration(fixture, "finish accepted MCP planning flow");
+        int handlerCalls = 0;
+        McpClientOptions clientOptions = new()
+        {
+            Capabilities = new ClientCapabilities
+            {
+                Elicitation = new ElicitationCapability()
+            },
+            Handlers = new McpClientHandlers
+            {
+                ElicitationHandler = (request, cancellationToken) =>
+                {
+                    handlerCalls++;
+                    ElicitResult result = new()
+                    {
+                        Action = "accept",
+                        Content = new Dictionary<string, JsonElement>
+                        {
+                            ["CurrentIterationComplete"] = JsonSerializer.SerializeToElement(true),
+                            ["NextAction"] = JsonSerializer.SerializeToElement("CompleteCurrentIteration"),
+                            ["NextIterationGoal"] = JsonSerializer.SerializeToElement(string.Empty),
+                            ["StatusNote"] = JsonSerializer.SerializeToElement("Accepted staged review completed the iteration.")
+                        }
+                    };
+                    return ValueTask.FromResult(result);
+                }
+            }
+        };
+        await using McpClient client = await CreateClientAsync(fixture, clientOptions);
+
+        (string stagedRecordId, string stagedHash, string stagedFilePath) = await SubmitAndStageAcceptedProgramAsync(
+            client,
+            fixture,
+            "namespace Example { internal static class Program { public static string Value => \"elicited\"; } }");
+
+        File.Copy(stagedFilePath, fixture.ProgramFilePath, overwrite: true);
+        CallToolResult decision = await CallToolWithDiagnosticAsync(
+            client,
+            "record_diff_decision",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = stagedRecordId,
+                ["decision"] = "accepted",
+                ["expectedStagedHash"] = stagedHash
+            });
+
+        Assert.False(decision.IsError == true, ExtractToolText(decision));
+        Assert.Equal(1, handlerCalls);
+        string decisionJson = ExtractToolText(decision);
+        Assert.Equal("accepted", ExtractJsonString(decisionJson, "classification"));
+        Assert.True(ExtractJsonBool(decisionJson, "elicitationAccepted"));
+        Assert.False(ExtractJsonBool(decisionJson, "pending"));
+        Assert.Contains("Planning iteration completed", decisionJson, StringComparison.Ordinal);
+
+        PlanningService planningService = CreatePlanningService(fixture);
+        CurrentTaskContext context = planningService.GetCurrentTaskContext();
+        Assert.Null(context.CurrentIteration);
+        Assert.Contains("#1 [completed] finish accepted MCP planning flow", context.IterationSummary, StringComparison.Ordinal);
+        Assert.Equal(iteration.IterationId, ExtractJsonString(decisionJson, "iterationId"));
+    }
+
+    [Fact]
+    public async Task Mcp_record_decision_accept_returns_pending_when_elicitation_is_canceled_then_resolver_appends_iteration()
+    {
+        McpFixture fixture = CreateFixture();
+        CreateCurrentTaskWithIteration(fixture, "keep current work open");
+        McpClientOptions clientOptions = new()
+        {
+            Capabilities = new ClientCapabilities
+            {
+                Elicitation = new ElicitationCapability()
+            },
+            Handlers = new McpClientHandlers
+            {
+                ElicitationHandler = (request, cancellationToken) =>
+                {
+                    ElicitResult result = new()
+                    {
+                        Action = "decline"
+                    };
+                    return ValueTask.FromResult(result);
+                }
+            }
+        };
+        await using McpClient client = await CreateClientAsync(fixture, clientOptions);
+
+        (string stagedRecordId, string stagedHash, string stagedFilePath) = await SubmitAndStageAcceptedProgramAsync(
+            client,
+            fixture,
+            "namespace Example { internal static class Program { public static string Value => \"pending\"; } }");
+
+        File.Copy(stagedFilePath, fixture.ProgramFilePath, overwrite: true);
+        CallToolResult decision = await CallToolWithDiagnosticAsync(
+            client,
+            "record_diff_decision",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = stagedRecordId,
+                ["decision"] = "accepted",
+                ["expectedStagedHash"] = stagedHash
+            });
+
+        Assert.False(decision.IsError == true, ExtractToolText(decision));
+        string decisionJson = ExtractToolText(decision);
+        Assert.True(ExtractJsonBool(decisionJson, "pending"));
+        Assert.False(ExtractJsonBool(decisionJson, "elicitationAccepted"));
+        string pendingDecisionId = ExtractJsonString(decisionJson, "pendingDecisionId");
+        Assert.Equal("keep current work open", CreatePlanningService(fixture).GetCurrentTaskContext().CurrentIterationGoal);
+
+        CallToolResult resolved = await client.CallToolAsync(
+            "resolve_post_accept_planning_decision",
+            new Dictionary<string, object?>
+            {
+                ["pendingDecisionId"] = pendingDecisionId,
+                ["action"] = "append-next-iteration",
+                ["nextIterationGoal"] = "run resolver follow-up smoke"
+            });
+
+        Assert.False(resolved.IsError == true, ExtractToolText(resolved));
+        string resolvedJson = ExtractToolText(resolved);
+        Assert.False(ExtractJsonBool(resolvedJson, "pending"));
+        Assert.Contains("Iteration goal appended", resolvedJson, StringComparison.Ordinal);
+        Assert.Equal("run resolver follow-up smoke", CreatePlanningService(fixture).GetCurrentTaskContext().CurrentIterationGoal);
+    }
+
+    [Fact]
     public async Task Mcp_write_tools_reject_refresh_required_sessions_after_accept()
     {
         McpFixture fixture = CreateFixture();
@@ -1605,7 +1838,7 @@ public sealed class McpServerSmokeTests
         Assert.True(staleSpan.IsError == true);
     }
 
-    private static async Task<McpClient> CreateClientAsync(McpFixture fixture)
+    private static async Task<McpClient> CreateClientAsync(McpFixture fixture, McpClientOptions? clientOptions = null)
     {
         string serverDll = Path.Combine(
             fixture.RepositoryRoot,
@@ -1624,7 +1857,78 @@ public sealed class McpServerSmokeTests
             WorkingDirectory = fixture.RepositoryRoot
         };
 
-        return await McpClient.CreateAsync(new StdioClientTransport(options));
+        return await McpClient.CreateAsync(new StdioClientTransport(options), clientOptions);
+    }
+
+    private static PlanningService CreatePlanningService(McpFixture fixture)
+    {
+        MonitorSettings settings = MonitorSettingsLoader.Load(fixture.RepositoryRoot, fixture.SettingsPath);
+        return new PlanningService(settings);
+    }
+
+    private static PlanningIterationRow CreateCurrentTaskWithIteration(McpFixture fixture, string iterationGoal)
+    {
+        PlanningService planningService = CreatePlanningService(fixture);
+        PlanningTaskRow task = planningService.CreateTask(new CreatePlanningTaskRequest
+        {
+            Title = "MCP post accept Planning",
+            Goal = "Exercise MCP elicitation after accepted staged records."
+        });
+        planningService.MakeCurrent(task.TaskId, "Start MCP post-accept Planning smoke.");
+        PlanningIterationAppendResult appended = planningService.AppendIterationGoalToCurrentTask(iterationGoal);
+        return appended.Iteration ?? throw new InvalidOperationException("Planning iteration was not appended.");
+    }
+
+    private static async Task<(string StagedRecordId, string StagedHash, string StagedFilePath)> SubmitAndStageAcceptedProgramAsync(
+        McpClient client,
+        McpFixture fixture,
+        string content)
+    {
+        CallToolResult submit = await client.CallToolAsync(
+            "submit_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["content"] = content
+            });
+        Assert.False(submit.IsError == true, ExtractToolText(submit));
+
+        CallToolResult stage = await client.CallToolAsync(
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath
+            });
+        Assert.False(stage.IsError == true, ExtractToolText(stage));
+        string stageJson = ExtractToolText(stage);
+        string stagedRecordId = ExtractJsonString(stageJson, "stagedRecordId");
+        string stagedHash = ExtractJsonString(stageJson, "stagedHash");
+        string stagedRecordJson = await GetStagedRecordJsonAsync(client, stagedRecordId);
+        string stagedFilePath = ExtractJsonString(stagedRecordJson, "stagedFilePath");
+        CallToolResult launch = await client.CallToolAsync(
+            "launch_staged_diff",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = stagedRecordId,
+                ["diffToolPath"] = GetFakeDiffToolPath()
+            });
+        Assert.False(launch.IsError == true, ExtractToolText(launch));
+        return (stagedRecordId, stagedHash, stagedFilePath);
+    }
+
+    private static async Task<CallToolResult> CallToolWithDiagnosticAsync(
+        McpClient client,
+        string toolName,
+        Dictionary<string, object?> arguments)
+    {
+        try
+        {
+            return await client.CallToolAsync(toolName, arguments);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException("MCP tool call failed: " + toolName + Environment.NewLine + ex, ex);
+        }
     }
 
     private static async Task<McpClient> CreateBridgeClientAsync(McpFixture fixture)

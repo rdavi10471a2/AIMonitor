@@ -448,6 +448,21 @@ public sealed class WorkflowEditServiceSafetyTests
         return service.Stage(fixture.ProgramFilePath);
     }
 
+    [Fact]
+    public void Stage_persists_ledger_summary_on_staged_record()
+    {
+        WorkflowFixture fixture = CreateFixture();
+        WorkflowEditService service = new WorkflowEditService(fixture.Settings);
+        EditSessionStatus refresh = service.Refresh(fixture.ProgramFilePath);
+        File.WriteAllText(refresh.WorkingFilePath, "namespace Example { internal static class Program { public static string Value => \"candidate\"; } }");
+
+        StagedEditRecord staged = service.Stage(fixture.ProgramFilePath, "Add Value property for test coverage.");
+        StagedEditRecord reloaded = service.GetStagedRecord(staged.StagedRecordId);
+
+        Assert.Equal("Add Value property for test coverage.", staged.LedgerSummary);
+        Assert.Equal("Add Value property for test coverage.", reloaded.LedgerSummary);
+    }
+
     private static WorkflowFixture CreateFixture()
     {
         string tempRoot = Path.Combine(Path.GetTempPath(), "AIMonitorWorkflowSafetyTests", Guid.NewGuid().ToString("N"));

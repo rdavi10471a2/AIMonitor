@@ -1,0 +1,1534 @@
+using AIMonitor.Core;
+using Microsoft.Data.Sqlite;
+using System.Text.Json;
+
+namespace AIMonitor.Planning
+{
+    public sealed class PlanningService
+    {
+        private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        private readonly MonitorSettings settings;
+        private readonly PlanningDatabase database;
+        private readonly TaskMemoryWriter taskMemoryWriter;
+        private readonly string taskMemoryRoot;
+
+        public PlanningService(MonitorSettings settings)
+            : this(
+                settings,
+                new PlanningDatabase(settings),
+                new TaskMemoryWriter(),
+                PlanningPaths.GetDefaultTaskMemoryRoot(settings))
+        {
+        }
+
+        public PlanningService(
+            MonitorSettings settings,
+            PlanningDatabase database,
+            TaskMemoryWriter taskMemoryWriter,
+            string? taskMemoryRoot = null)
+        {
+            this.settings = settings;
+            this.database = database;
+            this.taskMemoryWriter = taskMemoryWriter;
+            this.taskMemoryRoot = string.IsNullOrWhiteSpace(taskMemoryRoot)
+                ? PlanningPaths.GetDefaultTaskMemoryRoot(settings)
+                : Path.GetFullPath(taskMemoryRoot);
+        }
+
+        public void Initialize()
+        {
+            database.EnsureCreated();
+        }
+
+        public PlanningTaskRow CreateTask(CreatePlanningTaskRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Title))
+            {
+                throw new ArgumentException("Task title is required.", nameof(request));
+            }
+
+            if (string.IsNullOrWhiteSpace(request.Goal))
+            {
+                throw new ArgumentException("Task goal is required.", nameof(request));
+            }
+
+            database.EnsureCreated();
+
+            string taskId = "task-" + Guid.NewGuid().ToString("N");
+            string now = DateTimeOffset.UtcNow.ToString("O");
+            PlanningTaskRow task = new PlanningTaskRow
+            {
+                TaskId = taskId,
+                Title = request.Title.Trim(),
+                Description = request.Description,
+                Goal = request.Goal,
+                HumanContext = request.HumanContext,
+                Constraints = request.Constraints,
+                AcceptanceCriteria = request.AcceptanceCriteria,
+                Status = PlanningTaskStatus.Backlog,
+                TaskMemoryMarkdownPath = GetTaskMemoryPath(taskId, request.Title),
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now
+            };
+
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteCommand command = connection.CreateCommand())
+                {
+                    command.CommandText = """
+                        insert into tasks (
+                            task_id,
+                            title,
+                            description,
+                            goal,
+                            human_context,
+                            constraints_text,
+                            acceptance_criteria,
+                            status,
+                            task_memory_md_path,
+                            created_at_utc,
+                            updated_at_utc
+                        )
+                        values (
+                            $task_id,
+                            $title,
+                            $description,
+                            $goal,
+                            $human_context,
+                            $constraints_text,
+                            $acceptance_criteria,
+                            $status,
+                            $task_memory_md_path,
+                            $created_at_utc,
+                            $updated_at_utc
+                        );
+                        """;
+                    AddTaskParameters(command, task);
+                    command.ExecuteNonQuery();
+                }
+            }
+
+            taskMemoryWriter.Refresh(
+                task,
+                "No iteration goals recorded yet.",
+                "No reviewed workflow evidence has been attached yet.",
+                "Task created. No agent notes recorded yet.");
+            return task;
+        }
+
+        public PlanningTaskRow UpdateTask(string taskId, CreatePlanningTaskRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Title))
+            {
+                throw new ArgumentException("Task title is required.", nameof(request));
+            }
+
+            if (string.IsNullOrWhiteSpace(request.Goal))
+            {
+                throw new ArgumentException("Task goal is required.", nameof(request));
+            }
+
+            database.EnsureCreated();
+            PlanningTaskRow task = GetTask(taskId);
+            string now = DateTimeOffset.UtcNow.ToString("O");
+            task.Title = request.Title.Trim();
+            task.Description = request.Description;
+            task.Goal = request.Goal;
+            task.HumanContext = request.HumanContext;
+            task.Constraints = request.Constraints;
+            task.AcceptanceCriteria = request.AcceptanceCriteria;
+            task.UpdatedAtUtc = now;
+
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteCommand command = connection.CreateCommand())
+                {
+                    command.CommandText = """
+                        update tasks
+                        set title = $title,
+                            description = $description,
+                            goal = $goal,
+                            human_context = $human_context,
+                            constraints_text = $constraints_text,
+                            acceptance_criteria = $acceptance_criteria,
+                            updated_at_utc = $updated_at_utc
+                        where task_id = $task_id;
+                        """;
+                    command.Parameters.AddWithValue("$title", task.Title);
+                    command.Parameters.AddWithValue("$description", task.Description);
+                    command.Parameters.AddWithValue("$goal", task.Goal);
+                    command.Parameters.AddWithValue("$human_context", task.HumanContext);
+                    command.Parameters.AddWithValue("$constraints_text", task.Constraints);
+                    command.Parameters.AddWithValue("$acceptance_criteria", task.AcceptanceCriteria);
+                    command.Parameters.AddWithValue("$updated_at_utc", task.UpdatedAtUtc);
+                    command.Parameters.AddWithValue("$task_id", task.TaskId);
+                    command.ExecuteNonQuery();
+                }
+            }
+
+            taskMemoryWriter.SaveHumanNotes(
+                task,
+                task.HumanContext,
+                BuildIterationSummary(task.TaskId),
+                "Review evidence is synced from accepted/rejected workflow records.");
+            return task;
+        }
+
+        public IReadOnlyList<PlanningTaskRow> ListTasks()
+        {
+            database.EnsureCreated();
+            List<PlanningTaskRow> tasks = new List<PlanningTaskRow>();
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteCommand command = connection.CreateCommand())
+                {
+                    command.CommandText = """
+                        select
+                            task_id,
+                            title,
+                            description,
+                            goal,
+                            human_context,
+                            constraints_text,
+                            acceptance_criteria,
+                            status,
+                            task_memory_md_path,
+                            created_at_utc,
+                            updated_at_utc,
+                            closed_at_utc
+                        from tasks
+                        order by created_at_utc, task_id;
+                        """;
+
+                    using (SqliteDataReader reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            tasks.Add(ReadTask(reader));
+                        }
+                    }
+                }
+            }
+
+            return tasks;
+        }
+
+        public PlanningTaskRow GetTask(string taskId)
+        {
+            database.EnsureCreated();
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                PlanningTaskRow? task = TryGetTask(connection, taskId);
+                if (task is null)
+                {
+                    throw new InvalidOperationException($"Planning task was not found: {taskId}");
+                }
+
+                return task;
+            }
+        }
+
+        public PlanningTaskRow? GetCurrentTask()
+        {
+            database.EnsureCreated();
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteTransaction transaction = connection.BeginTransaction())
+                {
+                    string activeTaskId = GetActiveTaskId(connection, transaction);
+                    PlanningTaskRow? task = string.IsNullOrWhiteSpace(activeTaskId)
+                        ? null
+                        : TryGetTask(connection, transaction, activeTaskId);
+                    transaction.Commit();
+                    return task;
+                }
+            }
+        }
+
+        public CurrentTaskContext GetCurrentTaskContext()
+        {
+            PlanningTaskRow? task = GetCurrentTask();
+            if (task is null)
+            {
+                return new CurrentTaskContext
+                {
+                    HasCurrentTask = false,
+                    Message = "No Current task is selected. Workflow evidence will not attach to task memory until the operator makes a task Current."
+                };
+            }
+
+            PlanningIterationRow? currentIteration = GetLatestOpenIteration(task.TaskId);
+            return new CurrentTaskContext
+            {
+                HasCurrentTask = true,
+                TaskId = task.TaskId,
+                Title = task.Title,
+                Status = task.Status,
+                Goal = task.Goal,
+                Constraints = task.Constraints,
+                AcceptanceCriteria = task.AcceptanceCriteria,
+                CurrentIteration = currentIteration,
+                CurrentIterationGoal = currentIteration?.Goal ?? string.Empty,
+                IterationSummary = BuildIterationSummary(task.TaskId),
+                ReviewEvidenceSummary = BuildReviewEvidenceSummary(task.TaskId),
+                TaskMemoryMarkdownPath = task.TaskMemoryMarkdownPath,
+                Message = "Human notes are intentionally excluded from the AI-facing Current task context."
+            };
+        }
+
+        public string GetTaskReviewEvidenceSummary(string taskId)
+        {
+            _ = GetTask(taskId);
+            return BuildReviewEvidenceSummary(taskId);
+        }
+
+        public PlanningIterationAppendResult AppendIterationGoalToCurrentTask(string iterationGoal)
+        {
+            if (string.IsNullOrWhiteSpace(iterationGoal))
+            {
+                throw new ArgumentException("Iteration goal is required.", nameof(iterationGoal));
+            }
+
+            database.EnsureCreated();
+            string normalizedIterationGoal = NormalizeIterationGoal(iterationGoal);
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteTransaction transaction = connection.BeginTransaction())
+                {
+                    string activeTaskId = GetActiveTaskId(connection, transaction);
+                    PlanningTaskRow? task = string.IsNullOrWhiteSpace(activeTaskId)
+                        ? null
+                        : TryGetTask(connection, transaction, activeTaskId);
+                    if (task is null)
+                    {
+                        transaction.Commit();
+                        return new PlanningIterationAppendResult
+                        {
+                            Appended = false,
+                            IterationGoal = normalizedIterationGoal,
+                            Message = "No Current task is selected. The iteration goal was not appended."
+                        };
+                    }
+
+                    string now = DateTimeOffset.UtcNow.ToString("O");
+                    int sequence = GetNextIterationSequence(connection, transaction, task.TaskId);
+                    string iterationId = "iteration-" + Guid.NewGuid().ToString("N");
+                    PlanningIterationRow iteration = new PlanningIterationRow
+                    {
+                        IterationId = iterationId,
+                        TaskId = task.TaskId,
+                        Sequence = sequence,
+                        Goal = normalizedIterationGoal,
+                        Status = "open",
+                        CreatedAtUtc = now,
+                        CompletedAtUtc = string.Empty
+                    };
+                    using (SqliteCommand command = connection.CreateCommand())
+                    {
+                        command.Transaction = transaction;
+                        command.CommandText = """
+                            insert into task_iterations (
+                                iteration_id,
+                                task_id,
+                                sequence,
+                                goal,
+                                status,
+                                created_at_utc,
+                                completed_at_utc
+                            )
+                            values (
+                                $iteration_id,
+                                $task_id,
+                                $sequence,
+                                $goal,
+                                $status,
+                                $created_at_utc,
+                                ''
+                            );
+                            """;
+                        command.Parameters.AddWithValue("$iteration_id", iterationId);
+                        command.Parameters.AddWithValue("$task_id", task.TaskId);
+                        command.Parameters.AddWithValue("$sequence", iteration.Sequence);
+                        command.Parameters.AddWithValue("$goal", iteration.Goal);
+                        command.Parameters.AddWithValue("$status", iteration.Status);
+                        command.Parameters.AddWithValue("$created_at_utc", iteration.CreatedAtUtc);
+                        command.ExecuteNonQuery();
+                    }
+
+                    InsertEvent(
+                        connection,
+                        transaction,
+                        task.TaskId,
+                        "iteration-added",
+                        "Iteration goal appended from prompt.",
+                        now,
+                        JsonSerializer.Serialize(
+                            new { iterationGoal = normalizedIterationGoal },
+                            JsonOptions));
+                    transaction.Commit();
+
+                    taskMemoryWriter.Refresh(
+                        task,
+                        BuildIterationSummary(task.TaskId),
+                        BuildReviewEvidenceSummary(task.TaskId),
+                        "Iteration goal appended from prompt.");
+                    return new PlanningIterationAppendResult
+                    {
+                        Appended = true,
+                        TaskId = task.TaskId,
+                        Title = task.Title,
+                        IterationGoal = normalizedIterationGoal,
+                        Iteration = iteration,
+                        TaskMemoryMarkdownPath = task.TaskMemoryMarkdownPath,
+                        Message = "Iteration goal appended to the Current task."
+                    };
+                }
+            }
+        }
+
+        public PlanningIterationUpdateResult UpdateIterationGoal(string iterationId, string iterationGoal)
+        {
+            if (string.IsNullOrWhiteSpace(iterationId))
+            {
+                throw new ArgumentException("Iteration id is required.", nameof(iterationId));
+            }
+
+            if (string.IsNullOrWhiteSpace(iterationGoal))
+            {
+                throw new ArgumentException("Iteration goal is required.", nameof(iterationGoal));
+            }
+
+            database.EnsureCreated();
+            string normalizedIterationGoal = NormalizeIterationGoal(iterationGoal);
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteTransaction transaction = connection.BeginTransaction())
+                {
+                    PlanningIterationRow? iteration = TryGetIteration(connection, transaction, iterationId);
+                    if (iteration is null)
+                    {
+                        transaction.Commit();
+                        return new PlanningIterationUpdateResult
+                        {
+                            Updated = false,
+                            IterationGoal = normalizedIterationGoal,
+                            Message = "Iteration was not found. The iteration goal was not updated."
+                        };
+                    }
+
+                    PlanningTaskRow? task = TryGetTask(connection, transaction, iteration.TaskId);
+                    if (task is null)
+                    {
+                        transaction.Commit();
+                        return new PlanningIterationUpdateResult
+                        {
+                            Updated = false,
+                            IterationGoal = normalizedIterationGoal,
+                            Iteration = iteration,
+                            Message = "The iteration's task was not found. The iteration goal was not updated."
+                        };
+                    }
+
+                    string now = DateTimeOffset.UtcNow.ToString("O");
+                    using (SqliteCommand command = connection.CreateCommand())
+                    {
+                        command.Transaction = transaction;
+                        command.CommandText = """
+                            update task_iterations
+                            set goal = $goal
+                            where iteration_id = $iteration_id;
+                            """;
+                        command.Parameters.AddWithValue("$goal", normalizedIterationGoal);
+                        command.Parameters.AddWithValue("$iteration_id", iterationId);
+                        command.ExecuteNonQuery();
+                    }
+
+                    using (SqliteCommand command = connection.CreateCommand())
+                    {
+                        command.Transaction = transaction;
+                        command.CommandText = """
+                            update tasks
+                            set updated_at_utc = $updated_at_utc
+                            where task_id = $task_id;
+                            """;
+                        command.Parameters.AddWithValue("$updated_at_utc", now);
+                        command.Parameters.AddWithValue("$task_id", task.TaskId);
+                        command.ExecuteNonQuery();
+                    }
+
+                    iteration.Goal = normalizedIterationGoal;
+                    task.UpdatedAtUtc = now;
+                    InsertEvent(
+                        connection,
+                        transaction,
+                        task.TaskId,
+                        "iteration-updated",
+                        "Iteration goal updated from prompt.",
+                        now,
+                        JsonSerializer.Serialize(
+                            new { iterationId = iteration.IterationId, iterationGoal = normalizedIterationGoal },
+                            JsonOptions));
+                    transaction.Commit();
+
+                    taskMemoryWriter.Refresh(
+                        task,
+                        BuildIterationSummary(task.TaskId),
+                        BuildReviewEvidenceSummary(task.TaskId),
+                        "Iteration goal updated from prompt.");
+                    return new PlanningIterationUpdateResult
+                    {
+                        Updated = true,
+                        TaskId = task.TaskId,
+                        Title = task.Title,
+                        IterationGoal = normalizedIterationGoal,
+                        Iteration = iteration,
+                        TaskMemoryMarkdownPath = task.TaskMemoryMarkdownPath,
+                        Message = "Iteration goal updated."
+                    };
+                }
+            }
+        }
+
+        public PlanningIterationCompletionResult CompleteIteration(string iterationId, string completionNote)
+        {
+            if (string.IsNullOrWhiteSpace(iterationId))
+            {
+                throw new ArgumentException("Iteration id is required.", nameof(iterationId));
+            }
+
+            if (string.IsNullOrWhiteSpace(completionNote))
+            {
+                throw new ArgumentException("A completion note is required.", nameof(completionNote));
+            }
+
+            database.EnsureCreated();
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteTransaction transaction = connection.BeginTransaction())
+                {
+                    PlanningIterationRow? iteration = TryGetIteration(connection, transaction, iterationId);
+                    if (iteration is null)
+                    {
+                        transaction.Commit();
+                        return new PlanningIterationCompletionResult
+                        {
+                            IterationId = iterationId,
+                            Message = "Iteration was not found. No Planning iteration was completed."
+                        };
+                    }
+
+                    PlanningTaskRow? task = TryGetTask(connection, transaction, iteration.TaskId);
+                    if (task is null)
+                    {
+                        transaction.Commit();
+                        return new PlanningIterationCompletionResult
+                        {
+                            IterationId = iterationId,
+                            Iteration = iteration,
+                            Message = "The iteration's task was not found. No Planning iteration was completed."
+                        };
+                    }
+
+                    if (iteration.Status.Equals("completed", StringComparison.Ordinal))
+                    {
+                        transaction.Commit();
+                        return new PlanningIterationCompletionResult
+                        {
+                            Completed = true,
+                            TaskId = task.TaskId,
+                            Title = task.Title,
+                            IterationId = iteration.IterationId,
+                            Iteration = iteration,
+                            TaskMemoryMarkdownPath = task.TaskMemoryMarkdownPath,
+                            Message = "Iteration was already completed."
+                        };
+                    }
+
+                    string now = DateTimeOffset.UtcNow.ToString("O");
+                    using (SqliteCommand command = connection.CreateCommand())
+                    {
+                        command.Transaction = transaction;
+                        command.CommandText = """
+                            update task_iterations
+                            set status = 'completed',
+                                completed_at_utc = $completed_at_utc
+                            where iteration_id = $iteration_id;
+                            """;
+                        command.Parameters.AddWithValue("$completed_at_utc", now);
+                        command.Parameters.AddWithValue("$iteration_id", iterationId);
+                        command.ExecuteNonQuery();
+                    }
+
+                    using (SqliteCommand command = connection.CreateCommand())
+                    {
+                        command.Transaction = transaction;
+                        command.CommandText = """
+                            update tasks
+                            set updated_at_utc = $updated_at_utc
+                            where task_id = $task_id;
+                            """;
+                        command.Parameters.AddWithValue("$updated_at_utc", now);
+                        command.Parameters.AddWithValue("$task_id", task.TaskId);
+                        command.ExecuteNonQuery();
+                    }
+
+                    iteration.Status = "completed";
+                    iteration.CompletedAtUtc = now;
+                    task.UpdatedAtUtc = now;
+                    InsertEvent(
+                        connection,
+                        transaction,
+                        task.TaskId,
+                        "iteration-completed",
+                        "Iteration completed. " + completionNote.Trim(),
+                        now,
+                        JsonSerializer.Serialize(
+                            new { iterationId = iteration.IterationId, completionNote = completionNote.Trim() },
+                            JsonOptions));
+                    transaction.Commit();
+
+                    taskMemoryWriter.Refresh(
+                        task,
+                        BuildIterationSummary(task.TaskId),
+                        BuildReviewEvidenceSummary(task.TaskId),
+                        "Iteration completed. " + completionNote.Trim());
+                    return new PlanningIterationCompletionResult
+                    {
+                        Completed = true,
+                        TaskId = task.TaskId,
+                        Title = task.Title,
+                        IterationId = iteration.IterationId,
+                        Iteration = iteration,
+                        TaskMemoryMarkdownPath = task.TaskMemoryMarkdownPath,
+                        Message = "Planning iteration completed."
+                    };
+                }
+            }
+        }
+
+        public PostAcceptPlanningActionResult ApplyPostAcceptPlanningAction(
+            string action,
+            string? currentIterationId,
+            string? nextIterationGoal,
+            string? statusNote)
+        {
+            string normalizedAction = string.IsNullOrWhiteSpace(action) ? "stop" : action.Trim();
+            if (normalizedAction.Equals("stop", StringComparison.OrdinalIgnoreCase)
+                || normalizedAction.Equals("keep-current-iteration-open", StringComparison.OrdinalIgnoreCase))
+            {
+                return new PostAcceptPlanningActionResult
+                {
+                    Applied = false,
+                    Action = normalizedAction,
+                    Message = "No Planning mutation was requested."
+                };
+            }
+
+            if (normalizedAction.Equals("complete-current-iteration", StringComparison.OrdinalIgnoreCase))
+            {
+                PlanningIterationCompletionResult completion = CompleteIteration(
+                    RequireCurrentIterationId(currentIterationId),
+                    RequireStatusNote(statusNote, "Completion note is required."));
+                return new PostAcceptPlanningActionResult
+                {
+                    Applied = completion.Completed,
+                    Action = normalizedAction,
+                    IterationCompletion = completion,
+                    Message = completion.Message
+                };
+            }
+
+            if (normalizedAction.Equals("append-next-iteration", StringComparison.OrdinalIgnoreCase))
+            {
+                PlanningIterationAppendResult append = AppendIterationGoalToCurrentTask(RequireIterationGoal(nextIterationGoal));
+                return new PostAcceptPlanningActionResult
+                {
+                    Applied = append.Appended,
+                    Action = normalizedAction,
+                    IterationAppend = append,
+                    Message = append.Message
+                };
+            }
+
+            if (normalizedAction.Equals("replace-current-iteration", StringComparison.OrdinalIgnoreCase))
+            {
+                PlanningIterationUpdateResult update = UpdateIterationGoal(
+                    RequireCurrentIterationId(currentIterationId),
+                    RequireIterationGoal(nextIterationGoal));
+                return new PostAcceptPlanningActionResult
+                {
+                    Applied = update.Updated,
+                    Action = normalizedAction,
+                    IterationUpdate = update,
+                    Message = update.Message
+                };
+            }
+
+            if (normalizedAction.Equals("pause-task", StringComparison.OrdinalIgnoreCase))
+            {
+                PlanningTaskRow task = ChangeCurrentTaskStatus(PlanningTaskStatus.Paused, statusNote);
+                return CreateTaskStatusAction(normalizedAction, task);
+            }
+
+            if (normalizedAction.Equals("close-task", StringComparison.OrdinalIgnoreCase))
+            {
+                PlanningTaskRow task = ChangeCurrentTaskStatus(PlanningTaskStatus.Closed, statusNote);
+                return CreateTaskStatusAction(normalizedAction, task);
+            }
+
+            if (normalizedAction.Equals("cancel-task", StringComparison.OrdinalIgnoreCase))
+            {
+                PlanningTaskRow task = ChangeCurrentTaskStatus(PlanningTaskStatus.Canceled, statusNote);
+                return CreateTaskStatusAction(normalizedAction, task);
+            }
+
+            throw new ArgumentException("Unknown post-accept Planning action: " + action, nameof(action));
+        }
+
+        public PlanningTaskRow MakeCurrent(string taskId, string switchContextSummary)
+        {
+            if (string.IsNullOrWhiteSpace(switchContextSummary))
+            {
+                throw new ArgumentException("A status note is required.", nameof(switchContextSummary));
+            }
+
+            database.EnsureCreated();
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteTransaction transaction = connection.BeginTransaction())
+                {
+                    PlanningTaskRow? nextTask = TryGetTask(connection, transaction, taskId);
+                    if (nextTask is null)
+                    {
+                        throw new InvalidOperationException($"Planning task was not found: {taskId}");
+                    }
+
+                    string previousTaskId = GetActiveTaskId(connection, transaction);
+                    string now = DateTimeOffset.UtcNow.ToString("O");
+                    if (!string.IsNullOrWhiteSpace(previousTaskId) && previousTaskId != taskId)
+                    {
+                        throw new InvalidOperationException("A task is already Current. Move or close the Current task explicitly before making another task Current.");
+                    }
+
+                    UpdateTaskStatus(connection, transaction, taskId, PlanningTaskStatus.Current, now);
+                    SetActiveTaskId(connection, transaction, taskId, now);
+                    InsertEvent(connection, transaction, taskId, "made-current", "Task is now Current.", now);
+                    transaction.Commit();
+
+                    nextTask.Status = PlanningTaskStatus.Current;
+                    nextTask.UpdatedAtUtc = now;
+                    taskMemoryWriter.Refresh(
+                        nextTask,
+                        BuildIterationSummary(nextTask.TaskId),
+                        "Review evidence is synced from accepted/rejected workflow records.",
+                        "Task is Current. Continue from the latest human notes and review evidence.");
+                    taskMemoryWriter.AppendHumanStatusNote(
+                        nextTask,
+                        $"Moved task to {PlanningTaskStatus.Current}",
+                        switchContextSummary,
+                        now,
+                        BuildIterationSummary(nextTask.TaskId),
+                        "Review evidence is synced from accepted/rejected workflow records.");
+                    return nextTask;
+                }
+            }
+        }
+
+        private PlanningTaskRow ChangeCurrentTaskStatus(string status, string? statusNote)
+        {
+            PlanningTaskRow? task = GetCurrentTask();
+            if (task is null)
+            {
+                throw new InvalidOperationException("No Current task is selected. Task status was not changed.");
+            }
+
+            return ChangeStatus(task.TaskId, status, RequireStatusNote(statusNote, "A status note is required."));
+        }
+
+        private static PostAcceptPlanningActionResult CreateTaskStatusAction(string action, PlanningTaskRow task)
+        {
+            return new PostAcceptPlanningActionResult
+            {
+                Applied = true,
+                Action = action,
+                TaskStatusChange = task,
+                Message = "Current task moved to " + task.Status + "."
+            };
+        }
+
+        private static string RequireCurrentIterationId(string? currentIterationId)
+        {
+            if (string.IsNullOrWhiteSpace(currentIterationId))
+            {
+                throw new ArgumentException("Current iteration id is required for this Planning action.", nameof(currentIterationId));
+            }
+
+            return currentIterationId.Trim();
+        }
+
+        private static string RequireIterationGoal(string? iterationGoal)
+        {
+            if (string.IsNullOrWhiteSpace(iterationGoal))
+            {
+                throw new ArgumentException("Iteration goal is required for this Planning action.", nameof(iterationGoal));
+            }
+
+            return iterationGoal;
+        }
+
+        private static string RequireStatusNote(string? statusNote, string message)
+        {
+            if (string.IsNullOrWhiteSpace(statusNote))
+            {
+                throw new ArgumentException(message, nameof(statusNote));
+            }
+
+            return statusNote.Trim();
+        }
+
+        public PlanningTaskRow ChangeStatus(string taskId, string status, string statusNote)
+        {
+            if (string.IsNullOrWhiteSpace(statusNote))
+            {
+                throw new ArgumentException("A status note is required.", nameof(statusNote));
+            }
+
+            if (!PlanningTaskStatus.IsKnown(status))
+            {
+                throw new ArgumentException($"Unknown planning task status: {status}", nameof(status));
+            }
+
+            if (status.Equals(PlanningTaskStatus.Current, StringComparison.Ordinal))
+            {
+                return MakeCurrent(taskId, statusNote);
+            }
+
+            database.EnsureCreated();
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteTransaction transaction = connection.BeginTransaction())
+                {
+                    PlanningTaskRow? task = TryGetTask(connection, transaction, taskId);
+                    if (task is null)
+                    {
+                        throw new InvalidOperationException($"Planning task was not found: {taskId}");
+                    }
+
+                    string now = DateTimeOffset.UtcNow.ToString("O");
+                    string activeTaskId = GetActiveTaskId(connection, transaction);
+                    UpdateTaskStatus(connection, transaction, taskId, status, now);
+                    if (PlanningTaskStatus.IsTerminal(status))
+                    {
+                        UpdateClosedAt(connection, transaction, taskId, now);
+                    }
+                    else
+                    {
+                        UpdateClosedAt(connection, transaction, taskId, string.Empty);
+                    }
+
+                    if (activeTaskId.Equals(taskId, StringComparison.Ordinal))
+                    {
+                        SetActiveTaskId(connection, transaction, string.Empty, now);
+                    }
+
+                    InsertEvent(connection, transaction, taskId, "status-changed", $"Task moved to {status}. {statusNote}".Trim(), now);
+                    transaction.Commit();
+
+                    task.Status = status;
+                    task.UpdatedAtUtc = now;
+                    if (PlanningTaskStatus.IsTerminal(status))
+                    {
+                        task.ClosedAtUtc = now;
+                    }
+                    else
+                    {
+                        task.ClosedAtUtc = string.Empty;
+                    }
+
+                    taskMemoryWriter.AppendHumanStatusNote(
+                        task,
+                        $"Moved task to {status}",
+                        statusNote,
+                        now,
+                        BuildIterationSummary(task.TaskId),
+                        "Review evidence is synced from accepted/rejected workflow records.");
+                    return task;
+                }
+            }
+        }
+
+        public void RefreshTaskMemory(string taskId, string currentStateSummary)
+        {
+            PlanningTaskRow task = GetTask(taskId);
+            taskMemoryWriter.Refresh(task, BuildIterationSummary(task.TaskId), currentStateSummary);
+        }
+
+        public PlanningEvidenceAttachmentResult AttachWorkflowDecisionToCurrentTask(PlanningDecisionEvidence evidence)
+        {
+            database.EnsureCreated();
+            PlanningTaskRow? currentTask = GetCurrentTask();
+            if (currentTask is null)
+            {
+                return new PlanningEvidenceAttachmentResult
+                {
+                    Attached = false,
+                    Message = "No Current task exists. Workflow decision was recorded but not attached to task memory."
+                };
+            }
+
+            try
+            {
+                using (SqliteConnection connection = database.OpenConnection())
+                {
+                    using (SqliteTransaction transaction = connection.BeginTransaction())
+                    {
+                        InsertTaskStagedRecord(connection, transaction, currentTask.TaskId, evidence);
+                        InsertTaskDecision(connection, transaction, currentTask.TaskId, evidence);
+                        InsertEvent(
+                            connection,
+                            transaction,
+                            currentTask.TaskId,
+                            "workflow-decision",
+                            CreateDecisionSummary(evidence),
+                            GetEvidenceTimestamp(evidence),
+                            JsonSerializer.Serialize(evidence, JsonOptions));
+                        transaction.Commit();
+                    }
+                }
+
+                string reviewEvidenceSummary = BuildReviewEvidenceSummary(currentTask.TaskId);
+                taskMemoryWriter.Refresh(currentTask, BuildIterationSummary(currentTask.TaskId), reviewEvidenceSummary);
+                return new PlanningEvidenceAttachmentResult
+                {
+                    Attached = true,
+                    TaskId = currentTask.TaskId,
+                    TaskTitle = currentTask.Title,
+                    TaskMemoryMarkdownPath = currentTask.TaskMemoryMarkdownPath,
+                    Message = "Workflow decision attached to the Current task."
+                };
+            }
+            catch (Exception ex)
+            {
+                return new PlanningEvidenceAttachmentResult
+                {
+                    Attached = false,
+                    TaskId = currentTask.TaskId,
+                    TaskTitle = currentTask.Title,
+                    TaskMemoryMarkdownPath = currentTask.TaskMemoryMarkdownPath,
+                    IsError = true,
+                    Message = "Planning evidence attachment failed after workflow decision was recorded: " + ex.Message
+                };
+            }
+        }
+
+        public string ReadHumanNotes(string taskId)
+        {
+            PlanningTaskRow task = GetTask(taskId);
+            return taskMemoryWriter.ReadHumanNotes(task);
+        }
+
+        public void SaveHumanNotes(string taskId, string humanNotes)
+        {
+            PlanningTaskRow task = GetTask(taskId);
+            string now = DateTimeOffset.UtcNow.ToString("O");
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteCommand command = connection.CreateCommand())
+                {
+                    command.CommandText = """
+                        update tasks
+                        set human_context = $human_context,
+                            updated_at_utc = $updated_at_utc
+                        where task_id = $task_id;
+                        """;
+                    command.Parameters.AddWithValue("$human_context", humanNotes);
+                    command.Parameters.AddWithValue("$updated_at_utc", now);
+                    command.Parameters.AddWithValue("$task_id", taskId);
+                    command.ExecuteNonQuery();
+                }
+            }
+
+            task.HumanContext = humanNotes;
+            task.UpdatedAtUtc = now;
+            taskMemoryWriter.SaveHumanNotes(
+                task,
+                humanNotes,
+                BuildIterationSummary(task.TaskId),
+                "Review evidence is synced from accepted/rejected workflow records.");
+        }
+
+        private string GetTaskMemoryPath(string taskId, string title)
+        {
+            string slug = Slug(title);
+            string timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss");
+            return Path.Combine(
+                taskMemoryRoot,
+                $"{slug}-{timestamp}.md");
+        }
+
+        private static string Slug(string title)
+        {
+            char[] characters = title.Trim().ToLowerInvariant().ToCharArray();
+            for (int index = 0; index < characters.Length; index++)
+            {
+                char character = characters[index];
+                if (!char.IsLetterOrDigit(character))
+                {
+                    characters[index] = '-';
+                }
+            }
+
+            string slug = new string(characters).Trim('-');
+            while (slug.Contains("--", StringComparison.Ordinal))
+            {
+                slug = slug.Replace("--", "-", StringComparison.Ordinal);
+            }
+
+            if (string.IsNullOrWhiteSpace(slug))
+            {
+                return "task";
+            }
+
+            return slug;
+        }
+
+        private static void AddTaskParameters(SqliteCommand command, PlanningTaskRow task)
+        {
+            command.Parameters.AddWithValue("$task_id", task.TaskId);
+            command.Parameters.AddWithValue("$title", task.Title);
+            command.Parameters.AddWithValue("$description", task.Description);
+            command.Parameters.AddWithValue("$goal", task.Goal);
+            command.Parameters.AddWithValue("$human_context", task.HumanContext);
+            command.Parameters.AddWithValue("$constraints_text", task.Constraints);
+            command.Parameters.AddWithValue("$acceptance_criteria", task.AcceptanceCriteria);
+            command.Parameters.AddWithValue("$status", task.Status);
+            command.Parameters.AddWithValue("$task_memory_md_path", task.TaskMemoryMarkdownPath);
+            command.Parameters.AddWithValue("$created_at_utc", task.CreatedAtUtc);
+            command.Parameters.AddWithValue("$updated_at_utc", task.UpdatedAtUtc);
+        }
+
+        private static PlanningTaskRow? TryGetTask(SqliteConnection connection, string taskId)
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.CommandText = GetTaskSql();
+                command.Parameters.AddWithValue("$task_id", taskId);
+                using (SqliteDataReader reader = command.ExecuteReader())
+                {
+                    return reader.Read() ? ReadTask(reader) : null;
+                }
+            }
+        }
+
+        private static PlanningTaskRow? TryGetTask(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string taskId)
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = GetTaskSql();
+                command.Parameters.AddWithValue("$task_id", taskId);
+                using (SqliteDataReader reader = command.ExecuteReader())
+                {
+                    return reader.Read() ? ReadTask(reader) : null;
+                }
+            }
+        }
+
+        private static string GetTaskSql()
+        {
+            return """
+                select
+                    task_id,
+                    title,
+                    description,
+                    goal,
+                    human_context,
+                    constraints_text,
+                    acceptance_criteria,
+                    status,
+                    task_memory_md_path,
+                    created_at_utc,
+                    updated_at_utc,
+                    closed_at_utc
+                from tasks
+                where task_id = $task_id;
+                """;
+        }
+
+        private static PlanningTaskRow ReadTask(SqliteDataReader reader)
+        {
+            return new PlanningTaskRow
+            {
+                TaskId = reader.GetString(0),
+                Title = reader.GetString(1),
+                Description = reader.GetString(2),
+                Goal = reader.GetString(3),
+                HumanContext = reader.GetString(4),
+                Constraints = reader.GetString(5),
+                AcceptanceCriteria = reader.GetString(6),
+                Status = reader.GetString(7),
+                TaskMemoryMarkdownPath = reader.GetString(8),
+                CreatedAtUtc = reader.GetString(9),
+                UpdatedAtUtc = reader.GetString(10),
+                ClosedAtUtc = reader.GetString(11)
+            };
+        }
+
+        private static string GetActiveTaskId(SqliteConnection connection, SqliteTransaction transaction)
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "select active_task_id from board_state where id = 1;";
+                object? result = command.ExecuteScalar();
+                return result?.ToString() ?? string.Empty;
+            }
+        }
+
+        private static void SetActiveTaskId(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string taskId,
+            string updatedAtUtc)
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = """
+                    update board_state
+                    set active_task_id = $task_id,
+                        updated_at_utc = $updated_at_utc
+                    where id = 1;
+                    """;
+                command.Parameters.AddWithValue("$task_id", taskId);
+                command.Parameters.AddWithValue("$updated_at_utc", updatedAtUtc);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private static void UpdateClosedAt(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string taskId,
+            string closedAtUtc)
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = """
+                    update tasks
+                    set closed_at_utc = $closed_at_utc
+                    where task_id = $task_id;
+                    """;
+                command.Parameters.AddWithValue("$closed_at_utc", closedAtUtc);
+                command.Parameters.AddWithValue("$task_id", taskId);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private static void ClearCurrentTasks(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string taskIdToKeep,
+            string updatedAtUtc)
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = """
+                    update tasks
+                    set status = $paused,
+                        updated_at_utc = $updated_at_utc
+                    where status = $current
+                      and task_id <> $task_id_to_keep;
+                    """;
+                command.Parameters.AddWithValue("$paused", PlanningTaskStatus.Paused);
+                command.Parameters.AddWithValue("$current", PlanningTaskStatus.Current);
+                command.Parameters.AddWithValue("$task_id_to_keep", taskIdToKeep);
+                command.Parameters.AddWithValue("$updated_at_utc", updatedAtUtc);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private static void UpdateTaskStatus(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string taskId,
+            string status,
+            string updatedAtUtc)
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = """
+                    update tasks
+                    set status = $status,
+                        updated_at_utc = $updated_at_utc
+                    where task_id = $task_id;
+                    """;
+                command.Parameters.AddWithValue("$status", status);
+                command.Parameters.AddWithValue("$updated_at_utc", updatedAtUtc);
+                command.Parameters.AddWithValue("$task_id", taskId);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private static void InsertEvent(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string taskId,
+            string eventType,
+            string summary,
+            string createdAtUtc)
+        {
+            InsertEvent(connection, transaction, taskId, eventType, summary, createdAtUtc, string.Empty);
+        }
+
+        private static void InsertEvent(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string taskId,
+            string eventType,
+            string summary,
+            string createdAtUtc,
+            string payloadJson)
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = """
+                    insert into task_events (
+                        task_id,
+                        event_type,
+                        summary,
+                        payload_json,
+                        created_at_utc
+                    )
+                    values (
+                        $task_id,
+                        $event_type,
+                        $summary,
+                        $payload_json,
+                        $created_at_utc
+                    );
+                    """;
+                command.Parameters.AddWithValue("$task_id", taskId);
+                command.Parameters.AddWithValue("$event_type", eventType);
+                command.Parameters.AddWithValue("$summary", summary);
+                command.Parameters.AddWithValue("$payload_json", payloadJson);
+                command.Parameters.AddWithValue("$created_at_utc", createdAtUtc);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private static void InsertTaskStagedRecord(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string taskId,
+            PlanningDecisionEvidence evidence)
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = """
+                    insert or ignore into task_staged_records (
+                        task_id,
+                        staged_record_id,
+                        session_id,
+                        relative_path,
+                        staged_hash,
+                        status,
+                        created_at_utc
+                    )
+                    values (
+                        $task_id,
+                        $staged_record_id,
+                        $session_id,
+                        $relative_path,
+                        $staged_hash,
+                        $status,
+                        $created_at_utc
+                    );
+                    """;
+                command.Parameters.AddWithValue("$task_id", taskId);
+                command.Parameters.AddWithValue("$staged_record_id", evidence.StagedRecordId);
+                command.Parameters.AddWithValue("$session_id", evidence.SessionId);
+                command.Parameters.AddWithValue("$relative_path", evidence.RelativePath);
+                command.Parameters.AddWithValue("$staged_hash", evidence.StagedHash);
+                command.Parameters.AddWithValue("$status", evidence.Status);
+                command.Parameters.AddWithValue("$created_at_utc", GetEvidenceTimestamp(evidence));
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private static void InsertTaskDecision(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string taskId,
+            PlanningDecisionEvidence evidence)
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = """
+                    insert into task_decisions (
+                        task_id,
+                        staged_record_id,
+                        decision,
+                        classification,
+                        relative_path,
+                        status,
+                        message,
+                        decided_at_utc,
+                        payload_json
+                    )
+                    values (
+                        $task_id,
+                        $staged_record_id,
+                        $decision,
+                        $classification,
+                        $relative_path,
+                        $status,
+                        $message,
+                        $decided_at_utc,
+                        $payload_json
+                    );
+                    """;
+                command.Parameters.AddWithValue("$task_id", taskId);
+                command.Parameters.AddWithValue("$staged_record_id", evidence.StagedRecordId);
+                command.Parameters.AddWithValue("$decision", evidence.Decision);
+                command.Parameters.AddWithValue("$classification", evidence.Classification);
+                command.Parameters.AddWithValue("$relative_path", evidence.RelativePath);
+                command.Parameters.AddWithValue("$status", evidence.Status);
+                command.Parameters.AddWithValue("$message", evidence.Message);
+                command.Parameters.AddWithValue("$decided_at_utc", GetEvidenceTimestamp(evidence));
+                command.Parameters.AddWithValue("$payload_json", JsonSerializer.Serialize(evidence, JsonOptions));
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private string BuildReviewEvidenceSummary(string taskId)
+        {
+            database.EnsureCreated();
+            List<string> lines = new List<string>();
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteCommand command = connection.CreateCommand())
+                {
+                    command.CommandText = """
+                        select decided_at_utc, relative_path, decision, classification, staged_record_id, status, payload_json
+                        from task_decisions
+                        where task_id = $task_id
+                        order by decided_at_utc, id;
+                        """;
+                    command.Parameters.AddWithValue("$task_id", taskId);
+                    using (SqliteDataReader reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            string line =
+                                $"- {reader.GetString(0)}: {reader.GetString(2)} / {reader.GetString(3)} `{reader.GetString(1)}` ({reader.GetString(5)}, staged `{reader.GetString(4)}`)";
+                            string ledgerSummary = ReadLedgerSummary(reader);
+                            if (!string.IsNullOrWhiteSpace(ledgerSummary))
+                            {
+                                line += Environment.NewLine + $"  - Summary: {ledgerSummary}";
+                            }
+
+                            lines.Add(line);
+                        }
+                    }
+                }
+            }
+
+            return lines.Count == 0
+                ? "No reviewed workflow evidence has been attached yet."
+                : string.Join(Environment.NewLine, lines);
+        }
+
+        private static string CreateDecisionSummary(PlanningDecisionEvidence evidence)
+        {
+            if (string.IsNullOrWhiteSpace(evidence.LedgerSummary))
+            {
+                return $"Workflow decision {evidence.Decision}/{evidence.Classification} for {evidence.RelativePath} ({evidence.StagedRecordId}).";
+            }
+
+            return $"Workflow decision {evidence.Decision}/{evidence.Classification} for {evidence.RelativePath} ({evidence.StagedRecordId}): {evidence.LedgerSummary}";
+        }
+
+        private static string GetEvidenceTimestamp(PlanningDecisionEvidence evidence)
+        {
+            return string.IsNullOrWhiteSpace(evidence.DecidedAtUtc)
+                ? DateTimeOffset.UtcNow.ToString("O")
+                : evidence.DecidedAtUtc;
+        }
+
+        private static string NormalizeIterationGoal(string iterationGoal)
+        {
+            return string.Join(
+                " ",
+                iterationGoal
+                    .Replace("\r", " ", StringComparison.Ordinal)
+                    .Replace("\n", " ", StringComparison.Ordinal)
+                    .Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        }
+
+        private int GetNextIterationSequence(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string taskId)
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = """
+                    select coalesce(max(sequence), 0) + 1
+                    from task_iterations
+                    where task_id = $task_id;
+                    """;
+                command.Parameters.AddWithValue("$task_id", taskId);
+                object? result = command.ExecuteScalar();
+                return Convert.ToInt32(result);
+            }
+        }
+
+        private PlanningIterationRow? GetLatestOpenIteration(string taskId)
+        {
+            database.EnsureCreated();
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteCommand command = connection.CreateCommand())
+                {
+                    command.CommandText = """
+                        select
+                            iteration_id,
+                            task_id,
+                            sequence,
+                            goal,
+                            status,
+                            created_at_utc,
+                            completed_at_utc
+                        from task_iterations
+                        where task_id = $task_id
+                          and status = 'open'
+                        order by sequence desc
+                        limit 1;
+                        """;
+                    command.Parameters.AddWithValue("$task_id", taskId);
+                    using (SqliteDataReader reader = command.ExecuteReader())
+                    {
+                        return reader.Read() ? ReadIteration(reader) : null;
+                    }
+                }
+            }
+        }
+
+        private static PlanningIterationRow? TryGetIteration(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string iterationId)
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = """
+                    select
+                        iteration_id,
+                        task_id,
+                        sequence,
+                        goal,
+                        status,
+                        created_at_utc,
+                        completed_at_utc
+                    from task_iterations
+                    where iteration_id = $iteration_id
+                    limit 1;
+                    """;
+                command.Parameters.AddWithValue("$iteration_id", iterationId);
+                using (SqliteDataReader reader = command.ExecuteReader())
+                {
+                    return reader.Read() ? ReadIteration(reader) : null;
+                }
+            }
+        }
+
+        private string BuildIterationSummary(string taskId)
+        {
+            database.EnsureCreated();
+            List<string> lines = new List<string>();
+            using (SqliteConnection connection = database.OpenConnection())
+            {
+                using (SqliteCommand command = connection.CreateCommand())
+                {
+                    command.CommandText = """
+                        select
+                            iteration_id,
+                            task_id,
+                            sequence,
+                            goal,
+                            status,
+                            created_at_utc,
+                            completed_at_utc
+                        from task_iterations
+                        where task_id = $task_id
+                        order by sequence, created_at_utc, iteration_id;
+                        """;
+                    command.Parameters.AddWithValue("$task_id", taskId);
+                    using (SqliteDataReader reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            PlanningIterationRow iteration = ReadIteration(reader);
+                            lines.Add($"- #{iteration.Sequence} [{iteration.Status}] {iteration.Goal}");
+                        }
+                    }
+                }
+            }
+
+            return lines.Count == 0
+                ? "No iteration goals recorded yet."
+                : string.Join(Environment.NewLine, lines);
+        }
+
+        private static PlanningIterationRow ReadIteration(SqliteDataReader reader)
+        {
+            return new PlanningIterationRow
+            {
+                IterationId = reader.GetString(0),
+                TaskId = reader.GetString(1),
+                Sequence = reader.GetInt32(2),
+                Goal = reader.GetString(3),
+                Status = reader.GetString(4),
+                CreatedAtUtc = reader.GetString(5),
+                CompletedAtUtc = reader.GetString(6)
+            };
+        }
+
+        private static string ReadLedgerSummary(SqliteDataReader reader)
+        {
+            if (reader.IsDBNull(6))
+            {
+                return string.Empty;
+            }
+
+            string payloadJson = reader.GetString(6);
+            if (string.IsNullOrWhiteSpace(payloadJson))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                PlanningDecisionEvidence? evidence = JsonSerializer.Deserialize<PlanningDecisionEvidence>(payloadJson, JsonOptions);
+                return evidence?.LedgerSummary ?? string.Empty;
+            }
+            catch (JsonException)
+            {
+                return string.Empty;
+            }
+        }
+    }
+}

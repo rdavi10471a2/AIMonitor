@@ -2,13 +2,17 @@ using AIMonitor.Core;
 using AIMonitor.Data;
 using AIMonitor.Indexing;
 using AIMonitor.Logging;
+using AIMonitor.Planning;
 using AIMonitor.Runtime;
 using AIMonitor.Workflow;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using System.ComponentModel;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -31,6 +35,7 @@ internal static class Program
             new JsonLinesMonitorLogger(MonitorLogPaths.GetDefaultLogPath(settings))));
         builder.Services.AddSingleton(SolutionIndexQueryService.Create(settings));
         builder.Services.AddSingleton(new WorkflowEditService(settings));
+        builder.Services.AddSingleton(new PlanningService(settings));
         builder.Services.AddSingleton(new RoslynEditService(settings));
         builder.Services.AddSingleton(new WorkflowEditPaths(settings));
         builder.Services.AddSingleton<AIMonitorMcpRuntimeState>();
@@ -74,6 +79,7 @@ public sealed class AIMonitorTools
     private readonly MonitorSettings settings;
     private readonly SolutionIndexQueryService queryService;
     private readonly WorkflowEditService workflowService;
+    private readonly PlanningService planningService;
     private readonly RoslynEditService roslynEditService;
     private readonly WorkflowEditPaths workflowPaths;
     private readonly AIMonitorMcpRuntimeState runtimeState;
@@ -84,6 +90,7 @@ public sealed class AIMonitorTools
         MonitorSettings settings,
         SolutionIndexQueryService queryService,
         WorkflowEditService workflowService,
+        PlanningService planningService,
         RoslynEditService roslynEditService,
         WorkflowEditPaths workflowPaths,
         AIMonitorMcpRuntimeState runtimeState,
@@ -93,6 +100,7 @@ public sealed class AIMonitorTools
         this.settings = settings;
         this.queryService = queryService;
         this.workflowService = workflowService;
+        this.planningService = planningService;
         this.roslynEditService = roslynEditService;
         this.workflowPaths = workflowPaths;
         this.runtimeState = runtimeState;
@@ -124,6 +132,65 @@ public sealed class AIMonitorTools
     }
 
     [McpServerTool]
+    [Description("Probe whether the connected MCP client advertises and handles form elicitation. This tool does not mutate monitor or watched-project state.")]
+    public async Task<AIMonitorElicitationProbeResult> TestElicitation(
+        ModelContextProtocol.Server.McpServer server,
+        CancellationToken cancellationToken)
+    {
+        runtimeState.Touch();
+        bool advertisesElicitation = server.ClientCapabilities?.Elicitation is not null;
+        bool advertisesFormElicitation = server.ClientCapabilities?.Elicitation?.Form is not null;
+        string clientName = server.ClientInfo?.Name ?? string.Empty;
+        string clientVersion = server.ClientInfo?.Version ?? string.Empty;
+
+        if (!advertisesElicitation)
+        {
+            return new AIMonitorElicitationProbeResult(
+                clientName,
+                clientVersion,
+                advertisesElicitation,
+                advertisesFormElicitation,
+                false,
+                "capability-missing",
+                false,
+                string.Empty,
+                "The connected MCP client did not advertise elicitation support.");
+        }
+
+        try
+        {
+            ElicitResult<AIMonitorElicitationProbeInput> response = await server.ElicitAsync<AIMonitorElicitationProbeInput>(
+                "AIMonitor elicitation probe: confirm that the connected MCP client can render a small dynamic form.",
+                null,
+                cancellationToken);
+            string contentJson = response.Content is null ? string.Empty : JsonSerializer.Serialize(response.Content, JsonOptions);
+            return new AIMonitorElicitationProbeResult(
+                clientName,
+                clientVersion,
+                advertisesElicitation,
+                advertisesFormElicitation,
+                true,
+                response.Action,
+                response.IsAccepted,
+                contentJson,
+                string.Empty);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException || ex is McpException)
+        {
+            return new AIMonitorElicitationProbeResult(
+                clientName,
+                clientVersion,
+                advertisesElicitation,
+                advertisesFormElicitation,
+                true,
+                "error",
+                false,
+                string.Empty,
+                ex.Message);
+        }
+    }
+
+    [McpServerTool]
     [Description("Return the monitor workflow status, including watched solution, runtime root, Working folder, and configured WinMerge candidates.")]
     public AIMonitorWorkflowStatus GetWorkflowStatus()
     {
@@ -135,6 +202,33 @@ public sealed class AIMonitorTools
             workflowPaths.WorkingRoot,
             settings.WinMergeCandidatePaths.FirstOrDefault(File.Exists),
             settings.WinMergeCandidatePaths);
+    }
+
+    [McpServerTool]
+    [Description("Return the AI-facing Current task context for the watched solution. Human notes are intentionally excluded; use the Plan Board UI for private operator notes.")]
+    public CurrentTaskContext GetCurrentTaskContext()
+    {
+        runtimeState.Touch();
+        return planningService.GetCurrentTaskContext();
+    }
+
+    [McpServerTool]
+    [Description("Append one operator-provided iteration goal line to the Current task. Agents should ask the operator for the next iteration line before calling this tool.")]
+    public PlanningIterationAppendResult AppendCurrentTaskIteration(
+        [Description("One compact line describing the next iteration goal to append to the Current task.")] string iterationGoal)
+    {
+        runtimeState.Touch();
+        return planningService.AppendIterationGoalToCurrentTask(iterationGoal);
+    }
+
+    [McpServerTool]
+    [Description("Update an existing Planning iteration goal after explicit operator correction. Agents should not use this for ordinary chat; ask the operator to confirm the replacement line first.")]
+    public PlanningIterationUpdateResult UpdateTaskIteration(
+        [Description("The Planning iteration id returned by get_current_task_context or append_current_task_iteration.")] string iterationId,
+        [Description("One compact replacement line for the iteration goal, confirmed by the operator.")] string iterationGoal)
+    {
+        runtimeState.Touch();
+        return planningService.UpdateIterationGoal(iterationId, iterationGoal);
     }
 
     [McpServerTool]
@@ -352,6 +446,52 @@ public sealed class AIMonitorTools
             []);
         SaveSession(session);
         return session;
+    }
+
+    [McpServerTool]
+    [Description("Set the planned task/iteration file list for a monitor session before watched-source edits begin.")]
+    public AIMonitorSessionState SetMonitorSessionPlan(
+        [Description("Session handle returned by start_monitor_session.")] string sessionId,
+        [Description("Current Planning task id from get_current_task_context.")] string taskId,
+        [Description("Current Planning iteration id from get_current_task_context.")] string iterationId,
+        [Description("Ordered planned files for this edit session. Each file needs a watched path, owning MSBuild project, role, and reason.")] IReadOnlyList<AIMonitorSessionPlannedFileInput> filesPlanned)
+    {
+        runtimeState.Touch();
+        if (string.IsNullOrWhiteSpace(taskId))
+        {
+            throw new ArgumentException("Task id is required.", nameof(taskId));
+        }
+
+        if (string.IsNullOrWhiteSpace(iterationId))
+        {
+            throw new ArgumentException("Iteration id is required.", nameof(iterationId));
+        }
+
+        if (filesPlanned is null || filesPlanned.Count == 0)
+        {
+            throw new ArgumentException("At least one planned file is required.", nameof(filesPlanned));
+        }
+
+        AIMonitorSessionState session = LoadSessionById(sessionId)
+            ?? throw new InvalidOperationException($"Monitor session was not found: {sessionId}");
+        string now = DateTimeOffset.UtcNow.ToString("O");
+        AIMonitorSessionPlannedFile[] plannedFiles = filesPlanned
+            .Select((file, index) => CreatePlannedFile(file, index + 1))
+            .ToArray();
+        AIMonitorSessionState updated = session with
+        {
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+            Plan = new AIMonitorSessionPlan
+            {
+                TaskId = taskId.Trim(),
+                IterationId = iterationId.Trim(),
+                CreatedAtUtc = string.IsNullOrWhiteSpace(session.Plan?.CreatedAtUtc) ? now : session.Plan.CreatedAtUtc,
+                UpdatedAtUtc = now,
+                FilesPlanned = plannedFiles
+            }
+        };
+        SaveSession(updated);
+        return updated;
     }
 
     [McpServerTool]
@@ -708,6 +848,7 @@ public sealed class AIMonitorTools
         StagedEditRecord record = workflowService.Stage(ResolveWatchedPath(path), ledgerSummary, sessionId);
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
+            MarkSessionPlannedFileStaged(sessionId, record);
             RecordMonitorSessionEvent(sessionId, "stage-candidate-for-review", record.StagedRecordId, JsonSerializer.Serialize(record, JsonOptions));
         }
 
@@ -835,22 +976,241 @@ public sealed class AIMonitorTools
 
     [McpServerTool]
     [Description("Classify a completed WinMerge review for a staged edit. Accepted decisions require the expected staged hash.")]
-    public ReviewDecisionWithIndexRefreshResult RecordDiffDecision(
+    public async Task<ReviewDecisionWithIndexRefreshResult> RecordDiffDecision(
+        ModelContextProtocol.Server.McpServer server,
         [Description("Staged edit record id returned by stage_candidate_for_review.")] string stagedRecordId,
         [Description("Operator-reported outcome: accepted or rejected.")] string decision,
         [Description("Expected staged hash for accepted decisions.")] string? expectedStagedHash = null,
-        [Description("Return the full staged record inline for debugging. Defaults to compact response.")] bool verbose = false)
+        [Description("Return the full staged record inline for debugging. Defaults to compact response.")] bool verbose = false,
+        CancellationToken cancellationToken = default)
     {
         runtimeState.Touch();
-        return new StagedDecisionWorkflow().Record(
-            settings,
-            logger,
-            workflowService,
-            stagedRecordId,
-            decision,
-            expectedStagedHash,
-            "AIMonitor.McpServer",
-            verbose);
+        try
+        {
+            ReviewDecisionWithIndexRefreshResult result = new StagedDecisionWorkflow().Record(
+                settings,
+                logger,
+                workflowService,
+                stagedRecordId,
+                decision,
+                expectedStagedHash,
+                "AIMonitor.McpServer",
+                verbose);
+            result.PostAcceptPlanning = await TryRunPostAcceptPlanningAsync(server, result, cancellationToken);
+            result.SessionProgress = UpdateSessionProgressForDecision(result);
+            if (result.PostAcceptPlanning?.Pending == true)
+            {
+                result.NextStep = result.NextStep + " Post-accept Planning is pending; call resolve_post_accept_planning_decision before mutating Planning.";
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            logger.Write(
+                MonitorLogLevel.Error,
+                "AIMonitor.McpServer",
+                "adapter.mcp.record-diff-decision.failed",
+                ex.ToString(),
+                new Dictionary<string, string>
+                {
+                    ["stagedRecordId"] = stagedRecordId,
+                    ["decision"] = decision,
+                    ["hasExpectedStagedHash"] = string.IsNullOrWhiteSpace(expectedStagedHash) ? "false" : "true"
+                });
+            throw;
+        }
+    }
+
+    [McpServerTool]
+    [Description("Complete a Planning iteration after explicit operator confirmation.")]
+    public PlanningIterationCompletionResult CompleteTaskIteration(
+        [Description("The Planning iteration id returned by get_current_task_context.")] string iterationId,
+        [Description("One compact note explaining why the iteration is complete.")] string completionNote)
+    {
+        runtimeState.Touch();
+        return planningService.CompleteIteration(iterationId, completionNote);
+    }
+
+    [McpServerTool]
+    [Description("Resolve a pending post-accept Planning decision returned by record_diff_decision when elicitation was unavailable or canceled.")]
+    public PostAcceptPlanningDecisionResult ResolvePostAcceptPlanningDecision(
+        [Description("Pending decision id returned in record_diff_decision.postAcceptPlanning.pendingDecisionId.")] string pendingDecisionId,
+        [Description("Planning action to apply: stop, keep-current-iteration-open, complete-current-iteration, append-next-iteration, replace-current-iteration, pause-task, close-task, or cancel-task.")] string action,
+        [Description("One compact goal line for append-next-iteration or replace-current-iteration.")] string? nextIterationGoal = null,
+        [Description("Required note for completing an iteration or moving the task to paused, closed, or canceled.")] string? statusNote = null)
+    {
+        runtimeState.Touch();
+        PendingPostAcceptPlanningDecision pending = runtimeState.TakePendingPlanningDecision(pendingDecisionId);
+        PostAcceptPlanningActionResult applied = planningService.ApplyPostAcceptPlanningAction(
+            action,
+            pending.CurrentIterationId,
+            nextIterationGoal,
+            statusNote);
+        return new PostAcceptPlanningDecisionResult
+        {
+            Required = true,
+            ElicitationAttempted = false,
+            ElicitationAccepted = false,
+            ElicitationAction = "resolved",
+            Pending = false,
+            PendingDecisionId = pendingDecisionId,
+            ResolverTool = "resolve_post_accept_planning_decision",
+            AppliedAction = applied,
+            Message = applied.Message
+        };
+    }
+
+    private async Task<PostAcceptPlanningDecisionResult?> TryRunPostAcceptPlanningAsync(
+        ModelContextProtocol.Server.McpServer server,
+        ReviewDecisionWithIndexRefreshResult decision,
+        CancellationToken cancellationToken)
+    {
+        if (decision.Classification is not ("accepted" or "accepted-normalized"))
+        {
+            return null;
+        }
+
+        CurrentTaskContext context = planningService.GetCurrentTaskContext();
+        if (!context.HasCurrentTask)
+        {
+            return new PostAcceptPlanningDecisionResult
+            {
+                Required = false,
+                Message = "No Current task is selected; post-accept Planning discussion was not requested."
+            };
+        }
+
+        if (server.ClientCapabilities?.Elicitation is null)
+        {
+            return CreatePendingPostAcceptPlanningDecision(
+                decision.StagedRecordId,
+                context,
+                false,
+                "capability-missing",
+                "The connected MCP client did not advertise elicitation. Resolve post-accept Planning explicitly.");
+        }
+
+        try
+        {
+            ElicitResult<PostAcceptPlanningElicitationInput> elicitation = await server.ElicitAsync<PostAcceptPlanningElicitationInput>(
+                CreatePostAcceptPlanningPrompt(decision, context),
+                null,
+                cancellationToken);
+            if (!elicitation.IsAccepted || elicitation.Content is null)
+            {
+                return CreatePendingPostAcceptPlanningDecision(
+                    decision.StagedRecordId,
+                    context,
+                    true,
+                    elicitation.Action,
+                    "Post-accept Planning elicitation was not accepted. Resolve post-accept Planning explicitly.");
+            }
+
+            string action = ToPostAcceptPlanningAction(elicitation.Content);
+            PostAcceptPlanningActionResult applied = planningService.ApplyPostAcceptPlanningAction(
+                action,
+                context.CurrentIteration?.IterationId,
+                elicitation.Content.NextIterationGoal,
+                elicitation.Content.StatusNote);
+            return new PostAcceptPlanningDecisionResult
+            {
+                Required = true,
+                ElicitationAttempted = true,
+                ElicitationAccepted = true,
+                ElicitationAction = elicitation.Action,
+                Pending = false,
+                ResolverTool = "resolve_post_accept_planning_decision",
+                AppliedAction = applied,
+                Message = applied.Message
+            };
+        }
+        catch (Exception ex)
+        {
+            return CreatePendingPostAcceptPlanningDecision(
+                decision.StagedRecordId,
+                context,
+                true,
+                "error",
+                "Post-accept Planning elicitation failed: " + ex.Message + " Resolve post-accept Planning explicitly.");
+        }
+    }
+
+    private PostAcceptPlanningDecisionResult CreatePendingPostAcceptPlanningDecision(
+        string stagedRecordId,
+        CurrentTaskContext context,
+        bool elicitationAttempted,
+        string elicitationAction,
+        string message)
+    {
+        PendingPostAcceptPlanningDecision pending = runtimeState.AddPendingPlanningDecision(stagedRecordId, context);
+        return new PostAcceptPlanningDecisionResult
+        {
+            Required = true,
+            ElicitationAttempted = elicitationAttempted,
+            ElicitationAccepted = false,
+            ElicitationAction = elicitationAction,
+            Pending = true,
+            PendingDecisionId = pending.PendingDecisionId,
+            ResolverTool = "resolve_post_accept_planning_decision",
+            Message = message
+        };
+    }
+
+    private static string CreatePostAcceptPlanningPrompt(
+        ReviewDecisionWithIndexRefreshResult decision,
+        CurrentTaskContext context)
+    {
+        string iteration = string.IsNullOrWhiteSpace(context.CurrentIterationGoal)
+            ? "No current iteration is open."
+            : "Current iteration: " + context.CurrentIterationGoal;
+        return "AIMonitor post-accept Planning: " + decision.RelativePath + " was " + decision.Classification + ". "
+            + iteration + " Choose whether the iteration is complete and the next Planning action.";
+    }
+
+    private static string ToPostAcceptPlanningAction(PostAcceptPlanningElicitationInput input)
+    {
+        if (input.CurrentIterationComplete)
+        {
+            return "complete-current-iteration";
+        }
+
+        if (input.NextAction == PostAcceptPlanningNextAction.KeepCurrentIterationOpen)
+        {
+            return "keep-current-iteration-open";
+        }
+
+        if (input.NextAction == PostAcceptPlanningNextAction.CompleteCurrentIteration)
+        {
+            return "complete-current-iteration";
+        }
+
+        if (input.NextAction == PostAcceptPlanningNextAction.AppendNextIteration)
+        {
+            return "append-next-iteration";
+        }
+
+        if (input.NextAction == PostAcceptPlanningNextAction.ReplaceCurrentIteration)
+        {
+            return "replace-current-iteration";
+        }
+
+        if (input.NextAction == PostAcceptPlanningNextAction.PauseTask)
+        {
+            return "pause-task";
+        }
+
+        if (input.NextAction == PostAcceptPlanningNextAction.CloseTask)
+        {
+            return "close-task";
+        }
+
+        if (input.NextAction == PostAcceptPlanningNextAction.CancelTask)
+        {
+            return "cancel-task";
+        }
+
+        return "stop";
     }
 
     [McpServerTool]
@@ -1226,6 +1586,198 @@ public sealed class AIMonitorTools
         File.WriteAllText(GetSessionPath(session.SessionId), JsonSerializer.Serialize(session, JsonOptions));
     }
 
+    private AIMonitorSessionPlannedFile CreatePlannedFile(AIMonitorSessionPlannedFileInput input, int sequence)
+    {
+        if (string.IsNullOrWhiteSpace(input.Path))
+        {
+            throw new ArgumentException("Every planned file needs a path.", nameof(input));
+        }
+
+        if (string.IsNullOrWhiteSpace(input.OwningProjectPath))
+        {
+            throw new ArgumentException("Every planned file needs an owning MSBuild project path.", nameof(input));
+        }
+
+        string fullPath = ResolveWatchedPath(input.Path);
+        return new AIMonitorSessionPlannedFile
+        {
+            Sequence = sequence,
+            Path = input.Path.Trim(),
+            FullPath = fullPath,
+            RelativePath = workflowPaths.GetRelativeWatchedPath(fullPath),
+            OwningProjectPath = ResolveProjectPath(input.OwningProjectPath),
+            Role = string.IsNullOrWhiteSpace(input.Role) ? "edit" : input.Role.Trim(),
+            Reason = input.Reason.Trim(),
+            Status = "planned"
+        };
+    }
+
+    private string ResolveProjectPath(string projectPath)
+    {
+        return Path.GetFullPath(Path.IsPathRooted(projectPath)
+            ? projectPath
+            : Path.Combine(settings.WatchedProjectFolder, projectPath));
+    }
+
+    private void MarkSessionPlannedFileStaged(string sessionId, StagedEditRecord record)
+    {
+        AIMonitorSessionState? session = LoadSessionById(sessionId);
+        if (session?.Plan is null)
+        {
+            return;
+        }
+
+        List<AIMonitorSessionPlannedFile> files = ClonePlannedFiles(session.Plan.FilesPlanned);
+        AIMonitorSessionPlannedFile? file = FindPlannedFile(files, record.WatchedFilePath, record.RelativePath);
+        if (file is null)
+        {
+            return;
+        }
+
+        file.Status = "staged";
+        file.StagedRecordId = record.StagedRecordId;
+        SaveSession(UpdateSessionPlan(session, files));
+    }
+
+    private ReviewDecisionSessionProgress? UpdateSessionProgressForDecision(ReviewDecisionWithIndexRefreshResult decision)
+    {
+        StagedEditRecord record = decision.StagedRecord ?? workflowService.GetStagedRecord(decision.StagedRecordId);
+        if (string.IsNullOrWhiteSpace(record.SessionId))
+        {
+            return null;
+        }
+
+        AIMonitorSessionState? session = LoadSessionById(record.SessionId);
+        if (session is null)
+        {
+            return new ReviewDecisionSessionProgress
+            {
+                SessionId = record.SessionId,
+                HasPlan = false,
+                Message = "The staged record has a session id, but the monitor session was not found."
+            };
+        }
+
+        if (session.Plan is null)
+        {
+            return new ReviewDecisionSessionProgress
+            {
+                SessionId = session.SessionId,
+                HasPlan = false,
+                Message = "The monitor session has no planned file set."
+            };
+        }
+
+        List<AIMonitorSessionPlannedFile> files = ClonePlannedFiles(session.Plan.FilesPlanned);
+        AIMonitorSessionPlannedFile? current = FindPlannedFile(files, decision.WatchedFilePath, decision.RelativePath);
+        bool matched = current is not null;
+        if (current is not null)
+        {
+            current.Status = string.IsNullOrWhiteSpace(decision.Classification) ? decision.Decision : decision.Classification;
+            current.StagedRecordId = decision.StagedRecordId;
+            current.Decision = decision.Decision;
+            current.Classification = decision.Classification;
+            current.DecidedAtUtc = record.DecisionAtUtc;
+            SaveSession(UpdateSessionPlan(session, files));
+        }
+
+        int decidedCount = files.Count(file => IsPlannedFileDecided(file));
+        int plannedCount = files.Count;
+        return new ReviewDecisionSessionProgress
+        {
+            SessionId = session.SessionId,
+            HasPlan = true,
+            TaskId = session.Plan.TaskId,
+            IterationId = session.Plan.IterationId,
+            PlannedFileCount = plannedCount,
+            DecidedFileCount = decidedCount,
+            CurrentFileSequence = current?.Sequence ?? 0,
+            CurrentFileRelativePath = current?.RelativePath ?? decision.RelativePath,
+            CurrentFileStatus = current?.Status ?? "not-in-plan",
+            CurrentFileMatchedPlan = matched,
+            IsSessionComplete = plannedCount > 0 && decidedCount == plannedCount,
+            Message = CreateSessionProgressMessage(matched, current, decidedCount, plannedCount)
+        };
+    }
+
+    private AIMonitorSessionState UpdateSessionPlan(AIMonitorSessionState session, IReadOnlyList<AIMonitorSessionPlannedFile> files)
+    {
+        string now = DateTimeOffset.UtcNow.ToString("O");
+        return session with
+        {
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+            Plan = new AIMonitorSessionPlan
+            {
+                TaskId = session.Plan?.TaskId ?? string.Empty,
+                IterationId = session.Plan?.IterationId ?? string.Empty,
+                CreatedAtUtc = session.Plan?.CreatedAtUtc ?? now,
+                UpdatedAtUtc = now,
+                FilesPlanned = files
+            }
+        };
+    }
+
+    private static List<AIMonitorSessionPlannedFile> ClonePlannedFiles(IReadOnlyList<AIMonitorSessionPlannedFile> files)
+    {
+        return files
+            .Select(file => new AIMonitorSessionPlannedFile
+            {
+                Sequence = file.Sequence,
+                Path = file.Path,
+                FullPath = file.FullPath,
+                RelativePath = file.RelativePath,
+                OwningProjectPath = file.OwningProjectPath,
+                Role = file.Role,
+                Reason = file.Reason,
+                Status = file.Status,
+                StagedRecordId = file.StagedRecordId,
+                Decision = file.Decision,
+                Classification = file.Classification,
+                DecidedAtUtc = file.DecidedAtUtc
+            })
+            .ToList();
+    }
+
+    private static AIMonitorSessionPlannedFile? FindPlannedFile(
+        IReadOnlyList<AIMonitorSessionPlannedFile> files,
+        string watchedFilePath,
+        string relativePath)
+    {
+        return files.FirstOrDefault(file =>
+                file.FullPath.Equals(watchedFilePath, StringComparison.OrdinalIgnoreCase))
+            ?? files.FirstOrDefault(file =>
+                file.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase))
+            ?? files.FirstOrDefault(file =>
+                file.Path.Equals(watchedFilePath, StringComparison.OrdinalIgnoreCase)
+                || file.Path.Equals(relativePath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsPlannedFileDecided(AIMonitorSessionPlannedFile file)
+    {
+        return file.Status.Equals("accepted", StringComparison.OrdinalIgnoreCase)
+            || file.Status.Equals("accepted-normalized", StringComparison.OrdinalIgnoreCase)
+            || file.Status.Equals("rejected", StringComparison.OrdinalIgnoreCase)
+            || file.Status.Equals("dirty-unexpected", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrWhiteSpace(file.Decision);
+    }
+
+    private static string CreateSessionProgressMessage(
+        bool matched,
+        AIMonitorSessionPlannedFile? current,
+        int decidedCount,
+        int plannedCount)
+    {
+        if (!matched)
+        {
+            return "Decision recorded, but the decided file was not listed in the monitor session plan.";
+        }
+
+        string currentText = current is null ? "current file" : $"file {current.Sequence} of {plannedCount}";
+        return decidedCount == plannedCount
+            ? $"Decision recorded for {currentText}. All planned session files are decided."
+            : $"Decision recorded for {currentText}. Session has {plannedCount - decidedCount} planned file(s) still undecided.";
+    }
+
     private AIMonitorSessionFileAccess RecordSessionFileAccess(
         string sessionId,
         string sourceFilePath,
@@ -1507,6 +2059,8 @@ public sealed record AIMonitorSessionState(
     IReadOnlyList<AIMonitorSessionEvent> Events)
 {
     public IReadOnlyList<AIMonitorSessionFileAccess> Files { get; init; } = [];
+
+    public AIMonitorSessionPlan? Plan { get; init; }
 }
 
 public sealed record AIMonitorSessionSummary(
@@ -1582,9 +2136,40 @@ public sealed record AIMonitorServerShutdownResult(
     DateTimeOffset RequestedAtUtc,
     string Reason);
 
+public sealed record AIMonitorElicitationProbeResult(
+    string ClientName,
+    string ClientVersion,
+    bool AdvertisesElicitation,
+    bool AdvertisesFormElicitation,
+    bool RequestAttempted,
+    string Action,
+    bool IsAccepted,
+    string ContentJson,
+    string Error);
+
+public sealed class AIMonitorElicitationProbeInput
+{
+    [Description("Whether the client-rendered elicitation form reached the operator.")]
+    public bool ContinueProbe { get; set; }
+
+    [Description("A small operator note returned from the MCP client.")]
+    public string Note { get; set; } = string.Empty;
+
+    [Description("The next action to take after this proof request.")]
+    public AIMonitorElicitationProbeNextAction NextAction { get; set; }
+}
+
+public enum AIMonitorElicitationProbeNextAction
+{
+    Stop,
+    ContinuePlanning,
+    ContinueImplementation
+}
+
 public sealed class AIMonitorMcpRuntimeState
 {
     private readonly IMonitorLogger logger;
+    private readonly ConcurrentDictionary<string, PendingPostAcceptPlanningDecision> pendingPlanningDecisions = new(StringComparer.Ordinal);
     private long lastActivityTicks = DateTimeOffset.UtcNow.UtcTicks;
     private int shutdownRequested;
 
@@ -1596,6 +2181,37 @@ public sealed class AIMonitorMcpRuntimeState
     public DateTimeOffset LastActivityUtc => new(Interlocked.Read(ref lastActivityTicks), TimeSpan.Zero);
 
     public bool ShutdownRequested => Volatile.Read(ref shutdownRequested) == 1;
+
+    public PendingPostAcceptPlanningDecision AddPendingPlanningDecision(string stagedRecordId, CurrentTaskContext context)
+    {
+        PendingPostAcceptPlanningDecision pending = new PendingPostAcceptPlanningDecision
+        {
+            PendingDecisionId = "planning-decision-" + Guid.NewGuid().ToString("N"),
+            StagedRecordId = stagedRecordId,
+            TaskId = context.TaskId,
+            TaskTitle = context.Title,
+            CurrentIterationId = context.CurrentIteration?.IterationId ?? string.Empty,
+            CurrentIterationGoal = context.CurrentIterationGoal,
+            CreatedAtUtc = DateTimeOffset.UtcNow.ToString("O")
+        };
+        pendingPlanningDecisions[pending.PendingDecisionId] = pending;
+        return pending;
+    }
+
+    public PendingPostAcceptPlanningDecision TakePendingPlanningDecision(string pendingDecisionId)
+    {
+        if (string.IsNullOrWhiteSpace(pendingDecisionId))
+        {
+            throw new ArgumentException("Pending decision id is required.", nameof(pendingDecisionId));
+        }
+
+        if (pendingPlanningDecisions.TryRemove(pendingDecisionId, out PendingPostAcceptPlanningDecision? pending))
+        {
+            return pending;
+        }
+
+        throw new InvalidOperationException("Pending post-accept Planning decision was not found: " + pendingDecisionId);
+    }
 
     public void Touch([CallerMemberName] string toolName = "")
     {

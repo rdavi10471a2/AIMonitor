@@ -12,6 +12,7 @@ This file is the Claude/Claude Code entry point. `AGENTS.md` is the Codex host e
 - For any newly authored C# source, do not use top-level statements, do not use `using var`, `using` declarations, or `await using` declarations for resource lifetime, and always use braces for control-flow bodies.
 - Add tests beside workflow behavior when changing behavior.
 - Keep generated runtime state under `runtime/`, not in watched projects.
+- For Plan Board context, use `get_current_task_context`. Do not browse `runtime/**/planning/task-memory/` directly for active task context; task memory Markdown is storage/review evidence, and Human Notes are not AI-facing by default.
 - Do not describe AIMonitor as C#-only. C# is the first semantic provider; MSBuild project/document loading is language-neutral.
 - Treat `docs/system-memory/README.md` as the authoritative system-memory contract for AIMonitor behavior.
 - Use `docs/agent-memory/RestartContext.md` after plugin, MCP, or context restarts.
@@ -47,6 +48,8 @@ Never edit watched source directly. For watched-project edits:
 7. Record the operator decision with `record_diff_decision`.
 8. For accepted or accepted-normalized decisions, check `indexRefresh.status` before relying on solution-index rows.
 
+`record_diff_decision` is also the Planning evidence integration point. After WinMerge accept/reject classification, AIMonitor attaches staged-record decision evidence to the Current task when one exists; Planning attachment failure must not invalidate the safe-edit decision.
+
 After an accepted or accepted-normalized decision, call `refresh_file` before editing that same watched file again.
 
 If an accepted or accepted-normalized decision reports a failed `indexRefresh` or leaves the workflow session index-stale, do not trust solution-index rows for follow-up semantic work until `refresh_solution_index`, an equivalent rebuild, or a successful post-accept refresh clears the stale state.
@@ -70,6 +73,7 @@ Then load the smallest relevant card:
 
 - Semantic discovery: `RoslynFirstNavigation.md`
 - Watched-source staging: `SystemMonitorStaging.md`
+- Current task / Plan Board context: `PlanBoardCurrentTask.md`
 - Coupled multi-file edits: `SessionOverlayValidation.md`
 - WinMerge and validation gates: `ReviewQueueAndGates.md`
 - Formatting/newline-safe edits: `FormattingOracle.md`

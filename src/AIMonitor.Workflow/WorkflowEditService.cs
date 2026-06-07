@@ -677,6 +677,7 @@ public sealed class WorkflowEditService
             CreatedAtUtc = DateTimeOffset.UtcNow.ToString("O"),
             Status = "staged",
             Message = "Working candidate was snapshotted for WinMerge review.",
+            LedgerSummary = ledgerSummary ?? string.Empty,
             LastCompareRunId = compare.RunId,
             LastCompareSnapshotPath = compare.ProposedSnapshotPath,
             LastLedgerPath = compare.LedgerPath
@@ -720,7 +721,8 @@ public sealed class WorkflowEditService
             LaunchStatus = record.LaunchStatus,
             RecordPath = paths.GetStagedRecordPath(record.StagedRecordId),
             CreatedAtUtc = record.CreatedAtUtc,
-            Message = record.Message
+            Message = record.Message,
+            LedgerSummary = record.LedgerSummary
         };
     }
 

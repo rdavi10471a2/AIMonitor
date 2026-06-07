@@ -8,6 +8,7 @@ namespace AIMonitor.App.Controls;
 public sealed class MonitorDashboardControl : UserControl
 {
     private readonly TabControl mainTabs;
+    private readonly PlanBoardControl planBoardControl;
     private readonly SolutionIndexControl solutionIndexControl;
     private readonly AdapterSurfaceControl adapterSurfaceControl;
     private readonly Label statusLabel;
@@ -31,6 +32,11 @@ public sealed class MonitorDashboardControl : UserControl
         {
             Dock = DockStyle.Fill
         };
+        planBoardControl = new PlanBoardControl(settingsPath)
+        {
+            Dock = DockStyle.Fill,
+            MinimumSize = new Size(850, 360)
+        };
         solutionIndexControl = new SolutionIndexControl(settingsPath)
         {
             Dock = DockStyle.Fill,
@@ -43,9 +49,10 @@ public sealed class MonitorDashboardControl : UserControl
             Dock = DockStyle.Fill
         };
         adapterSurfaceControl.StatusChanged += status => statusLabel.Text = status;
+        mainTabs.TabPages.Add(BuildTab("Plan Board", planBoardControl));
         mainTabs.TabPages.Add(BuildTab("Solution Index", solutionIndexControl));
         mainTabs.TabPages.Add(BuildTab("Monitor Status", adapterSurfaceControl));
-        mainTabs.SelectedIndex = 1;
+        mainTabs.SelectedIndex = 0;
 
         Controls.Add(BuildLayout());
 
@@ -91,6 +98,7 @@ public sealed class MonitorDashboardControl : UserControl
         {
             string repositoryRoot = AppPathResolver.FindRepositoryRoot();
             MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot, settingsPath);
+            planBoardControl.RefreshPlanningStatus();
             logService = new MonitorLogService(MonitorLogPaths.GetDefaultLogPath(settings));
             logPipeServer?.Dispose();
             mcpProxyHubService?.Dispose();

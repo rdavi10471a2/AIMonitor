@@ -27,4 +27,6 @@ public sealed class StagedEditSummary
     public string CreatedAtUtc { get; set; } = string.Empty;
 
     public string Message { get; set; } = string.Empty;
+
+    public string LedgerSummary { get; set; } = string.Empty;
 }
