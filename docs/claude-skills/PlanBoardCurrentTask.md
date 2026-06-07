@@ -24,6 +24,8 @@ At the start of work that may use Planning, request the current task context fir
 
 Do not paste full task memory, full evidence history, file paths, hashes, or Markdown unless the operator asks. If there is no Current task, say that evidence will not attach until one is made Current.
 
+Before executing an existing `currentIteration`, pause for operator confirmation. State the exact current iteration line and ask whether to execute it now, replace it, or append a new iteration first. Do not begin watched-source edits until the operator confirms the execution step.
+
 ## Iteration Goals
 
 Planning uses iteration goals as the v1 substitute for subtasks: one Current task, many explicit iteration rows. Use `currentIterationGoal` from `get_current_task_context` as the next executable slice when present.
