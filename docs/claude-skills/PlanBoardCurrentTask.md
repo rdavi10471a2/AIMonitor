@@ -26,6 +26,29 @@ Do not paste full task memory, full evidence history, file paths, hashes, or Mar
 
 Before executing an existing `currentIteration`, pause for operator confirmation. State the exact current iteration line and ask whether to execute it now, replace it, or append a new iteration first. Do not begin watched-source edits until the operator confirms the execution step.
 
+## Edit Session Plan
+
+After the operator confirms execution and before the first watched-source edit, create or reuse a monitor session and record the planned edit set. Agents often say "I need to edit these files"; make that statement durable before entering the workflow loop.
+
+Use `start_monitor_session`, then record a `planned-edit-files` event with this compact JSON shape:
+
+```json
+{
+  "taskId": "<current task id>",
+  "iterationId": "<current iteration id>",
+  "filesPlanned": [
+    {
+      "path": "<watched file path>",
+      "owningProjectPath": "<MSBuild project path>",
+      "role": "edit",
+      "reason": "<why this file is expected to change>"
+    }
+  ]
+}
+```
+
+Use `role` values such as `edit`, `new-file`, `test`, `config`, or `context`. Keep `context` rows rare; do not turn broad exploration into a large planned edit set. Prefer MSBuild/index facts for `owningProjectPath` over filesystem guessing. Pass the returned `sessionId` through subsequent workflow tools so staged records can be correlated with the planned task/iteration/file set.
+
 ## Iteration Goals
 
 Planning uses iteration goals as the v1 substitute for subtasks: one Current task, many explicit iteration rows. Use `currentIterationGoal` from `get_current_task_context` as the next executable slice when present.

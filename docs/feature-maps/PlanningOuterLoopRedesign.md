@@ -29,6 +29,26 @@ At the start of a chat or before executing work, the agent should:
 
 The front door should not mutate watched source. It prepares intent for the existing workflow.
 
+Before the first watched-source edit, the agent should create or reuse a monitor session and record the planned edit set:
+
+```json
+{
+  "sessionId": "<monitor session id>",
+  "taskId": "<current task id>",
+  "iterationId": "<current iteration id>",
+  "filesPlanned": [
+    {
+      "path": "<watched file path>",
+      "owningProjectPath": "<MSBuild project path>",
+      "role": "edit",
+      "reason": "<why this file is expected to change>"
+    }
+  ]
+}
+```
+
+This captures the agent's "I need to edit these files" statement as session intent. It should stay compact, use MSBuild/index truth for project ownership, and flow through the existing `sessionId` on refresh/edit/stage/decision calls. The first practical use is project-targeted index refresh after accepted decisions: rebuild the owning projects for the session's edited/staged/decided files instead of rebuilding the whole watched solution.
+
 ## Middle: Safe Edit Engine
 
 The existing MCP safe edit tools stay intact:
@@ -108,6 +128,18 @@ The spike proved useful pieces but put too much orchestration in `Program.cs`. R
 6. For accepted/rejected terminal decisions, attach evidence and return/apply a Planning next-step gate.
 7. If elicitation is unavailable or not accepted, return pending state and require `resolve_post_decision_planning`.
 8. Add Planning unit tests and MCP integration smokes for accepted, rejected, and pending resolver paths.
+
+## Index Refresh Follow-Up
+
+Full post-accept solution rebuilds make the outer loop too slow. The next indexing redesign should use the session plan and staged records:
+
+1. `record_diff_decision` always has the decided staged file.
+2. The `sessionId` gives access to the planned file set for the task/iteration.
+3. Planned files include `owningProjectPath`.
+4. Accepted decisions should refresh the union of owning projects for files with roles such as `edit`, `new-file`, `test`, or `config`.
+5. Fall back to full solution rebuild for solution/project file edits, unknown ownership, unsupported Razor/generated boundaries, or failed project refresh.
+
+Do not capture all MCP calls as Planning history. Capture the planned file/project set explicitly at the front door.
 
 ## Fresh Chat Restart Note
 
