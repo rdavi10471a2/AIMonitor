@@ -45,6 +45,69 @@ submit_symbol(path, symbolSelectorJson, replacement)
 
 The index is a broad discovery surface. Source maps and symbols are the precise edit surface for C# member/type surgery.
 
+## SchemaStudioWebViewer Razor Generated Build
+
+Use this when Claude needs to build the real `SchemaStudioWebViewer` watched app or materialize Razor generator files for source-map/index evidence.
+
+Important distinction:
+
+- AIMonitor `main` already has Razor generation/indexing code in `MSBuildWorkspaceLoader`: it reads Roslyn source-generated Razor documents and also builds `RazorDocumentIndex` in memory with `RazorProjectEngine`.
+- AIMonitor does **not** require an on-disk `obj\_generated` folder to index Razor. That folder is diagnostic evidence for humans/agents who need to inspect generated Razor C# directly.
+- If `_generated` is missing, do not infer the indexer is missing Razor support. It usually means the external WebViewer app was built without `EmitCompilerGeneratedFiles=true`.
+
+The real WebViewer checkout is external to AIMonitor:
+
+```text
+C:\SchemaStudioWebViewer\SchemaStudioWebViewer.csproj
+C:\SchemaStudioWebViewer\SchemaStudioWebViewer.sln
+```
+
+The project currently targets `net9.0` and uses `Microsoft.NET.Sdk.Web`. On this machine, the verified SDK/runtime set is:
+
+```text
+.NET SDK 10.0.103
+MSBuild 18.0.11
+Microsoft.AspNetCore.App 10.0.3
+```
+
+Check the selected SDK before building:
+
+```powershell
+dotnet --info
+dotnet --list-sdks
+dotnet --list-runtimes
+```
+
+Run from the WebViewer root:
+
+```powershell
+Set-Location C:\SchemaStudioWebViewer
+dotnet build .\SchemaStudioWebViewer.csproj -c Debug -p:UseSharedCompilation=false -p:EmitCompilerGeneratedFiles=true -p:CompilerGeneratedFilesOutputPath=obj\_generated
+```
+
+The important properties are `EmitCompilerGeneratedFiles=true` and `CompilerGeneratedFilesOutputPath=obj\_generated`. A normal `dotnet build` can succeed without leaving the diagnostic `_generated` folder behind.
+
+Verify generated Razor files:
+
+```powershell
+Get-ChildItem C:\SchemaStudioWebViewer\obj\_generated -Recurse -File |
+    Where-Object { $_.FullName -like '*.razor.g.cs' } |
+    Select-Object -First 20 FullName
+```
+
+Expected folder shape:
+
+```text
+C:\SchemaStudioWebViewer\obj\_generated\
+  Microsoft.CodeAnalysis.Razor.Compiler\
+    Microsoft.NET.Sdk.Razor.SourceGenerators.RazorSourceGenerator\
+      ... *.razor.g.cs
+```
+
+Verified locally on 2026-06-08: build succeeded with 20 existing warnings, 0 errors, and produced 36 files under `C:\SchemaStudioWebViewer\obj\_generated`.
+
+Use `_generated` as evidence for Razor source mapping and generator behavior. Do not treat it as proof of full Visual Studio-level Razor binding semantics.
+
 ## Existing File Edit
 
 ```text
