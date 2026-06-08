@@ -1485,13 +1485,25 @@ public sealed class AIMonitorTools
         foreach (AIMonitorSessionPlannedFile plannedFile in editPlan.FilesPlanned)
         {
             string plannedPath = Path.GetFullPath(plannedFile.SourceFilePath);
-            bool hasStagedRecord = sessionRecords.Any(record =>
-                Path.GetFullPath(record.WatchedFilePath).Equals(plannedPath, StringComparison.OrdinalIgnoreCase)
-                && string.IsNullOrWhiteSpace(record.Decision)
+            IEnumerable<StagedEditRecord> plannedFileRecords = sessionRecords.Where(record =>
+                Path.GetFullPath(record.WatchedFilePath).Equals(plannedPath, StringComparison.OrdinalIgnoreCase));
+            // Launch-deadlock fix: a planned file already carrying a final decision is
+            // satisfied. Interleaving launch -> decide -> launch on the remaining files
+            // must not throw just because an earlier file was decided and no longer has an
+            // active (undecided) staged record. Only files NOT yet decided must still have
+            // an active staged record.
+            bool alreadyDecided = plannedFileRecords.Any(record => !string.IsNullOrWhiteSpace(record.Decision));
+            if (alreadyDecided)
+            {
+                continue;
+            }
+
+            bool hasActiveStagedRecord = plannedFileRecords.Any(record =>
+                string.IsNullOrWhiteSpace(record.Decision)
                 && string.IsNullOrWhiteSpace(record.SupersededByStagedRecordId)
                 && !record.Status.Equals("superseded", StringComparison.OrdinalIgnoreCase)
                 && !record.Classification.Equals("superseded", StringComparison.OrdinalIgnoreCase));
-            if (!hasStagedRecord)
+            if (!hasActiveStagedRecord)
             {
                 throw new InvalidOperationException("Cannot launch review until every planned session edit file has a staged record. Stage missing planned file: " + plannedFile.RelativePath);
             }

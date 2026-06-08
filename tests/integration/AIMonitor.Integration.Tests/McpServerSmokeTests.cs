@@ -909,11 +909,15 @@ public sealed class McpServerSmokeTests
     }
 
     [Fact]
-    public async Task Mcp_planned_launch_staged_diff_defers_build_validation_until_accept()
+    public async Task Mcp_planned_launch_staged_diff_runs_full_overlay_build_before_merge()
     {
+        // Fidelity fix (option A): once a planned session's batch is fully staged, launch must
+        // run the FULL overlay build before any WinMerge merge -- it is no longer a hash-only
+        // deferral. A syntactically broken candidate must therefore be caught at launch, not
+        // deferred to the terminal accept after the file is already on the watched tree.
         McpFixture fixture = CreateFixture();
         await using McpClient client = await CreateClientAsync(fixture);
-        string sessionId = await StartPlannedSessionAsync(client, fixture, "failed premerge", fixture.ProgramFilePath);
+        string sessionId = await StartPlannedSessionAsync(client, fixture, "full overlay build at launch", fixture.ProgramFilePath);
 
         CallToolResult refresh = await client.CallToolAsync(
             "refresh_file",
@@ -945,10 +949,148 @@ public sealed class McpServerSmokeTests
 
         Assert.False(launch.IsError == true, ExtractToolText(launch));
         string launchJson = ExtractToolText(launch);
-        Assert.Contains("\"launched\":true", launchJson, StringComparison.Ordinal);
+        // The full overlay build ran at launch and failed on the broken candidate, so the
+        // merge is blocked (no interactive override dialog is available in the test host).
+        Assert.Contains("\"launched\":false", launchJson, StringComparison.Ordinal);
         Assert.Contains("\"preMergeValidation\"", launchJson, StringComparison.Ordinal);
-        Assert.Contains("\"status\":\"staged-file-ready\"", launchJson, StringComparison.Ordinal);
-        Assert.Contains("Build/index validation is deferred until accept", launchJson, StringComparison.Ordinal);
+        Assert.Contains("\"status\":\"failed\"", launchJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"status\":\"staged-file-ready\"", launchJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Build/index validation is deferred until accept", launchJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Mcp_planned_launch_decide_launch_interleaved_does_not_deadlock()
+    {
+        // Launch-deadlock fix: interleaving launch -> decide -> launch across planned files
+        // must not throw just because an earlier planned file was already decided and no longer
+        // carries an active staged record. Only files NOT yet decided still require one.
+        McpFixture fixture = CreateFixture();
+        await using McpClient client = await CreateClientAsync(fixture);
+        string helperFilePath = Path.Combine(Path.GetDirectoryName(fixture.ProgramFilePath)!, "Helper.cs");
+        await File.WriteAllTextAsync(
+            helperFilePath,
+            "namespace Example { internal static class Helper { public static string Value() => \"old\"; } }");
+
+        CallToolResult session = await client.CallToolAsync(
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["purpose"] = "interleaved launch/decide",
+                ["filesPlanned"] = new object[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["sourceFilePath"] = helperFilePath,
+                        ["owningProjectPath"] = fixture.WatchedSolutionPath
+                    },
+                    new Dictionary<string, object?>
+                    {
+                        ["sourceFilePath"] = fixture.ProgramFilePath,
+                        ["owningProjectPath"] = fixture.WatchedSolutionPath
+                    }
+                }
+            });
+        Assert.False(session.IsError == true);
+        string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
+
+        CallToolResult helperSubmit = await client.CallToolAsync(
+            "submit_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = helperFilePath,
+                ["content"] = "namespace Example { internal static class Helper { public static string Value() => \"accepted-helper\"; } }",
+                ["sessionId"] = sessionId
+            });
+        Assert.False(helperSubmit.IsError == true);
+
+        CallToolResult programSubmit = await client.CallToolAsync(
+            "submit_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["content"] = "namespace Example { internal static class Program { public static string Value => Helper.Value(); } }",
+                ["sessionId"] = sessionId
+            });
+        Assert.False(programSubmit.IsError == true);
+
+        CallToolResult helperStage = await client.CallToolAsync(
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = helperFilePath,
+                ["ledgerSummary"] = "interleaved helper",
+                ["sessionId"] = sessionId
+            });
+        Assert.False(helperStage.IsError == true);
+        string helperStageJson = ExtractToolText(helperStage);
+        string helperStagedRecordId = ExtractJsonString(helperStageJson, "stagedRecordId");
+        string helperStagedHash = ExtractJsonString(helperStageJson, "stagedHash");
+        string helperStagedRecordJson = await GetStagedRecordJsonAsync(client, helperStagedRecordId);
+        string helperStagedFilePath = ExtractJsonString(helperStagedRecordJson, "stagedFilePath");
+
+        CallToolResult programStage = await client.CallToolAsync(
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = fixture.ProgramFilePath,
+                ["ledgerSummary"] = "interleaved program",
+                ["sessionId"] = sessionId
+            });
+        Assert.False(programStage.IsError == true);
+        string programStageJson = ExtractToolText(programStage);
+        string programStagedRecordId = ExtractJsonString(programStageJson, "stagedRecordId");
+        string programStagedHash = ExtractJsonString(programStageJson, "stagedHash");
+        string programStagedRecordJson = await GetStagedRecordJsonAsync(client, programStagedRecordId);
+        string programStagedFilePath = ExtractJsonString(programStagedRecordJson, "stagedFilePath");
+
+        // Launch the first planned file (both files staged -> overlay build runs and passes).
+        CallToolResult helperLaunch = await client.CallToolAsync(
+            "launch_staged_diff",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = helperStagedRecordId,
+                ["diffToolPath"] = GetFakeDiffToolPath()
+            });
+        Assert.False(helperLaunch.IsError == true, ExtractToolText(helperLaunch));
+        Assert.Contains("\"launched\":true", ExtractToolText(helperLaunch), StringComparison.Ordinal);
+
+        // Decide the first planned file BEFORE launching the second -- this is the interleave
+        // that used to deadlock (the helper no longer has an active staged record).
+        File.Copy(helperStagedFilePath, helperFilePath, overwrite: true);
+        CallToolResult helperDecision = await client.CallToolAsync(
+            "record_diff_decision",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = helperStagedRecordId,
+                ["decision"] = "accepted",
+                ["expectedStagedHash"] = helperStagedHash
+            });
+        Assert.False(helperDecision.IsError == true, ExtractToolText(helperDecision));
+        Assert.Equal("accepted", ExtractJsonString(ExtractToolText(helperDecision), "classification"));
+
+        // Now launch the remaining planned file. The already-decided helper must count as
+        // satisfied so this launch does NOT throw the "stage missing planned file" lockout.
+        CallToolResult programLaunch = await client.CallToolAsync(
+            "launch_staged_diff",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = programStagedRecordId,
+                ["diffToolPath"] = GetFakeDiffToolPath()
+            });
+        Assert.False(programLaunch.IsError == true, ExtractToolText(programLaunch));
+        Assert.Contains("\"launched\":true", ExtractToolText(programLaunch), StringComparison.Ordinal);
+
+        File.Copy(programStagedFilePath, fixture.ProgramFilePath, overwrite: true);
+        CallToolResult programDecision = await client.CallToolAsync(
+            "record_diff_decision",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = programStagedRecordId,
+                ["decision"] = "accepted",
+                ["expectedStagedHash"] = programStagedHash
+            });
+        Assert.False(programDecision.IsError == true, ExtractToolText(programDecision));
+        Assert.Equal("accepted", ExtractJsonString(ExtractToolText(programDecision), "classification"));
     }
 
     [Fact]

@@ -22,9 +22,13 @@ public sealed class StagedDiffLaunchWorkflow
 
         IReadOnlyList<StagedEditRecord> stagedOverlayRecords = GetStagedOverlayRecords(workflowService, record);
         PreMergeValidationService validationService = new();
-        PreMergeValidationResult validation = deferBuildValidationUntilAccept
-            ? validationService.ValidateStagedOverlay(record, stagedOverlayRecords)
-            : validationService.Validate(settings, record, stagedOverlayRecords);
+        // Fidelity fix (option A): when the launch is for a planned session whose
+        // batch is fully staged (deferBuildValidationUntilAccept is only set true by the
+        // caller once every planned file is decided-or-staged), run the FULL overlay build
+        // here so the staged batch is build-validated BEFORE any WinMerge merge. The terminal
+        // real-tree build still runs at the final accept. The single-file (non-deferred) path
+        // also runs the full overlay build, so both launch paths now build before merge.
+        PreMergeValidationResult validation = validationService.Validate(settings, record, stagedOverlayRecords);
         string validationPrompt = "";
         if (validation.IsError && !forceValidation && PreMergeValidationOverridePrompt.CanShow())
         {
