@@ -223,9 +223,9 @@ public sealed class SolutionIndexStoreTests
     {
         // HIGH #1 regression guard. Project B references a symbol declared in project A (an inbound cross-project
         // reference row owned by B whose target_stable_key points at A's symbol). A project-scoped refresh of A
-        // deletes A's symbol rows; with the cross-project ON DELETE CASCADE active this also drops B's inbound
-        // reference rows, and the re-insert only restores A's own rows — silently orphaning B->A references. The
-        // foreign_keys=off backstop in ReplaceProjectFiles must keep B's inbound reference intact across the refresh.
+        // deletes and re-inserts A's symbol rows. Now that the cross-symbol stable_key FK has been removed from the
+        // schema, the scoped delete can no longer cascade-delete B's inbound reference rows: B's inbound reference
+        // into A must survive the scoped refresh of A unchanged.
         string databasePath = Path.Combine(Path.GetTempPath(), "AIMonitorTests", Guid.NewGuid().ToString("N"), "index.sqlite");
         SolutionIndexStore store = new(new SolutionIndexDatabase(databasePath));
 

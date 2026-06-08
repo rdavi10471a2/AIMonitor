@@ -21,6 +21,18 @@ public sealed class PostAcceptIndexRefreshService
         string[] projectPaths = GetProjectRefreshPaths(record, refreshPlan);
         string[] filePaths = GetFileRefreshPaths(record, refreshPlan);
         bool useFileRefresh = projectPaths.Length == 1 && filePaths.Length > 0;
+
+        // Schema-versioned rebuild gate: if the index was opened against a db whose persisted PRAGMA user_version did
+        // not match SolutionIndexDatabase.SchemaVersion, EnsureCreated dropped ALL index tables, recreated the full
+        // schema empty, and set a persistent needs_full_rebuild marker. The tables are now empty, so a scoped refresh
+        // would leave the index half-populated. Force a full RebuildAsync (which repopulates everything and clears the
+        // marker) and refuse/upgrade the scoped path until then.
+        bool fullRebuildRequired = new SolutionIndexDatabase(databasePath).IsFullRebuildRequired();
+        if (fullRebuildRequired)
+        {
+            useFileRefresh = false;
+        }
+
         string[] inboundDependents = [];
         if (useFileRefresh)
         {

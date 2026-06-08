@@ -4,6 +4,25 @@ namespace AIMonitor.Data;
 
 public sealed class SolutionIndexDatabase
 {
+    // The solution index is a DERIVED SNAPSHOT, not transactional data. On any schema change we do NOT migrate
+    // contents: we rebuild the whole schema fresh and force a full refresh. SchemaVersion is persisted via SQLite
+    // PRAGMA user_version; bump it whenever the index schema changes in a way that invalidates existing rows.
+    //
+    // History:
+    //   v1 (and any earlier/unversioned db): symbol_references/call_sites/symbol_relationships *_stable_key columns
+    //       carried a `references symbols(stable_key) on delete cascade` cross-symbol FK. That FK made a full
+    //       RebuildAsync fail with SQLite error 19 on real multi-project solutions (a project's references are
+    //       inserted before later projects' target symbols exist) and made a scoped refresh cascade-delete other
+    //       projects' inbound rows.
+    //   v2: the cross-symbol FK is gone; those columns are plain `text not null`. project_id FKs are retained.
+    public const int SchemaVersion = 2;
+
+    // index_meta key set on a schema-versioned full recreate (a stale/old/fresh db whose persisted user_version did
+    // not match SchemaVersion). While set, the index is INVALID: the post-accept refresh must take the full
+    // RebuildAsync path (never a scoped refresh) so the freshly recreated empty tables are fully repopulated, and the
+    // status surface reports the index as stale / rebuild-required. A successful full rebuild clears it.
+    public const string NeedsFullRebuildKey = "needs_full_rebuild";
+
     private readonly string databasePath;
 
     public SolutionIndexDatabase(string databasePath)
@@ -19,18 +38,129 @@ public sealed class SolutionIndexDatabase
         SqliteConnection connection = new($"Data Source={databasePath}");
         connection.Open();
 
-        using SqliteCommand pragma = connection.CreateCommand();
-        pragma.CommandText = "pragma journal_mode=wal; pragma foreign_keys=on;";
-        pragma.ExecuteNonQuery();
+        using (SqliteCommand pragma = connection.CreateCommand())
+        {
+            pragma.CommandText = "pragma journal_mode=wal; pragma foreign_keys=on;";
+            pragma.ExecuteNonQuery();
+        }
 
         return connection;
     }
 
     public void EnsureCreated()
     {
-        using SqliteConnection connection = OpenConnection();
-        using SqliteTransaction transaction = connection.BeginTransaction();
+        using (SqliteConnection connection = OpenConnection())
+        {
+            int persistedVersion = ReadUserVersion(connection);
 
+            // Schema-versioned full recreate: if the persisted schema version does not match the current SchemaVersion
+            // (this includes a brand-new db reporting user_version 0, and any older versioned db), the existing index is
+            // INVALID. Drop ALL index tables and recreate the full schema from scratch (empty) — NO per-table content
+            // migration — then stamp the new user_version and set the persistent needs_full_rebuild marker so a full
+            // rebuild repopulates the empty tables before any scoped refresh trusts them.
+            if (persistedVersion != SchemaVersion)
+            {
+                using (SqliteTransaction recreateTransaction = connection.BeginTransaction())
+                {
+                    DropAllIndexTables(connection, recreateTransaction);
+                    CreateSchema(connection, recreateTransaction);
+                    SetMeta(connection, recreateTransaction, NeedsFullRebuildKey, "1");
+                    recreateTransaction.Commit();
+                }
+
+                SetUserVersion(connection, SchemaVersion);
+                return;
+            }
+
+            // Version matches: ensure the schema objects exist (first-time create on a db that already carries the
+            // current user_version, or a no-op when everything is present). create table if not exists is idempotent.
+            using (SqliteTransaction transaction = connection.BeginTransaction())
+            {
+                CreateSchema(connection, transaction);
+                transaction.Commit();
+            }
+        }
+    }
+
+    // True when a schema-versioned full recreate emptied the index tables and a full rebuild has not yet run to
+    // repopulate them. The post-accept refresh and the status surface consult this to force the full RebuildAsync path
+    // and report the index as stale / rebuild-required.
+    public bool IsFullRebuildRequired()
+    {
+        EnsureCreated();
+        using (SqliteConnection connection = OpenConnection())
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.CommandText = "select value from index_meta where key = $key;";
+                command.Parameters.AddWithValue("$key", NeedsFullRebuildKey);
+                object? value = command.ExecuteScalar();
+                return value is string text && text == "1";
+            }
+        }
+    }
+
+    // Cleared by a successful full rebuild (SolutionIndexStore.SaveSnapshot) once the recreated tables are repopulated.
+    public void ClearFullRebuildRequired()
+    {
+        using (SqliteConnection connection = OpenConnection())
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.CommandText = "delete from index_meta where key = $key;";
+                command.Parameters.AddWithValue("$key", NeedsFullRebuildKey);
+                command.ExecuteNonQuery();
+            }
+        }
+    }
+
+    private static int ReadUserVersion(SqliteConnection connection)
+    {
+        using (SqliteCommand command = connection.CreateCommand())
+        {
+            command.CommandText = "pragma user_version;";
+            return Convert.ToInt32(command.ExecuteScalar() ?? 0);
+        }
+    }
+
+    private static void SetUserVersion(SqliteConnection connection, int version)
+    {
+        using (SqliteCommand command = connection.CreateCommand())
+        {
+            // user_version takes a literal, not a bound parameter; version is an internal int constant, not user input.
+            command.CommandText = "pragma user_version = " + version + ";";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // Drops every index table this schema owns. Ordering is irrelevant: only project_id -> projects FKs remain, and a
+    // plain DROP TABLE does not run row-level ON DELETE CASCADE, so the drop set can be processed in any order.
+    private static void DropAllIndexTables(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        string[] tables =
+        [
+            "diagnostics",
+            "global_usings",
+            "framework_references",
+            "package_references",
+            "project_references",
+            "symbol_relationships",
+            "call_sites",
+            "symbol_references",
+            "symbols",
+            "documents",
+            "projects",
+            "solution_state",
+            "index_meta"
+        ];
+        foreach (string table in tables)
+        {
+            Execute(connection, transaction, "drop table if exists " + table + ";");
+        }
+    }
+
+    private static void CreateSchema(SqliteConnection connection, SqliteTransaction transaction)
+    {
         Execute(connection, transaction, """
             create table if not exists solution_state (
                 id integer primary key check (id = 1),
@@ -39,6 +169,16 @@ public sealed class SolutionIndexDatabase
                 project_count integer not null,
                 document_count integer not null,
                 diagnostic_count integer not null
+            );
+            """);
+
+        // Persistent key/value markers that must survive ClearCurrentState/SaveSnapshot row churn (e.g. the
+        // needs_full_rebuild flag set by a schema-versioned recreate). Kept out of solution_state because that row is
+        // deleted and reinserted on every snapshot save.
+        Execute(connection, transaction, """
+            create table if not exists index_meta (
+                key text primary key,
+                value text not null
             );
             """);
 
@@ -74,7 +214,6 @@ public sealed class SolutionIndexDatabase
                 unique(project_id, file_path)
             );
             """);
-        AddColumnIfMissing(connection, transaction, "documents", "content_hash", "text not null default ''");
 
         Execute(connection, transaction, """
             create table if not exists symbols (
@@ -98,23 +237,14 @@ public sealed class SolutionIndexDatabase
                 method_kind text not null default ''
             );
             """);
-        AddColumnIfMissing(connection, transaction, "symbols", "accessibility", "text not null default ''");
-        AddColumnIfMissing(connection, transaction, "symbols", "is_static", "integer not null default 0");
-        AddColumnIfMissing(connection, transaction, "symbols", "is_abstract", "integer not null default 0");
-        AddColumnIfMissing(connection, transaction, "symbols", "is_sealed", "integer not null default 0");
-        AddColumnIfMissing(connection, transaction, "symbols", "is_virtual", "integer not null default 0");
-        AddColumnIfMissing(connection, transaction, "symbols", "is_override", "integer not null default 0");
-        AddColumnIfMissing(connection, transaction, "symbols", "method_kind", "text not null default ''");
 
-        DropSymbolDependentTableIfMissingCascade(connection, transaction, "symbol_relationships");
-        DropSymbolDependentTableIfMissingCascade(connection, transaction, "call_sites");
-        DropSymbolDependentTableIfMissingCascade(connection, transaction, "symbol_references");
-
+        // The *_stable_key columns are plain `text not null` (no cross-symbol FK). project_id keeps its
+        // references projects(id) on delete cascade so a project delete still clears that project's own rows.
         Execute(connection, transaction, """
             create table if not exists symbol_references (
                 id integer primary key autoincrement,
                 project_id integer not null references projects(id) on delete cascade,
-                target_stable_key text not null references symbols(stable_key) on delete cascade,
+                target_stable_key text not null,
                 file_path text not null,
                 line integer not null,
                 column integer not null,
@@ -127,10 +257,10 @@ public sealed class SolutionIndexDatabase
             create table if not exists call_sites (
                 id integer primary key autoincrement,
                 project_id integer not null references projects(id) on delete cascade,
-                caller_stable_key text not null references symbols(stable_key) on delete cascade,
+                caller_stable_key text not null,
                 caller_name text not null,
                 caller_kind text not null,
-                target_stable_key text not null references symbols(stable_key) on delete cascade,
+                target_stable_key text not null,
                 file_path text not null,
                 line integer not null,
                 column integer not null,
@@ -143,10 +273,10 @@ public sealed class SolutionIndexDatabase
             create table if not exists symbol_relationships (
                 id integer primary key autoincrement,
                 project_id integer not null references projects(id) on delete cascade,
-                source_stable_key text not null references symbols(stable_key) on delete cascade,
+                source_stable_key text not null,
                 source_name text not null,
                 source_kind text not null,
-                target_stable_key text not null references symbols(stable_key) on delete cascade,
+                target_stable_key text not null,
                 target_name text not null,
                 target_kind text not null,
                 relationship_kind text not null,
@@ -225,79 +355,35 @@ public sealed class SolutionIndexDatabase
         Execute(connection, transaction, "create index if not exists idx_framework_references_include on framework_references(include);");
         Execute(connection, transaction, "create index if not exists idx_global_usings_project_id on global_usings(project_id);");
         Execute(connection, transaction, "create index if not exists idx_global_usings_include on global_usings(include);");
+    }
 
-        transaction.Commit();
+    private static void SetMeta(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string key,
+        string value)
+    {
+        using (SqliteCommand command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                insert into index_meta(key, value)
+                values ($key, $value)
+                on conflict(key) do update set value = excluded.value;
+                """;
+            command.Parameters.AddWithValue("$key", key);
+            command.Parameters.AddWithValue("$value", value);
+            command.ExecuteNonQuery();
+        }
     }
 
     private static void Execute(SqliteConnection connection, SqliteTransaction transaction, string commandText)
     {
-        using SqliteCommand command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = commandText;
-        command.ExecuteNonQuery();
-    }
-
-    private static void AddColumnIfMissing(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        string tableName,
-        string columnName,
-        string definition)
-    {
-        using SqliteCommand check = connection.CreateCommand();
-        check.Transaction = transaction;
-        check.CommandText = $"pragma table_info({tableName});";
-        using SqliteDataReader reader = check.ExecuteReader();
-        while (reader.Read())
+        using (SqliteCommand command = connection.CreateCommand())
         {
-            if (reader.GetString(1).Equals(columnName, StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
+            command.Transaction = transaction;
+            command.CommandText = commandText;
+            command.ExecuteNonQuery();
         }
-
-        Execute(connection, transaction, $"alter table {tableName} add column {columnName} {definition};");
-    }
-
-    private static void DropSymbolDependentTableIfMissingCascade(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        string tableName)
-    {
-        if (!TableExists(connection, transaction, tableName))
-        {
-            return;
-        }
-
-        using SqliteCommand command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = $"pragma foreign_key_list({tableName});";
-        using SqliteDataReader reader = command.ExecuteReader();
-        while (reader.Read())
-        {
-            if (reader.GetString(2).Equals("symbols", StringComparison.OrdinalIgnoreCase)
-                && reader.GetString(6).Equals("CASCADE", StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-        }
-
-        Execute(connection, transaction, "drop table " + tableName + ";");
-    }
-
-    private static bool TableExists(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        string tableName)
-    {
-        using SqliteCommand command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            select count(*)
-            from sqlite_master
-            where type = 'table' and name = $tableName;
-            """;
-        command.Parameters.AddWithValue("$tableName", tableName);
-        return Convert.ToInt32(command.ExecuteScalar() ?? 0) > 0;
     }
 }

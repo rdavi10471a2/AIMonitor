@@ -42,6 +42,7 @@ public sealed class SolutionIndexQueryService
         IReadOnlyList<IndexedReferenceRow> references = databaseExists ? store.ListReferences() : [];
         IReadOnlyList<IndexedCallSiteRow> callSites = databaseExists ? store.ListCallSites() : [];
         IReadOnlyList<IndexedRelationshipRow> relationships = databaseExists ? store.ListRelationships() : [];
+        bool rebuildRequired = databaseExists && new SolutionIndexDatabase(DatabasePath).IsFullRebuildRequired();
 
         return new MonitorStatusResult
         {
@@ -58,7 +59,8 @@ public sealed class SolutionIndexQueryService
             CallSiteCount = callSites.Count,
             RelationshipCount = relationships.Count,
             StaleFileCount = documents.Count(IsStale),
-            DiagnosticCount = summary.DiagnosticCount
+            DiagnosticCount = summary.DiagnosticCount,
+            RebuildRequired = rebuildRequired
         };
     }
 

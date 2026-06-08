@@ -1,6 +1,5 @@
 using AIMonitor.Core;
 using AIMonitor.MSBuild;
-using Microsoft.Data.Sqlite;
 using System.Linq;
 using Xunit.Abstractions;
 
@@ -11,17 +10,12 @@ namespace AIMonitor.Data.Tests;
 // query works. Local-only (File.Exists-gated). This is the foundation the MCP-surface suite builds on; if Razor/
 // cross-project extraction did not land, every higher test that assumes them would be meaningless.
 //
-// FOUNDATION FINDING (2026-06-08): on the real WebViewer the full RebuildAsync currently throws
-// "SQLite Error 19: 'FOREIGN KEY constraint failed'" while inserting symbol_references. SaveSnapshot inserts
-// symbols+references per project in one loop (SolutionIndexStore.SaveSnapshot), so a reference whose
-// target_stable_key points at a symbol declared in a later-processed project violates the
-// symbol_references.target_stable_key -> symbols(stable_key) FK (foreign_keys=on). This is the cross-project
-// reference population that HIGH #1 in PlannedSessionRefreshReview-2026-06-08.md is about — surfaced here at the
-// FULL rebuild, not only the scoped-refresh path. Until that indexer defect is fixed (e.g. a two-phase insert:
-// all symbols, then all references, or the store backstop in HIGH #1's fix) the real index cannot be built, so
-// the razor/cross-project assertions below cannot run. The test treats ONLY that specific FK failure as a
-// recorded skip (so the suite stays green for sibling steps); any other failure hard-fails, and once the indexer
-// fix lands the rebuild succeeds and the assertions run for real.
+// RESOLVED (2026-06-08): an earlier run found the full RebuildAsync threw "SQLite Error 19: FOREIGN KEY constraint
+// failed" on the real WebViewer because symbol_references.target_stable_key (and the call_sites/symbol_relationships
+// stable_key columns) carried a `references symbols(stable_key) on delete cascade` FK, and SaveSnapshot inserts a
+// project's references before later projects' target symbols exist. That cross-symbol FK has been removed from the
+// schema (the columns are now plain `text not null`), so the rebuild must SUCCEED here and the razor/cross-project
+// assertions run for real. No FK-19 workaround remains; any rebuild failure now hard-fails the test.
 public sealed class McpSurfaceIndexVerificationTests
 {
     private const string BenchSolution = @"C:\VSCodeProjects\SchemaStudioBench\SchemaStudioWebViewer.sln";
@@ -47,24 +41,9 @@ public sealed class McpSurfaceIndexVerificationTests
         string databasePath = MonitorDataPaths.GetDefaultIndexDatabasePath(settings);
         SolutionIndexStore store = new(new SolutionIndexDatabase(databasePath));
 
-        try
-        {
-            await new SolutionIndexBuilder(new MSBuildWorkspaceLoader(), store).RebuildAsync(settings);
-        }
-        catch (SqliteException exception) when (exception.SqliteErrorCode == 19)
-        {
-            // SQLITE_CONSTRAINT (19) — the cross-project target_stable_key FK violation documented above.
-            // This is the indexer defect this foundation test surfaces. Record it to test output and treat it
-            // as a (non-failing) recorded precondition, matching the repo convention for local-only ground-truth
-            // tests, so sibling steps aren't blocked. Once the indexer fix (two-phase insert / HIGH #1 store
-            // backstop) lands, the rebuild succeeds and the razor + cross-project assertions below run for real.
-            output.WriteLine(
-                "FOUNDATION FINDING: Real WebViewer full RebuildAsync hit the cross-project FK defect "
-                + "(SQLite 19, FOREIGN KEY constraint failed while inserting symbol_references). Razor + "
-                + "cross-project landing cannot be asserted until the indexer two-phase-insert fix lands. "
-                + "Message: " + exception.Message);
-            return;
-        }
+        // The cross-symbol FK is gone, so this must succeed on the real multi-project WebViewer. Any failure (including
+        // the old SQLite-19) now propagates and fails the test rather than being swallowed.
+        await new SolutionIndexBuilder(new MSBuildWorkspaceLoader(), store).RebuildAsync(settings);
 
         SolutionIndexProbe probe = new(new SolutionIndexDatabase(databasePath));
         SolutionIndexCounts counts = probe.GetCounts();
@@ -90,6 +69,10 @@ public sealed class McpSurfaceIndexVerificationTests
         // and the reference-kind histogram, so the suite documents the real behavior rather than assuming it.
         bool hasRazorGenerated = probe.HasReferenceKindPrefix("razor-generated");
         string histogram = string.Join(", ", probe.GetReferenceKindCounts().Select(k => $"{k.Kind}={k.Count}"));
+        output.WriteLine(
+            $"REAL WEBVIEWER REBUILD SUCCEEDED. razor present={probe.HasReferenceKindPrefix("razor")}; "
+            + $"razor-generated present={hasRazorGenerated}; crossProjectRefs={probe.GetCrossProjectReferenceCount()}; "
+            + $"inboundDepsOfData={inbound.Count}; kinds=[{histogram}]");
         Assert.True(
             counts.References > 0,
             $"razor-generated present={hasRazorGenerated}; inboundDepsOfData={inbound.Count}; kinds=[{histogram}]");

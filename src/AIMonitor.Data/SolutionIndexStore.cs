@@ -53,6 +53,10 @@ public sealed class SolutionIndexStore
                 ("$message", diagnostic));
         }
 
+        // A full rebuild repopulates every symbol-dependent table, so it clears the schema-upgrade rebuild marker as
+        // part of the same transaction that writes the fresh rows.
+        Execute(connection, transaction, "delete from index_meta where key = $key;", ("$key", SolutionIndexDatabase.NeedsFullRebuildKey));
+
         Measure("index.sqlite.commit", timingSink, () => transaction.Commit());
         return GetSummary();
     }
@@ -80,15 +84,10 @@ public sealed class SolutionIndexStore
 
         using (SqliteConnection connection = database.OpenConnection())
         {
-            // Backstop for the cross-project ON DELETE CASCADE: this single-project delete+reinsert removes project A's
-            // symbol rows and re-inserts them at the same stable_key. With foreign_keys=on, the cascade on
-            // symbol_references/call_sites/symbol_relationships target_stable_key (and relationships source_stable_key)
-            // would drop OTHER projects' inbound rows that point at A's symbols during the brief window the rows are
-            // deleted, and the reinsert only restores A's own rows — silently orphaning B->A references until a full
-            // rebuild. Disabling foreign-key enforcement for this scoped replace keeps those inbound rows intact because
-            // the same stable_key targets exist again after reinsert. PRAGMA foreign_keys is a no-op inside a
-            // transaction, so it must be toggled before BeginTransaction and restored after the connection's work.
-            SetForeignKeysEnforcement(connection, enabled: false);
+            // No cross-symbol FK exists anymore (the *_stable_key columns are plain text after the schema upgrade), so
+            // this single-project delete+reinsert cannot cascade-delete other projects' inbound rows. Insert order no
+            // longer matters and no foreign-key toggling is required. The scoped->full inbound-dependent guard still
+            // lives in PostAcceptIndexRefreshService for the stale-key case (a target symbol that genuinely moved).
             using (SqliteTransaction transaction = connection.BeginTransaction())
             {
                 long projectId = Measure("index.sqlite.get-project-id", timingSink, () => GetProjectId(connection, transaction, normalizedProjectPath));
@@ -110,8 +109,6 @@ public sealed class SolutionIndexStore
                 Measure("index.sqlite.save-current-solution-state", timingSink, fileProperties, () => SaveCurrentSolutionState(connection, transaction, inputPath));
                 Measure("index.sqlite.commit", timingSink, fileProperties, () => transaction.Commit());
             }
-
-            SetForeignKeysEnforcement(connection, enabled: true);
         }
 
         return GetSummary();
@@ -906,15 +903,6 @@ public sealed class SolutionIndexStore
                 ("$include", globalUsing.Include),
                 ("$isStatic", globalUsing.Static),
                 ("$alias", globalUsing.Alias));
-        }
-    }
-
-    private static void SetForeignKeysEnforcement(SqliteConnection connection, bool enabled)
-    {
-        using (SqliteCommand command = connection.CreateCommand())
-        {
-            command.CommandText = enabled ? "pragma foreign_keys=on;" : "pragma foreign_keys=off;";
-            command.ExecuteNonQuery();
         }
     }
 
