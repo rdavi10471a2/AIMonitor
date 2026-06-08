@@ -218,6 +218,137 @@ public sealed class SolutionIndexStoreTests
         Assert.Equal(1, store.GetSummary().ProjectCount);
     }
 
+    [Fact]
+    public void ReplaceProjectFiles_scoped_refresh_preserves_inbound_cross_project_references()
+    {
+        // HIGH #1 regression guard. Project B references a symbol declared in project A (an inbound cross-project
+        // reference row owned by B whose target_stable_key points at A's symbol). A project-scoped refresh of A
+        // deletes A's symbol rows; with the cross-project ON DELETE CASCADE active this also drops B's inbound
+        // reference rows, and the re-insert only restores A's own rows — silently orphaning B->A references. The
+        // foreign_keys=off backstop in ReplaceProjectFiles must keep B's inbound reference intact across the refresh.
+        string databasePath = Path.Combine(Path.GetTempPath(), "AIMonitorTests", Guid.NewGuid().ToString("N"), "index.sqlite");
+        SolutionIndexStore store = new(new SolutionIndexDatabase(databasePath));
+
+        const string projectAPath = @"C:\Example\A\A.csproj";
+        const string projectBPath = @"C:\Example\B\B.csproj";
+        const string symbolAKey = @"C:/Example/A/Widget.cs::NamedType::A.Widget::1";
+
+        MSBuildProjectSnapshot projectA = new(
+            "project:A",
+            "A",
+            projectAPath,
+            "C#",
+            "net10.0",
+            "",
+            "Library",
+            "Microsoft.NET.Sdk",
+            "A",
+            "A",
+            "enable",
+            "enable",
+            "latest",
+            [new MSBuildDocumentSnapshot("document:A", "Widget.cs", @"C:\Example\A\Widget.cs", [], "hashA")],
+            [
+                new MSBuildSymbolSnapshot(
+                    symbolAKey,
+                    "Widget",
+                    "NamedType",
+                    "A",
+                    "",
+                    @"C:\Example\A\Widget.cs",
+                    1,
+                    20,
+                    "A.Widget")
+            ],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            []);
+
+        // Project B references A.Widget — a cross-project reference row owned by B, targeting A's symbol stable key.
+        MSBuildProjectSnapshot projectB = new(
+            "project:B",
+            "B",
+            projectBPath,
+            "C#",
+            "net10.0",
+            "",
+            "Library",
+            "Microsoft.NET.Sdk",
+            "B",
+            "B",
+            "enable",
+            "enable",
+            "latest",
+            [new MSBuildDocumentSnapshot("document:B", "Consumer.cs", @"C:\Example\B\Consumer.cs", [], "hashB")],
+            [
+                new MSBuildSymbolSnapshot(
+                    @"C:/Example/B/Consumer.cs::NamedType::B.Consumer::1",
+                    "Consumer",
+                    "NamedType",
+                    "B",
+                    "",
+                    @"C:\Example\B\Consumer.cs",
+                    1,
+                    20,
+                    "B.Consumer")
+            ],
+            [
+                new MSBuildReferenceSnapshot(
+                    symbolAKey,
+                    @"C:\Example\B\Consumer.cs",
+                    5,
+                    13,
+                    "IdentifierName",
+                    "Widget")
+            ],
+            [],
+            [new MSBuildProjectReferenceSnapshot(@"..\A\A.csproj", projectAPath)],
+            [],
+            [],
+            [],
+            []);
+
+        store.SaveSnapshot(new MSBuildSolutionSnapshot(@"C:\Example\Example.sln", [projectA, projectB], []));
+
+        // Precondition: B's inbound cross-project reference into A exists.
+        IReadOnlyList<IndexedReferenceRow> beforeRefresh = store.ListReferences(symbolAKey);
+        Assert.Contains(
+            beforeRefresh,
+            reference => reference.TargetStableKey == symbolAKey
+                && reference.ProjectPath == Path.GetFullPath(projectBPath));
+
+        // Scope-refresh project A only, re-inserting A's symbol at the SAME stable key (as a real edit would).
+        store.ReplaceProjectFiles(
+            @"C:\Example\Example.sln",
+            projectAPath,
+            [@"C:\Example\A\Widget.cs"],
+            [new MSBuildDocumentSnapshot("document:A", "Widget.cs", @"C:\Example\A\Widget.cs", [], "hashA2")],
+            [
+                new MSBuildSymbolSnapshot(
+                    symbolAKey,
+                    "Widget",
+                    "NamedType",
+                    "A",
+                    "",
+                    @"C:\Example\A\Widget.cs",
+                    1,
+                    25,
+                    "A.Widget")
+            ],
+            []);
+
+        // B's inbound reference into A must survive the scoped refresh of A.
+        IReadOnlyList<IndexedReferenceRow> afterRefresh = store.ListReferences(symbolAKey);
+        Assert.Contains(
+            afterRefresh,
+            reference => reference.TargetStableKey == symbolAKey
+                && reference.ProjectPath == Path.GetFullPath(projectBPath));
+    }
+
     private static MSBuildSolutionSnapshot CreateSnapshot(
         string inputPath,
         string projectKey,

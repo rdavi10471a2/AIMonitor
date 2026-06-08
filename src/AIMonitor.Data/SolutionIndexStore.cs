@@ -79,26 +79,39 @@ public sealed class SolutionIndexStore
         }
 
         using (SqliteConnection connection = database.OpenConnection())
-        using (SqliteTransaction transaction = connection.BeginTransaction())
         {
-            long projectId = Measure("index.sqlite.get-project-id", timingSink, () => GetProjectId(connection, transaction, normalizedProjectPath));
-            Dictionary<string, string> fileProperties = new(StringComparer.Ordinal)
+            // Backstop for the cross-project ON DELETE CASCADE: this single-project delete+reinsert removes project A's
+            // symbol rows and re-inserts them at the same stable_key. With foreign_keys=on, the cascade on
+            // symbol_references/call_sites/symbol_relationships target_stable_key (and relationships source_stable_key)
+            // would drop OTHER projects' inbound rows that point at A's symbols during the brief window the rows are
+            // deleted, and the reinsert only restores A's own rows — silently orphaning B->A references until a full
+            // rebuild. Disabling foreign-key enforcement for this scoped replace keeps those inbound rows intact because
+            // the same stable_key targets exist again after reinsert. PRAGMA foreign_keys is a no-op inside a
+            // transaction, so it must be toggled before BeginTransaction and restored after the connection's work.
+            SetForeignKeysEnforcement(connection, enabled: false);
+            using (SqliteTransaction transaction = connection.BeginTransaction())
             {
-                ["projectPath"] = normalizedProjectPath,
-                ["fileCount"] = normalizedFilePaths.Length.ToString(),
-                ["documentCount"] = documents.Count.ToString(),
-                ["symbolCount"] = symbols.Count.ToString(),
-                ["referenceCount"] = references.Count.ToString()
-            };
-            Measure("index.sqlite.delete-project-rows", timingSink, fileProperties, () => DeleteProjectRows(connection, transaction, projectId));
+                long projectId = Measure("index.sqlite.get-project-id", timingSink, () => GetProjectId(connection, transaction, normalizedProjectPath));
+                Dictionary<string, string> fileProperties = new(StringComparer.Ordinal)
+                {
+                    ["projectPath"] = normalizedProjectPath,
+                    ["fileCount"] = normalizedFilePaths.Length.ToString(),
+                    ["documentCount"] = documents.Count.ToString(),
+                    ["symbolCount"] = symbols.Count.ToString(),
+                    ["referenceCount"] = references.Count.ToString()
+                };
+                Measure("index.sqlite.delete-project-rows", timingSink, fileProperties, () => DeleteProjectRows(connection, transaction, projectId));
 
-            Measure("index.sqlite.insert-documents", timingSink, fileProperties, () => InsertDocuments(connection, transaction, projectId, documents));
-            Measure("index.sqlite.insert-symbols", timingSink, fileProperties, () => InsertSymbols(connection, transaction, projectId, symbols));
-            Measure("index.sqlite.insert-references", timingSink, fileProperties, () => InsertReferences(connection, transaction, projectId, references));
-            Measure("index.sqlite.insert-call-sites", timingSink, fileProperties, () => InsertCallSites(connection, transaction, projectId, symbols, references));
-            Measure("index.sqlite.insert-relationships", timingSink, fileProperties, () => InsertRelationships(connection, transaction, projectId, symbols, references));
-            Measure("index.sqlite.save-current-solution-state", timingSink, fileProperties, () => SaveCurrentSolutionState(connection, transaction, inputPath));
-            Measure("index.sqlite.commit", timingSink, fileProperties, () => transaction.Commit());
+                Measure("index.sqlite.insert-documents", timingSink, fileProperties, () => InsertDocuments(connection, transaction, projectId, documents));
+                Measure("index.sqlite.insert-symbols", timingSink, fileProperties, () => InsertSymbols(connection, transaction, projectId, symbols));
+                Measure("index.sqlite.insert-references", timingSink, fileProperties, () => InsertReferences(connection, transaction, projectId, references));
+                Measure("index.sqlite.insert-call-sites", timingSink, fileProperties, () => InsertCallSites(connection, transaction, projectId, symbols, references));
+                Measure("index.sqlite.insert-relationships", timingSink, fileProperties, () => InsertRelationships(connection, transaction, projectId, symbols, references));
+                Measure("index.sqlite.save-current-solution-state", timingSink, fileProperties, () => SaveCurrentSolutionState(connection, transaction, inputPath));
+                Measure("index.sqlite.commit", timingSink, fileProperties, () => transaction.Commit());
+            }
+
+            SetForeignKeysEnforcement(connection, enabled: true);
         }
 
         return GetSummary();
@@ -893,6 +906,15 @@ public sealed class SolutionIndexStore
                 ("$include", globalUsing.Include),
                 ("$isStatic", globalUsing.Static),
                 ("$alias", globalUsing.Alias));
+        }
+    }
+
+    private static void SetForeignKeysEnforcement(SqliteConnection connection, bool enabled)
+    {
+        using (SqliteCommand command = connection.CreateCommand())
+        {
+            command.CommandText = enabled ? "pragma foreign_keys=on;" : "pragma foreign_keys=off;";
+            command.ExecuteNonQuery();
         }
     }
 

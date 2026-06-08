@@ -21,6 +21,22 @@ public sealed class PostAcceptIndexRefreshService
         string[] projectPaths = GetProjectRefreshPaths(record, refreshPlan);
         string[] filePaths = GetFileRefreshPaths(record, refreshPlan);
         bool useFileRefresh = projectPaths.Length == 1 && filePaths.Length > 0;
+        string[] inboundDependents = [];
+        if (useFileRefresh)
+        {
+            // HIGH #1: a project-scoped refresh of A deletes A's symbol rows; the cross-project ON DELETE CASCADE then
+            // drops other projects' inbound reference/call-site/relationship rows that target A's symbols, and the
+            // re-insert only restores A's own rows — silently orphaning inbound cross-project references. If any other
+            // project holds inbound references into A, fall back to a full solution rebuild (MVP) so those rows are
+            // re-extracted. (Optimization for later: refresh only the closure = A union its inbound dependents.)
+            SolutionIndexProbe probe = new(new SolutionIndexDatabase(databasePath));
+            inboundDependents = probe.GetInboundDependentProjectPaths(projectPaths[0]).ToArray();
+            if (inboundDependents.Length > 0)
+            {
+                useFileRefresh = false;
+            }
+        }
+
         string refreshMode = useFileRefresh ? "project" : "solution";
         logger.Write(
             MonitorLogLevel.Information,
@@ -37,8 +53,14 @@ public sealed class PostAcceptIndexRefreshService
                 ["databasePath"] = databasePath,
                 ["refreshMode"] = refreshMode,
                 ["projectPaths"] = string.Join(";", projectPaths),
-                ["filePaths"] = string.Join(";", filePaths)
+                ["filePaths"] = string.Join(";", filePaths),
+                ["inboundReferencingProjects"] = string.Join(";", inboundDependents)
             });
+
+        if (refreshPlan is not null)
+        {
+            refreshPlan.InboundReferencingProjects = inboundDependents;
+        }
 
         try
         {
