@@ -9,6 +9,10 @@ public sealed class SolutionIndexQueryService
     private const int MaxFileLimit = 5000;
     private const int MaxSymbolLimit = 50000;
 
+    // Dot-prefixed metadata member names. A qualified "ContainingType + '.' + Name" query for one of these
+    // produces a doubled-dot string ("Foo..ctor"), which the generic last-dot split would mis-parse.
+    private static readonly string[] DotPrefixedMemberNames = { ".ctor", ".cctor" };
+
     private readonly MonitorSettings settings;
     private readonly SolutionIndexStore store;
 
@@ -219,6 +223,22 @@ public sealed class SolutionIndexQueryService
         }
 
         string trimmed = text.Trim();
+
+        // ".ctor"/".cctor" are themselves dot-prefixed, so a qualified "ContainingType + '.' + Name" query
+        // is "Foo..ctor". Split on the special-name boundary first so the member name keeps its leading dot;
+        // the generic last-dot split below would otherwise yield containingType="Foo." and name="ctor".
+        foreach (string special in DotPrefixedMemberNames)
+        {
+            string composed = "." + special;
+            if (trimmed.Length > composed.Length
+                && trimmed.EndsWith(composed, StringComparison.Ordinal))
+            {
+                containingType = trimmed[..^composed.Length];
+                name = special;
+                return containingType.Length > 0;
+            }
+        }
+
         int separatorIndex = trimmed.LastIndexOf('.');
         if (separatorIndex <= 0 || separatorIndex >= trimmed.Length - 1)
         {

@@ -88,6 +88,7 @@ public sealed class McpVsGrepTokenBenchmarkTests
         int total = 0;
         int winFull = 0;
         int winMin = 0;
+        int grepZeroHit = 0;
         int memberCount = 0;
         int memberQualifiedZeroToday = 0;
         int errors = 0;
@@ -158,12 +159,23 @@ public sealed class McpVsGrepTokenBenchmarkTests
                 sumGrepMin += grepMinBytes;
                 sumGrepFull += grepFullBytes;
                 total++;
-                if (grepFullTokens > mcpTokens)
+
+                // A zero-hit grep is a non-answer, not a cheaper answer: its 0-byte "cost" can never be a fair win
+                // (most common for constructors/indexers/special names that no word-boundary search can match). When
+                // grep found nothing, MCP is the only arm that answered the "definition + all references" question, so
+                // it counts as an MCP win regardless of byte comparison.
+                bool grepAnswered = grep.Hits > 0;
+                if (!grepAnswered)
+                {
+                    grepZeroHit++;
+                }
+
+                if (!grepAnswered || grepFullTokens > mcpTokens)
                 {
                     winFull++;
                 }
 
-                if (grepMinTokens > mcpTokens)
+                if (!grepAnswered || grepMinTokens > mcpTokens)
                 {
                     winMin++;
                 }
@@ -237,8 +249,9 @@ public sealed class McpVsGrepTokenBenchmarkTests
         summary.AppendLine();
         summary.AppendLine("## Per-symbol");
         summary.AppendLine($"median full ratio:       {medianFull:F2}x");
-        summary.AppendLine($"MCP cheaper than grep-full on: {winFull}/{total} ({(total > 0 ? 100.0 * winFull / total : 0):F1}%)");
-        summary.AppendLine($"MCP cheaper than grep-min  on: {winMin}/{total} ({(total > 0 ? 100.0 * winMin / total : 0):F1}%)");
+        summary.AppendLine($"MCP wins vs grep-full on: {winFull}/{total} ({(total > 0 ? 100.0 * winFull / total : 0):F1}%)");
+        summary.AppendLine($"MCP wins vs grep-min  on: {winMin}/{total} ({(total > 0 ? 100.0 * winMin / total : 0):F1}%)");
+        summary.AppendLine($"  (includes {grepZeroHit} symbols where grep returned 0 hits — a non-answer, e.g. constructors/indexers/special names — counted as MCP wins since grep could not answer at all)");
         summary.AppendLine();
         summary.AppendLine("## Qualified Type.Member lookup");
         summary.AppendLine($"members measured: {memberCount}");

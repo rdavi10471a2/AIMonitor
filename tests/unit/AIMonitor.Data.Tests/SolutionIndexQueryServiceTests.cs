@@ -161,6 +161,69 @@ public sealed class SolutionIndexQueryServiceTests
     }
 
     [Fact]
+    public void FindSymbols_resolves_qualified_constructor_without_homonym_fanout()
+    {
+        string tempRoot = CreateTempRoot();
+        string watchedRoot = Path.Combine(tempRoot, "Watched");
+        string orderFilePath = Path.Combine(watchedRoot, "OrderRepository.cs");
+        string customerFilePath = Path.Combine(watchedRoot, "CustomerRepository.cs");
+        Directory.CreateDirectory(watchedRoot);
+        File.WriteAllText(orderFilePath, "namespace Example.Data { public sealed class OrderRepository { public OrderRepository() { } } }");
+        File.WriteAllText(customerFilePath, "namespace Example.Data { public sealed class CustomerRepository { public CustomerRepository() { } } }");
+        MonitorSettings settings = MonitorSettings.Create(
+            tempRoot,
+            Path.Combine(watchedRoot, "Example.sln"),
+            Path.Combine(tempRoot, "runtime"));
+        SolutionIndexStore store = new(new SolutionIndexDatabase(MonitorDataPaths.GetDefaultIndexDatabasePath(settings)));
+        store.SaveSnapshot(new MSBuildSolutionSnapshot(
+            settings.WatchedSolutionPath,
+            [
+                new MSBuildProjectSnapshot(
+                    "project:example",
+                    "Example",
+                    Path.Combine(watchedRoot, "Example.csproj"),
+                    "C#",
+                    "net10.0",
+                    "",
+                    "Library",
+                    "Microsoft.NET.Sdk",
+                    "Example",
+                    "Example.Data",
+                    "enable",
+                    "enable",
+                    "latest",
+                    [
+                        new MSBuildDocumentSnapshot("document:order", "OrderRepository.cs", orderFilePath, [], ComputeFileHash(orderFilePath)),
+                        new MSBuildDocumentSnapshot("document:customer", "CustomerRepository.cs", customerFilePath, [], ComputeFileHash(customerFilePath))
+                    ],
+                    [
+                        new MSBuildSymbolSnapshot("symbol:order-type", "OrderRepository", "NamedType", "Example.Data", "", orderFilePath, 1, 1, "Example.Data.OrderRepository"),
+                        new MSBuildSymbolSnapshot("symbol:order-ctor", ".ctor", "Method", "Example.Data", "OrderRepository", orderFilePath, 1, 1, "Example.Data.OrderRepository.OrderRepository()"),
+                        new MSBuildSymbolSnapshot("symbol:customer-type", "CustomerRepository", "NamedType", "Example.Data", "", customerFilePath, 1, 1, "Example.Data.CustomerRepository"),
+                        new MSBuildSymbolSnapshot("symbol:customer-ctor", ".ctor", "Method", "Example.Data", "CustomerRepository", customerFilePath, 1, 1, "Example.Data.CustomerRepository.CustomerRepository()")
+                    ],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [])
+            ],
+            []));
+        SolutionIndexQueryService service = SolutionIndexQueryService.Create(settings);
+
+        // Bare ".ctor" matches every constructor (the homonym fan-out the benchmark penalized).
+        IndexedSymbolSearchResult bareResult = service.FindSymbols(".ctor", kind: "Method");
+        // Qualified "ContainingType + '.' + Name" composes to a doubled dot for constructors; it must resolve to the one.
+        IndexedSymbolSearchResult qualifiedResult = service.FindSymbols("OrderRepository..ctor", kind: "Method");
+
+        Assert.Equal(2, bareResult.TotalSymbolCount);
+        IndexedSymbolQueryItem qualifiedItem = Assert.Single(qualifiedResult.Symbols);
+        Assert.Equal("symbol:order-ctor", qualifiedItem.Symbol.StableKey);
+    }
+
+    [Fact]
     public void QueryIndex_uses_path_aware_folder_scope_and_clamps_limits()
     {
         string tempRoot = CreateTempRoot();
