@@ -11,15 +11,14 @@ Any symbol edit starts with blast-radius discovery. If the agent will change, re
 ## Flow
 
 ```text
-start_monitor_session with every planned watched file in the coupled edit
-compose Working candidate A with sessionId
+start_monitor_session(filesPlanned: [...]) with every planned watched file in the coupled edit
+compose Working candidate A with sessionId on every mutation call
 stage_candidate_for_review for file A with sessionId
-compose Working candidate B with sessionId
+compose Working candidate B with sessionId on every mutation call
 stage_candidate_for_review for file B with sessionId
-review pre-merge validation results
-launch/review file A
-record decision for file A
-launch/review file B
+launch_staged_diff for file A; planned launch checks staged overlay readiness
+launch_staged_diff for file B before recording decisions
+record decision for file A; early accepted decisions may return deferred indexRefresh
 record decision for file B; terminal accepted-overlay build must pass before final accept/index refresh
 check each accepted decision's indexRefresh status before relying on solution-index queries
 ```
@@ -32,7 +31,7 @@ check each accepted decision's indexRefresh status before relying on solution-in
 - Do not modify a symbol first and then look for blast radius after the fact. Discover the likely impact before composing the Working candidates.
 - Do not let empty reference results shrink the session by themselves; cross-check before deciding a change is single-file.
 - Do not continue to later diffs if an earlier staged item is blocked by validation or review-gate state.
-- Do not run manual index refresh tools after each accepted file in a coupled chain; `record_diff_decision` refreshes the monitor-owned index for accepted and accepted-normalized decisions.
+- Do not run manual index refresh tools after each accepted file in a coupled chain; early planned accepts can defer index refresh until the terminal accepted decision refreshes the accepted planned set.
 
 ## Unblock
 

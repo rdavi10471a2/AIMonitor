@@ -627,6 +627,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
+        EnsurePlannedMutationAllowed(sessionId, fullPath);
         bool deferOverlayValidation = ShouldDeferPlannedOverlayValidation(sessionId, fullPath);
         EditSessionStatus status = workflowService.SubmitFile(fullPath, content, manifestJson, !deferOverlayValidation);
         if (!string.IsNullOrWhiteSpace(sessionId))
@@ -662,6 +663,7 @@ public sealed class AIMonitorTools
             : occurrenceIndex >= 0 ? null : 1;
 
         string fullPath = ResolveWatchedPath(path);
+        EnsurePlannedMutationAllowed(sessionId, fullPath);
         bool deferOverlayValidation = ShouldDeferPlannedOverlayValidation(sessionId, fullPath);
         ReplaceTextResult result = workflowService.ReplaceText(
             fullPath,
@@ -713,6 +715,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
+        EnsurePlannedMutationAllowed(sessionId, fullPath);
         EnsureSession(fullPath);
         bool deferOverlayValidation = ShouldDeferPlannedOverlayValidation(sessionId, fullPath);
         EditSessionStatus status = workflowService.ReplaceSpan(
@@ -771,6 +774,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
+        EnsurePlannedMutationAllowed(sessionId, fullPath);
         bool deferOverlayValidation = ShouldDeferPlannedOverlayValidation(sessionId, fullPath);
         RoslynEditResult result = roslynEditService.SubmitSymbol(fullPath, symbolSelectorJson, code, manifestJson, !deferOverlayValidation);
         RecordRoslynSessionEvent(sessionId, "submit-symbol", result);
@@ -783,6 +787,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
+        EnsurePlannedMutationAllowed(sessionId, fullPath);
         bool deferOverlayValidation = ShouldDeferPlannedOverlayValidation(sessionId, fullPath);
         RoslynEditResult result = roslynEditService.AddUsing(fullPath, @namespace, manifestJson, !deferOverlayValidation);
         RecordRoslynSessionEvent(sessionId, "add-using", result);
@@ -795,6 +800,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
+        EnsurePlannedMutationAllowed(sessionId, fullPath);
         bool deferOverlayValidation = ShouldDeferPlannedOverlayValidation(sessionId, fullPath);
         RoslynEditResult result = roslynEditService.RemoveUsing(fullPath, @namespace, manifestJson, !deferOverlayValidation);
         RecordRoslynSessionEvent(sessionId, "remove-using", result);
@@ -807,6 +813,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
+        EnsurePlannedMutationAllowed(sessionId, fullPath);
         bool deferOverlayValidation = ShouldDeferPlannedOverlayValidation(sessionId, fullPath);
         RoslynEditResult result = roslynEditService.SetTypePartial(fullPath, containingType, isPartial, manifestJson, !deferOverlayValidation);
         RecordRoslynSessionEvent(sessionId, "set-type-partial", result);
@@ -819,6 +826,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
+        EnsurePlannedMutationAllowed(sessionId, fullPath);
         bool deferOverlayValidation = ShouldDeferPlannedOverlayValidation(sessionId, fullPath);
         RoslynEditResult result = roslynEditService.AddSymbol(fullPath, containingType, symbolType, code, afterSymbol, manifestJson, !deferOverlayValidation);
         RecordRoslynSessionEvent(sessionId, "add-symbol", result);
@@ -831,6 +839,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
+        EnsurePlannedMutationAllowed(sessionId, fullPath);
         bool deferOverlayValidation = ShouldDeferPlannedOverlayValidation(sessionId, fullPath);
         RoslynEditResult result = roslynEditService.AddField(fullPath, containingType, declaration, afterSymbol, manifestJson, !deferOverlayValidation);
         RecordRoslynSessionEvent(sessionId, "add-field", result);
@@ -843,6 +852,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
+        EnsurePlannedMutationAllowed(sessionId, fullPath);
         bool deferOverlayValidation = ShouldDeferPlannedOverlayValidation(sessionId, fullPath);
         RoslynEditResult result = roslynEditService.AddProperty(fullPath, containingType, declaration, afterSymbol, manifestJson, !deferOverlayValidation);
         RecordRoslynSessionEvent(sessionId, "add-property", result);
@@ -855,6 +865,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
+        EnsurePlannedMutationAllowed(sessionId, fullPath);
         bool deferOverlayValidation = ShouldDeferPlannedOverlayValidation(sessionId, fullPath);
         RoslynEditResult result = roslynEditService.AddMethod(fullPath, containingType, declaration, afterSymbol, manifestJson, !deferOverlayValidation);
         RecordRoslynSessionEvent(sessionId, "add-method", result);
@@ -867,6 +878,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
+        EnsurePlannedMutationAllowed(sessionId, fullPath);
         bool deferOverlayValidation = ShouldDeferPlannedOverlayValidation(sessionId, fullPath);
         RoslynEditResult result = roslynEditService.AddConstructor(fullPath, containingType, declaration, afterSymbol, manifestJson, !deferOverlayValidation);
         RecordRoslynSessionEvent(sessionId, "add-constructor", result);
@@ -879,6 +891,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
+        EnsurePlannedMutationAllowed(sessionId, fullPath);
         bool deferOverlayValidation = ShouldDeferPlannedOverlayValidation(sessionId, fullPath);
         RoslynEditResult result = roslynEditService.AddNestedType(fullPath, containingType, declaration, afterSymbol, manifestJson, !deferOverlayValidation);
         RecordRoslynSessionEvent(sessionId, "add-nested-type", result);
@@ -891,6 +904,7 @@ public sealed class AIMonitorTools
     {
         runtimeState.Touch();
         string fullPath = ResolveWatchedPath(path);
+        EnsurePlannedMutationAllowed(sessionId, fullPath);
         bool deferOverlayValidation = ShouldDeferPlannedOverlayValidation(sessionId, fullPath);
         RoslynEditResult result = roslynEditService.RemoveSymbol(fullPath, symbolSelectorJson, manifestJson, !deferOverlayValidation);
         RecordRoslynSessionEvent(sessionId, "remove-symbol", result);
@@ -1171,19 +1185,20 @@ public sealed class AIMonitorTools
         builder.AppendLine("Use this sequence for watched-project edits through MCP.");
         builder.AppendLine();
         builder.AppendLine("1. Check `get_self_check`, `get_workflow_status`, and `get_monitor_status` when starting a session.");
-        builder.AppendLine("2. Call `start_monitor_session` with every planned file, including the owning project path when it is not obvious from the index.");
-        builder.AppendLine("3. For existing files, call `refresh_file`. For future watched files, call `new_file`.");
-        builder.AppendLine("4. Edit only the monitor-owned Working candidate with `submit_file`, text/span tools, or Roslyn typed edit tools.");
-        builder.AppendLine("5. Stage every planned file with `stage_candidate_for_review`.");
-        builder.AppendLine("6. Launch review with `launch_staged_diff`; planned sessions require the full staged file set before WinMerge opens.");
-        builder.AppendLine("7. The operator reviews/saves every planned file in WinMerge. WinMerge is the watched-source mutation surface.");
-        builder.AppendLine("8. Record each result with `record_diff_decision`.");
-        builder.AppendLine("9. After the last planned file reaches a terminal decision, inspect `indexRefresh` and call `refresh_file` before editing any accepted watched file again.");
+        builder.AppendLine("2. Call `start_monitor_session(filesPlanned: [...])` before editing. Include every watched file the session intends to mutate, even for one-file edits, and include `owningProjectPath` when the index cannot prove a single owner.");
+        builder.AppendLine("3. Pass that same `sessionId` to `refresh_file`, `new_file`, every mutation tool, and `stage_candidate_for_review`.");
+        builder.AppendLine("4. For existing files, call `refresh_file`. For future watched files, call `new_file`.");
+        builder.AppendLine("5. Edit only the monitor-owned Working candidate with `submit_file`, text/span tools, or Roslyn typed edit tools.");
+        builder.AppendLine("6. Stage every planned file with `stage_candidate_for_review(path, sessionId)`.");
+        builder.AppendLine("7. Launch review with `launch_staged_diff` for every planned staged record before recording decisions; planned sessions require the full staged file set before WinMerge opens.");
+        builder.AppendLine("8. The operator reviews/saves every planned file in WinMerge. WinMerge is the watched-source mutation surface.");
+        builder.AppendLine("9. Record each result with `record_diff_decision`.");
+        builder.AppendLine("10. After the last planned file reaches a terminal decision, inspect `indexRefresh` and call `refresh_file` before editing any accepted watched file again.");
         builder.AppendLine();
         builder.AppendLine("Failure paths:");
         builder.AppendLine();
         builder.AppendLine("- `blocked`, `dirty-unexpected`, `superseded`, missing Working files, and stale hashes require recovery before follow-up edits.");
-        builder.AppendLine("- Planned-session build/index validation happens after all planned WinMerge decisions, not once per staged file.");
+        builder.AppendLine("- Planned-session launch checks staged overlay readiness; the full build/index validation runs at the terminal planned accept, not once per staged file.");
         builder.AppendLine("- Do not manually copy candidates into watched source outside WinMerge/decision classification.");
         return builder.ToString();
     }
@@ -1450,7 +1465,7 @@ public sealed class AIMonitorTools
     {
         if (string.IsNullOrWhiteSpace(sessionId))
         {
-            return;
+            throw new InvalidOperationException("Session edit scope is required before MCP workflow mutations. Call start_monitor_session with filesPlanned before editing or staging.");
         }
 
         AIMonitorSessionEditPlan editPlan = RequireSessionEditPlan(sessionId);
