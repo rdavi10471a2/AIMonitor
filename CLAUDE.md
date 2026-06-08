@@ -38,7 +38,8 @@ dotnet <absolute path>\src\AIMonitor.McpStdioBridge\bin\Debug\net10.0\AIMonitor.
 
 Never edit watched source directly. For watched-project edits:
 
-1. Start or reuse the intended monitor session.
+1. Start a *planned* session: call `start_monitor_session` with `filesPlanned` listing every file you intend to change. A planned session is required before any `refresh_file`/`new_file`/edit — mutations to unplanned files are rejected. (`filesPlanned` is your edit scope; the engine derives a separate inbound-reference closure for index refresh — you do not hand-type it.)
+   - While planning, run `find_indexed_references` on each symbol you intend to change. If referencing sites exist in other projects, add any consumer you must edit to `filesPlanned`. The engine refreshes those dependent projects' index rows via the inbound-reference closure, so cross-project references are not silently orphaned.
 2. Use `refresh_file` for existing files or `new_file` for future watched files.
 3. Edit only the monitor-owned Working candidate with AIMonitor MCP tools.
 4. Stage with `stage_candidate_for_review`.
@@ -55,7 +56,14 @@ New-file review does not create watched source automatically. The operator must 
 
 If an MCP edit tool rejects a Working candidate because C# syntax validation failed, do not force it to WinMerge. Revise the candidate into syntactically valid C# and retry the edit. This is agent feedback, not a human override gate.
 
-If pre-merge validation fails, `launch_staged_diff` must not be treated as a warning. Use the Host dialog result. If no dialog is available, stop and ask the operator in chat before using `forceValidation`. Proceed only after an explicit approval such as "yes, launch anyway" or "force validation approved" for that staged record. Silence, ambiguity, or approval for a different file/session is not enough.
+A planned session has **two compile gates**, and they answer different questions (see `docs/PlannedSessionEditFlow.md`):
+
+- **GATE 1 — overlay semantic compile (pre-merge).** Once every planned candidate exists, a Roslyn compile runs over the whole project with the staged candidates swapped in. It catches cross-file C# breaks before any merge but is a *predictor that is allowed to be noisy*: it skips `.razor` markup and runs no MSBuild/analyzers/source-or-Razor generators, so it produces known false positives (Razor/generated-artifact references; duplicate-inclusion / dual-`SqlClient` ambiguous-reference errors). A failing GATE 1 is operator judgment: if it is a recognizable noisy class the operator **may merge anyway**; if it is a clear real break, replan/fix or ask the operator before merge.
+- **GATE 2 — full `dotnet build` on the real watched tree (post-accept).** This is the **authoritative** gate and is intentionally placed after the merge so it builds the real source the operator just committed. The "must not be treated as a warning, hard-stop on failure" stance attaches to **GATE 2 / genuine breaks**, not to noisy GATE 1 overlay errors.
+
+When GATE 1 reports a *real* break, do not treat `launch_staged_diff` as a warning. Use the Host dialog result. If no dialog is available, stop and ask the operator in chat before using `forceValidation`. Proceed only after an explicit approval such as "yes, launch anyway" or "force validation approved" for that staged record. Silence, ambiguity, or approval for a different file/session is not enough.
+
+**Verbatim-merge rule:** merge the staged bytes verbatim in WinMerge — do not hand-edit during the merge. GATE 1's validity transfers to watched source only because the overlay is a copy of watched with the staged files swapped in; a hand-edit during merge breaks that equivalence (watched must end up byte-equal to the staged candidate).
 
 ## Skills
 
