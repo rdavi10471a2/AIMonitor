@@ -56,24 +56,34 @@ version, source-generated document count, and notable compilation diagnostics.
 RAZORGEN_DIAG=1 dotnet test tests/unit/AIMonitor.MSBuild.Tests --filter Dump_workspace_razor_generator_state
 ```
 
-## Fix options (decision pending)
+## Decision: document the constraint, do not pin
 
-The host Roslyn must be **>= the Roslyn the registered SDK's Razor generator was built against**.
+The host Roslyn must be **>= the Roslyn the registered SDK's Razor generator was built against** for
+source-generated Razor to surface. Every way to *force* that match was weighed and rejected — the cost is high and
+the payoff is marginal (markup-binding refs are an already-documented Razor boundary, and the defensible in-memory
+`razor:*` path has no Roslyn-version dependency):
 
-- **A. Pin the SDK via `global.json` to one whose Razor generator Roslyn <= the host's 5.3.0.**
-  The watched WebViewer targets `net9.0`; a .NET 9 SDK (e.g. 9.0.304) ships Roslyn 4.x (< 5.3.0), so its Razor
-  generator would run under the 5.3.0 host **and** can build the net9.0 watched app. Caveat: AIMonitor's own
-  projects/test fixtures target `net10.0`, so a repo-root `global.json` pinned to a .NET 9 SDK would break building
-  AIMonitor itself — the pin must be scoped to the watched solution / host process, not the AIMonitor repo.
-- **B. Bump AIMonitor's NuGet `Microsoft.CodeAnalysis.*Workspaces` from 5.3.0 to >= the SDK's Roslyn (5.6.0).**
-  Robust and machine-independent in principle, but couples the host to whatever SDK is installed, and a 5.6.0 daily
-  build may not be published on nuget.org as a stable package.
-- **C. Combined (recommended for determinism): `global.json` pin the SDK to a GA version whose bundled Roslyn matches
-  a published NuGet `Microsoft.CodeAnalysis.*` version, and set the NuGet packages to that version.** Both the host
-  and the generator are then pinned and compatible.
+| Option | Cost | Verdict |
+| --- | --- | --- |
+| **A.** `global.json` pin to a .NET 9 SDK (its Roslyn 4.x < host 5.3.0, and it builds the net9.0 WebViewer) | A repo-root pin **breaks building AIMonitor itself** (net10.0); scoping the pin to only the watched solution is fragile | Rejected — breaks the host to fix a watched-app detail |
+| **B.** Bump NuGet `Microsoft.CodeAnalysis.*Workspaces` 5.3.0 → 5.6.0 | 5.6.0 is an unreleased daily build (not on nuget.org stable); re-couples to whatever SDK floats in, so the next SDK bump breaks it again | Rejected — chasing a moving target |
+| **C.** Pin SDK + NuGet to a matched GA pair | Forces every dev/CI machine onto one SDK + ongoing version maintenance | Rejected — heavy burden for a documented boundary |
 
-Until one is applied, `razor-generated:*` is environment-dependent. The in-memory `razor:*` coverage is unaffected
-and remains the defensible Razor boundary.
+**Conclusion:** leave `razor-generated:*` environment-dependent. `razor:*` is the defensible coverage and is
+unaffected.
+
+## Authoring rule for hermetic source-generated Razor tests
+
+> A hermetic test that asserts source-generated Razor output (`razor-generated:*`, i.e. markup expressions and
+> component bindings) only passes when the test/host environment's Roslyn matches the compiler SDK environment —
+> specifically when the MSBuildWorkspace host Roslyn (AIMonitor's pinned `Microsoft.CodeAnalysis.*` version) is
+> **>= the Razor generator shipped in the SDK that `MSBuildLocator` registers**. Because the registered SDK floats
+> with the machine, these assertions must be **environment-aware** (assert-if-present), never hard.
+>
+> Tests that assert only the in-memory `razor:*` path (`@code` / `.razor.cs` mapped back to `.razor`) have no such
+> dependency and may assert hard. Use `RazorGeneratorEnvironmentDiagnostic` (`RAZORGEN_DIAG=1`) to confirm whether a
+> given machine's Roslyn/SDK pair surfaces source-generated docs before assuming a `razor-generated:*` assertion is
+> portable.
 
 ## Test scoping
 
