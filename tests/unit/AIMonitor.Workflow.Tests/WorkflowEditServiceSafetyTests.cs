@@ -211,6 +211,97 @@ public sealed class WorkflowEditServiceSafetyTests
     }
 
     [Fact]
+    public void Text_edit_can_defer_overlay_validation_until_planned_working_set_is_complete()
+    {
+        WorkflowFixture fixture = CreateFixture();
+        WorkflowEditService service = new(fixture.Settings);
+        EditSessionStatus refresh = service.Refresh(fixture.ProgramFilePath);
+
+        ReplaceTextResult result = service.ReplaceText(
+            fixture.ProgramFilePath,
+            "internal static class Program { }",
+            "internal static class Program { public static string Value => \"planned\"; }",
+            expectedMatches: 1,
+            validateOverlay: false);
+
+        Assert.Equal("planned-overlay-pending", result.OverlayValidation?.Status);
+        Assert.False(result.OverlayValidation?.HasErrors);
+        Assert.Contains("\"planned\"", File.ReadAllText(refresh.WorkingFilePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Planned_overlay_retry_reports_and_recovers_three_file_cross_reference_errors()
+    {
+        ThreeFileWorkflowFixture fixture = CreateThreeFileFixture();
+        WorkflowEditService service = new(fixture.Settings);
+        service.Refresh(fixture.ProviderPath);
+        service.Refresh(fixture.ConsumerPath);
+        service.Refresh(fixture.PresenterPath);
+
+        EditSessionStatus providerStatus = service.SubmitFile(
+            fixture.ProviderPath,
+            """
+            namespace Example;
+
+            internal static class Provider
+            {
+                public static string RenamedValue()
+                {
+                    return "candidate";
+                }
+            }
+            """,
+            validateOverlay: false);
+
+        Assert.Equal("planned-overlay-pending", providerStatus.OverlayValidation?.Status);
+
+        // The parent symbol was renamed and one child has been updated, but the second
+        // child still points at the old parent member. The overlay should make that
+        // missed blast-radius file visible before review.
+        EditSessionStatus consumerStatus = service.SubmitFile(
+            fixture.ConsumerPath,
+            """
+            namespace Example;
+
+            internal static class Consumer
+            {
+                public static string Read()
+                {
+                    return Provider.RenamedValue();
+                }
+            }
+            """);
+
+        Assert.NotNull(consumerStatus.OverlayValidation);
+        Assert.True(consumerStatus.OverlayValidation.HasErrors);
+        Assert.Equal(3, consumerStatus.OverlayValidation.OverlayFileCount);
+        Assert.Contains(consumerStatus.OverlayValidation.Diagnostics, diagnostic =>
+            diagnostic.Path.Equals(fixture.PresenterPath, StringComparison.OrdinalIgnoreCase)
+            && diagnostic.Id == "CS0117");
+
+        // The agent can now repair the missed child Working candidate and retry the
+        // overlay without touching watched source or force-launching review.
+        EditSessionStatus presenterStatus = service.SubmitFile(
+            fixture.PresenterPath,
+            """
+            namespace Example;
+
+            internal static class Presenter
+            {
+                public static string Render()
+                {
+                    return Consumer.Read() + Provider.RenamedValue();
+                }
+            }
+            """);
+
+        Assert.NotNull(presenterStatus.OverlayValidation);
+        Assert.False(presenterStatus.OverlayValidation.HasErrors);
+        Assert.Equal("compiled", presenterStatus.OverlayValidation.Status);
+        Assert.Equal(3, presenterStatus.OverlayValidation.OverlayFileCount);
+    }
+
+    [Fact]
     public void Stage_blocks_after_accept_until_refresh()
     {
         WorkflowFixture fixture = CreateFixture();
@@ -466,5 +557,71 @@ public sealed class WorkflowEditServiceSafetyTests
             programFilePath);
     }
 
+    private static ThreeFileWorkflowFixture CreateThreeFileFixture()
+    {
+        string tempRoot = Path.Combine(Path.GetTempPath(), "AIMonitorWorkflowSafetyTests", Guid.NewGuid().ToString("N"));
+        string repositoryRoot = Path.Combine(tempRoot, "Repo");
+        string runtimeRoot = Path.Combine(tempRoot, "Runtime");
+        string watchedRoot = Path.Combine(tempRoot, "Watched");
+        string projectPath = Path.Combine(watchedRoot, "Example.csproj");
+        string providerPath = Path.Combine(watchedRoot, "Provider.cs");
+        string consumerPath = Path.Combine(watchedRoot, "Consumer.cs");
+        string presenterPath = Path.Combine(watchedRoot, "Presenter.cs");
+
+        Directory.CreateDirectory(watchedRoot);
+        File.WriteAllText(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        File.WriteAllText(
+            providerPath,
+            """
+            namespace Example;
+
+            internal static class Provider
+            {
+                public static string Value()
+                {
+                    return "original";
+                }
+            }
+            """);
+        File.WriteAllText(
+            consumerPath,
+            """
+            namespace Example;
+
+            internal static class Consumer
+            {
+                public static string Read()
+                {
+                    return Provider.Value();
+                }
+            }
+            """);
+        File.WriteAllText(
+            presenterPath,
+            """
+            namespace Example;
+
+            internal static class Presenter
+            {
+                public static string Render()
+                {
+                    return Consumer.Read() + Provider.Value();
+                }
+            }
+            """);
+
+        return new ThreeFileWorkflowFixture(
+            MonitorSettings.Create(repositoryRoot, projectPath, runtimeRoot),
+            providerPath,
+            consumerPath,
+            presenterPath);
+    }
+
     private sealed record WorkflowFixture(MonitorSettings Settings, string ProgramFilePath);
+
+    private sealed record ThreeFileWorkflowFixture(
+        MonitorSettings Settings,
+        string ProviderPath,
+        string ConsumerPath,
+        string PresenterPath);
 }

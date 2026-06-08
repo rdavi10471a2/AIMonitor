@@ -1,0 +1,16 @@
+{
+  "servers": {
+    "aiMonitor": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": [
+        "${workspaceFolder}\\src\\AIMonitor.McpStdioBridge\\bin\\Debug\\net10.0\\AIMonitor.McpStdioBridge.dll",
+        "--repo-root",
+        "${workspaceFolder}",
+        "--config",
+        "${workspaceFolder}\\config\\appsettings.json"
+      ],
+      "cwd": "${workspaceFolder}"
+    }
+  }
+}

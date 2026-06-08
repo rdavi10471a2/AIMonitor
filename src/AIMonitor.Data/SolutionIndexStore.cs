@@ -12,7 +12,9 @@ public sealed class SolutionIndexStore
         this.database = database;
     }
 
-    public SolutionIndexSummary SaveSnapshot(MSBuildSolutionSnapshot snapshot)
+    public SolutionIndexSummary SaveSnapshot(
+        MSBuildSolutionSnapshot snapshot,
+        Action<string, long, IReadOnlyDictionary<string, string>>? timingSink = null)
     {
         database.EnsureCreated();
         SolutionIndexSummary previousSummary = GetSummary();
@@ -24,21 +26,22 @@ public sealed class SolutionIndexStore
         using SqliteConnection connection = database.OpenConnection();
         using SqliteTransaction transaction = connection.BeginTransaction();
 
-        ClearCurrentState(connection, transaction);
-        SaveSolutionState(connection, transaction, snapshot);
+        Measure("index.sqlite.clear-current-state", timingSink, () => ClearCurrentState(connection, transaction));
+        Measure("index.sqlite.save-solution-state", timingSink, () => SaveSolutionState(connection, transaction, snapshot));
 
         foreach (MSBuildProjectSnapshot project in snapshot.Projects)
         {
             long projectId = InsertProject(connection, transaction, project);
-            InsertDocuments(connection, transaction, projectId, project.Documents);
-            InsertSymbols(connection, transaction, projectId, project.Symbols);
-            InsertReferences(connection, transaction, projectId, project.References);
-            InsertCallSites(connection, transaction, projectId, project.Symbols, project.References);
-            InsertRelationships(connection, transaction, projectId, project.Symbols, project.References);
-            InsertProjectReferences(connection, transaction, projectId, project.ProjectReferences);
-            InsertPackageReferences(connection, transaction, projectId, project.PackageReferences);
-            InsertFrameworkReferences(connection, transaction, projectId, project.FrameworkReferences);
-            InsertGlobalUsings(connection, transaction, projectId, project.GlobalUsings);
+            Dictionary<string, string> projectProperties = CreateProjectTimingProperties(project);
+            Measure("index.sqlite.insert-documents", timingSink, projectProperties, () => InsertDocuments(connection, transaction, projectId, project.Documents));
+            Measure("index.sqlite.insert-symbols", timingSink, projectProperties, () => InsertSymbols(connection, transaction, projectId, project.Symbols));
+            Measure("index.sqlite.insert-references", timingSink, projectProperties, () => InsertReferences(connection, transaction, projectId, project.References));
+            Measure("index.sqlite.insert-call-sites", timingSink, projectProperties, () => InsertCallSites(connection, transaction, projectId, project.Symbols, project.References));
+            Measure("index.sqlite.insert-relationships", timingSink, projectProperties, () => InsertRelationships(connection, transaction, projectId, project.Symbols, project.References));
+            Measure("index.sqlite.insert-project-references", timingSink, projectProperties, () => InsertProjectReferences(connection, transaction, projectId, project.ProjectReferences));
+            Measure("index.sqlite.insert-package-references", timingSink, projectProperties, () => InsertPackageReferences(connection, transaction, projectId, project.PackageReferences));
+            Measure("index.sqlite.insert-framework-references", timingSink, projectProperties, () => InsertFrameworkReferences(connection, transaction, projectId, project.FrameworkReferences));
+            Measure("index.sqlite.insert-global-usings", timingSink, projectProperties, () => InsertGlobalUsings(connection, transaction, projectId, project.GlobalUsings));
         }
 
         foreach (string diagnostic in snapshot.Diagnostics)
@@ -50,8 +53,108 @@ public sealed class SolutionIndexStore
                 ("$message", diagnostic));
         }
 
-        transaction.Commit();
+        // A full rebuild repopulates every symbol-dependent table, so it clears the schema-upgrade rebuild marker as
+        // part of the same transaction that writes the fresh rows.
+        Execute(connection, transaction, "delete from index_meta where key = $key;", ("$key", SolutionIndexDatabase.NeedsFullRebuildKey));
+
+        Measure("index.sqlite.commit", timingSink, () => transaction.Commit());
         return GetSummary();
+    }
+
+    public SolutionIndexSummary ReplaceProjectFiles(
+        string inputPath,
+        string projectPath,
+        IReadOnlyList<string> filePaths,
+        IReadOnlyList<MSBuildDocumentSnapshot> documents,
+        IReadOnlyList<MSBuildSymbolSnapshot> symbols,
+        IReadOnlyList<MSBuildReferenceSnapshot> references,
+        Action<string, long, IReadOnlyDictionary<string, string>>? timingSink = null)
+    {
+        database.EnsureCreated();
+        string normalizedProjectPath = Path.GetFullPath(projectPath);
+        string[] normalizedFilePaths = filePaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (normalizedFilePaths.Length == 0)
+        {
+            throw new ArgumentException("At least one file path is required.", nameof(filePaths));
+        }
+
+        using (SqliteConnection connection = database.OpenConnection())
+        {
+            // No cross-symbol FK exists anymore (the *_stable_key columns are plain text after the schema upgrade), so
+            // this single-project delete+reinsert cannot cascade-delete other projects' inbound rows. Insert order no
+            // longer matters and no foreign-key toggling is required. The scoped->full inbound-dependent guard still
+            // lives in PostAcceptIndexRefreshService for the stale-key case (a target symbol that genuinely moved).
+            using (SqliteTransaction transaction = connection.BeginTransaction())
+            {
+                long projectId = Measure("index.sqlite.get-project-id", timingSink, () => GetProjectId(connection, transaction, normalizedProjectPath));
+                Dictionary<string, string> fileProperties = new(StringComparer.Ordinal)
+                {
+                    ["projectPath"] = normalizedProjectPath,
+                    ["fileCount"] = normalizedFilePaths.Length.ToString(),
+                    ["documentCount"] = documents.Count.ToString(),
+                    ["symbolCount"] = symbols.Count.ToString(),
+                    ["referenceCount"] = references.Count.ToString()
+                };
+                Measure("index.sqlite.delete-project-rows", timingSink, fileProperties, () => DeleteProjectRows(connection, transaction, projectId));
+
+                Measure("index.sqlite.insert-documents", timingSink, fileProperties, () => InsertDocuments(connection, transaction, projectId, documents));
+                Measure("index.sqlite.insert-symbols", timingSink, fileProperties, () => InsertSymbols(connection, transaction, projectId, symbols));
+                Measure("index.sqlite.insert-references", timingSink, fileProperties, () => InsertReferences(connection, transaction, projectId, references));
+                Measure("index.sqlite.insert-call-sites", timingSink, fileProperties, () => InsertCallSites(connection, transaction, projectId, symbols, references));
+                Measure("index.sqlite.insert-relationships", timingSink, fileProperties, () => InsertRelationships(connection, transaction, projectId, symbols, references));
+                Measure("index.sqlite.save-current-solution-state", timingSink, fileProperties, () => SaveCurrentSolutionState(connection, transaction, inputPath));
+                Measure("index.sqlite.commit", timingSink, fileProperties, () => transaction.Commit());
+            }
+        }
+
+        return GetSummary();
+    }
+
+    private static void Measure(
+        string phase,
+        Action<string, long, IReadOnlyDictionary<string, string>>? timingSink,
+        Action action)
+    {
+        Measure(phase, timingSink, new Dictionary<string, string>(), action);
+    }
+
+    private static void Measure(
+        string phase,
+        Action<string, long, IReadOnlyDictionary<string, string>>? timingSink,
+        IReadOnlyDictionary<string, string> properties,
+        Action action)
+    {
+        System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        action();
+        stopwatch.Stop();
+        timingSink?.Invoke(phase, stopwatch.ElapsedMilliseconds, properties);
+    }
+
+    private static T Measure<T>(
+        string phase,
+        Action<string, long, IReadOnlyDictionary<string, string>>? timingSink,
+        Func<T> action)
+    {
+        System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        T result = action();
+        stopwatch.Stop();
+        timingSink?.Invoke(phase, stopwatch.ElapsedMilliseconds, new Dictionary<string, string>());
+        return result;
+    }
+
+    private static Dictionary<string, string> CreateProjectTimingProperties(MSBuildProjectSnapshot project)
+    {
+        return new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["projectPath"] = project.ProjectPath,
+            ["documentCount"] = project.Documents.Count.ToString(),
+            ["symbolCount"] = project.Symbols.Count.ToString(),
+            ["referenceCount"] = project.References.Count.ToString()
+        };
     }
 
     public SolutionIndexSummary GetSummary()
@@ -465,6 +568,77 @@ public sealed class SolutionIndexStore
             ("$diagnosticCount", snapshot.Diagnostics.Count));
     }
 
+    private static void SaveCurrentSolutionState(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string inputPath)
+    {
+        int projectCount = Convert.ToInt32(ExecuteScalar(connection, transaction, "select count(*) from projects;") ?? 0);
+        int documentCount = Convert.ToInt32(ExecuteScalar(connection, transaction, "select count(*) from documents;") ?? 0);
+        int diagnosticCount = Convert.ToInt32(ExecuteScalar(connection, transaction, "select count(*) from diagnostics;") ?? 0);
+        Execute(connection, transaction, "delete from solution_state;");
+        Execute(connection, transaction, """
+            insert into solution_state(id, input_path, indexed_at_utc, project_count, document_count, diagnostic_count)
+            values (1, $inputPath, $indexedAtUtc, $projectCount, $documentCount, $diagnosticCount);
+            """,
+            ("$inputPath", Path.GetFullPath(inputPath)),
+            ("$indexedAtUtc", DateTimeOffset.UtcNow.ToString("O")),
+            ("$projectCount", projectCount),
+            ("$documentCount", documentCount),
+            ("$diagnosticCount", diagnosticCount));
+    }
+
+    private static long GetProjectId(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string projectPath)
+    {
+        object? result = ExecuteScalar(connection, transaction, """
+            select id
+            from projects
+            where project_path = $projectPath;
+            """,
+            ("$projectPath", projectPath));
+        if (result is null || result == DBNull.Value)
+        {
+            throw new InvalidOperationException("The project is not present in the existing solution index: " + projectPath);
+        }
+
+        return Convert.ToInt64(result);
+    }
+
+    private static void DeleteProjectRows(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long projectId)
+    {
+        Execute(connection, transaction, """
+            delete from symbol_relationships
+            where project_id = $projectId;
+            """,
+            ("$projectId", projectId));
+        Execute(connection, transaction, """
+            delete from call_sites
+            where project_id = $projectId;
+            """,
+            ("$projectId", projectId));
+        Execute(connection, transaction, """
+            delete from symbol_references
+            where project_id = $projectId;
+            """,
+            ("$projectId", projectId));
+        Execute(connection, transaction, """
+            delete from symbols
+            where project_id = $projectId;
+            """,
+            ("$projectId", projectId));
+        Execute(connection, transaction, """
+            delete from documents
+            where project_id = $projectId;
+            """,
+            ("$projectId", projectId));
+    }
+
     private static long InsertProject(
         SqliteConnection connection,
         SqliteTransaction transaction,
@@ -747,6 +921,23 @@ public sealed class SolutionIndexStore
         }
 
         command.ExecuteNonQuery();
+    }
+
+    private static object? ExecuteScalar(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string commandText,
+        params (string Name, object? Value)[] parameters)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = commandText;
+        foreach ((string name, object? value) in parameters)
+        {
+            command.Parameters.AddWithValue(name, value ?? DBNull.Value);
+        }
+
+        return command.ExecuteScalar();
     }
 
     private static MSBuildSymbolSnapshot? FindContainingSymbol(

@@ -14,12 +14,21 @@ public sealed class StagedDiffLaunchWorkflow
         string source,
         string? diffToolPath = null,
         bool forceValidation = false,
+        bool deferBuildValidationUntilAccept = false,
         bool verbose = false)
     {
         StagedEditRecord record = workflowService.GetStagedRecord(stagedRecordId);
         WorkflowEditService.EnsureRecordNotDecided(record);
 
-        PreMergeValidationResult validation = new PreMergeValidationService().Validate(settings, record);
+        IReadOnlyList<StagedEditRecord> stagedOverlayRecords = GetStagedOverlayRecords(workflowService, record);
+        PreMergeValidationService validationService = new();
+        // Fidelity fix (option A): when the launch is for a planned session whose
+        // batch is fully staged (deferBuildValidationUntilAccept is only set true by the
+        // caller once every planned file is decided-or-staged), run the FULL overlay build
+        // here so the staged batch is build-validated BEFORE any WinMerge merge. The terminal
+        // real-tree build still runs at the final accept. The single-file (non-deferred) path
+        // also runs the full overlay build, so both launch paths now build before merge.
+        PreMergeValidationResult validation = validationService.Validate(settings, record, stagedOverlayRecords);
         string validationPrompt = "";
         if (validation.IsError && !forceValidation && PreMergeValidationOverridePrompt.CanShow())
         {
@@ -92,5 +101,30 @@ public sealed class StagedDiffLaunchWorkflow
                 ? "After WinMerge review, save the staged candidate into watched source for accept, or leave watched source absent for reject. Then record the diff decision."
                 : "After WinMerge review, save the staged candidate into the watched source for accept, or leave watched source unchanged for reject. Then record the diff decision."
         };
+    }
+
+    private static IReadOnlyList<StagedEditRecord> GetStagedOverlayRecords(
+        WorkflowEditService workflowService,
+        StagedEditRecord record)
+    {
+        if (string.IsNullOrWhiteSpace(record.SessionId))
+        {
+            return [record];
+        }
+
+        return workflowService.ListStagedRecords(record.SessionId)
+            .Where(IsActiveOverlayRecord)
+            .Append(record)
+            .GroupBy(item => Path.GetFullPath(item.WatchedFilePath), StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderByDescending(item => item.CreatedAtUtc, StringComparer.Ordinal).First())
+            .ToArray();
+    }
+
+    private static bool IsActiveOverlayRecord(StagedEditRecord record)
+    {
+        return string.IsNullOrWhiteSpace(record.Decision)
+            && string.IsNullOrWhiteSpace(record.SupersededByStagedRecordId)
+            && !record.Status.Equals("superseded", StringComparison.OrdinalIgnoreCase)
+            && !record.Classification.Equals("superseded", StringComparison.OrdinalIgnoreCase);
     }
 }

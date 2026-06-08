@@ -6,29 +6,50 @@ namespace AIMonitor.Workflow;
 
 public sealed class PreMergeValidationService
 {
-    public PreMergeValidationResult Validate(MonitorSettings settings, StagedEditRecord record)
+    public PreMergeValidationResult ValidateStagedOverlay(
+        StagedEditRecord record,
+        IReadOnlyList<StagedEditRecord> stagedOverlayRecords)
     {
-        if (!File.Exists(record.StagedFilePath))
+        StagedEditRecord[] overlayRecords = NormalizeOverlayRecords(record, stagedOverlayRecords);
+        foreach (StagedEditRecord overlayRecord in overlayRecords)
         {
-            return new PreMergeValidationResult
+            PreMergeValidationResult? hashFailure = ValidateStagedRecordHash(overlayRecord);
+            if (hashFailure is not null)
             {
-                Status = "missing-staged-file",
-                IsError = true,
-                Message = "Pre-merge validation failed because the staged candidate file is missing."
-            };
+                return hashFailure;
+            }
         }
 
-        string currentStagedHash = FileHash.Compute(record.StagedFilePath);
-        if (!currentStagedHash.Equals(record.StagedHash, StringComparison.OrdinalIgnoreCase))
+        return new PreMergeValidationResult
         {
-            return new PreMergeValidationResult
+            Status = overlayRecords.Length <= 1 ? "staged-file-ready" : "planned-staged-overlay-ready",
+            IsError = false,
+            DiagnosticCount = 0,
+            Diagnostics = [],
+            Message = overlayRecords.Length <= 1
+                ? "Staged file is ready for WinMerge review. Build/index validation is deferred until accept."
+                : $"Planned staged overlay is ready for WinMerge review with {overlayRecords.Length} staged files. Build/index validation is deferred until the planned files are accepted."
+        };
+    }
+
+    public PreMergeValidationResult Validate(MonitorSettings settings, StagedEditRecord record)
+    {
+        return Validate(settings, record, [record]);
+    }
+
+    public PreMergeValidationResult Validate(
+        MonitorSettings settings,
+        StagedEditRecord record,
+        IReadOnlyList<StagedEditRecord> stagedOverlayRecords)
+    {
+        StagedEditRecord[] overlayRecords = NormalizeOverlayRecords(record, stagedOverlayRecords);
+        foreach (StagedEditRecord overlayRecord in overlayRecords)
+        {
+            PreMergeValidationResult? hashFailure = ValidateStagedRecordHash(overlayRecord);
+            if (hashFailure is not null)
             {
-                Status = "staged-hash-mismatch",
-                IsError = true,
-                DiagnosticCount = 1,
-                Diagnostics = ["Staged candidate content changed after staging. Edit the Working file and run edit stage again."],
-                Message = "Pre-merge validation failed because the staged candidate no longer matches its recorded hash."
-            };
+                return hashFailure;
+            }
         }
 
         if (!File.Exists(settings.WatchedSolutionPath))
@@ -57,9 +78,12 @@ public sealed class PreMergeValidationService
             CopyDirectoryForValidation(sourceRoot, validationSourceRoot, excludedRoots);
             CopyExternalValidationInputs(externalInputs, validationWorkspaceRoot, excludedRoots);
 
-            string validationCandidatePath = Path.Combine(validationSourceRoot, record.RelativePath);
-            Directory.CreateDirectory(Path.GetDirectoryName(validationCandidatePath) ?? validationSourceRoot);
-            File.Copy(record.StagedFilePath, validationCandidatePath, overwrite: true);
+            foreach (StagedEditRecord overlayRecord in overlayRecords)
+            {
+                string validationCandidatePath = Path.Combine(validationSourceRoot, overlayRecord.RelativePath);
+                Directory.CreateDirectory(Path.GetDirectoryName(validationCandidatePath) ?? validationSourceRoot);
+                File.Copy(overlayRecord.StagedFilePath, validationCandidatePath, overwrite: true);
+            }
 
             ProcessResult build = RunProcess(
                 "dotnet",
@@ -82,10 +106,10 @@ public sealed class PreMergeValidationService
                 Diagnostics = errorDiagnostics,
                 ValidationWorkspacePath = validationWorkspaceRoot,
                 Message = build.TimedOut
-                    ? "Pre-merge full solution build timed out."
+                    ? CreateValidationMessage("timed out", overlayRecords.Length)
                     : failed
-                        ? "Pre-merge full solution build failed."
-                        : "Pre-merge full solution build passed."
+                        ? CreateValidationMessage("failed", overlayRecords.Length)
+                        : CreateValidationMessage("passed", overlayRecords.Length)
             };
         }
         catch (Exception ex)
@@ -97,9 +121,66 @@ public sealed class PreMergeValidationService
                 DiagnosticCount = 1,
                 Diagnostics = [ex.Message],
                 ValidationWorkspacePath = validationWorkspaceRoot,
-                Message = "Pre-merge full solution build failed."
+                Message = CreateValidationMessage("failed", overlayRecords.Length)
             };
         }
+    }
+
+    private static StagedEditRecord[] NormalizeOverlayRecords(
+        StagedEditRecord currentRecord,
+        IReadOnlyList<StagedEditRecord> stagedOverlayRecords)
+    {
+        Dictionary<string, StagedEditRecord> recordsByPath = new(StringComparer.OrdinalIgnoreCase);
+        foreach (StagedEditRecord overlayRecord in stagedOverlayRecords)
+        {
+            if (!string.IsNullOrWhiteSpace(overlayRecord.WatchedFilePath))
+            {
+                recordsByPath[Path.GetFullPath(overlayRecord.WatchedFilePath)] = overlayRecord;
+            }
+        }
+
+        recordsByPath[Path.GetFullPath(currentRecord.WatchedFilePath)] = currentRecord;
+        return recordsByPath.Values
+            .OrderBy(overlayRecord => overlayRecord.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static PreMergeValidationResult? ValidateStagedRecordHash(StagedEditRecord record)
+    {
+        if (!File.Exists(record.StagedFilePath))
+        {
+            return new PreMergeValidationResult
+            {
+                Status = "missing-staged-file",
+                IsError = true,
+                Message = "Validation failed because a staged overlay file is missing."
+            };
+        }
+
+        string currentStagedHash = FileHash.Compute(record.StagedFilePath);
+        if (!currentStagedHash.Equals(record.StagedHash, StringComparison.OrdinalIgnoreCase))
+        {
+            return new PreMergeValidationResult
+            {
+                Status = "staged-hash-mismatch",
+                IsError = true,
+                DiagnosticCount = 1,
+                Diagnostics = ["A staged overlay file changed after staging. Edit the Working file and run edit stage again."],
+                Message = "Validation failed because a staged overlay file no longer matches its recorded hash."
+            };
+        }
+
+        return null;
+    }
+
+    private static string CreateValidationMessage(string outcome, int overlayFileCount)
+    {
+        if (overlayFileCount <= 1)
+        {
+            return $"Pre-merge single-file full solution build {outcome}.";
+        }
+
+        return $"Pre-merge session overlay full solution build {outcome} with {overlayFileCount} staged files.";
     }
 
     private static ExternalValidationInputs CollectExternalValidationInputs(string sourceRoot, IReadOnlyList<string> excludedRoots)

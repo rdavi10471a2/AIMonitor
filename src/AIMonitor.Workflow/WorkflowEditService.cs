@@ -255,14 +255,18 @@ public sealed class WorkflowEditService
         return GetStatus(fullWatchedPath);
     }
 
-    public EditSessionStatus WriteWorkingCandidate(string watchedFilePath, string content, string? manifestJson = null)
+    public EditSessionStatus WriteWorkingCandidate(
+        string watchedFilePath,
+        string content,
+        string? manifestJson = null,
+        bool validateOverlay = true)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
         using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
         EditSessionManifest manifest = LoadManifest(fullWatchedPath)
             ?? throw new InvalidOperationException("No edit session exists for this file. Run edit refresh first.");
         EnsureSessionCanEdit(manifest);
-        return WriteCandidateContent(fullWatchedPath, manifest, content, manifestJson);
+        return WriteCandidateContent(fullWatchedPath, manifest, content, manifestJson, validateOverlay);
     }
 
     public ReplaceTextResult ReplaceText(
@@ -272,7 +276,8 @@ public sealed class WorkflowEditService
         int? expectedMatches = null,
         string? expectedWorkingHash = null,
         int? occurrenceIndex = null,
-        string? manifestJson = null)
+        string? manifestJson = null,
+        bool validateOverlay = true)
     {
         if (string.IsNullOrEmpty(oldText))
         {
@@ -321,7 +326,7 @@ public sealed class WorkflowEditService
         string updatedText = occurrenceIndex.HasValue
             ? ReplaceOccurrence(workingText, textToFind, normalizedNewText, occurrenceIndex.Value)
             : workingText.Replace(textToFind, normalizedNewText, StringComparison.Ordinal);
-        EditSessionStatus updatedStatus = WriteCandidateContent(fullWatchedPath, manifest, updatedText, manifestJson);
+        EditSessionStatus updatedStatus = WriteCandidateContent(fullWatchedPath, manifest, updatedText, manifestJson, validateOverlay);
         return new ReplaceTextResult
         {
             WatchedFilePath = fullWatchedPath,
@@ -395,7 +400,8 @@ public sealed class WorkflowEditService
         string? expectedWorkingHash = null,
         string? expectedOldTextHash = null,
         string? expectedOldText = null,
-        string? manifestJson = null)
+        string? manifestJson = null,
+        bool validateOverlay = true)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
         using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
@@ -430,10 +436,14 @@ public sealed class WorkflowEditService
 
         string lineEnding = DetectDominantLineEnding(text);
         string updatedText = text[..startIndex] + NormalizeLineEndingsForFile(newText, lineEnding) + text[endIndex..];
-        return WriteCandidateContent(fullWatchedPath, manifest, updatedText, manifestJson);
+        return WriteCandidateContent(fullWatchedPath, manifest, updatedText, manifestJson, validateOverlay);
     }
 
-    public EditSessionStatus SubmitFile(string watchedFilePath, string content, string? manifestJson = null)
+    public EditSessionStatus SubmitFile(
+        string watchedFilePath,
+        string content,
+        string? manifestJson = null,
+        bool validateOverlay = true)
     {
         string fullWatchedPath = Path.GetFullPath(watchedFilePath);
         using IDisposable manifestLock = AcquireManifestLock(fullWatchedPath);
@@ -481,14 +491,15 @@ public sealed class WorkflowEditService
         }
 
         EnsureSessionCanEdit(manifest);
-        return WriteCandidateContent(fullWatchedPath, manifest, content, manifestJson);
+        return WriteCandidateContent(fullWatchedPath, manifest, content, manifestJson, validateOverlay);
     }
 
     private EditSessionStatus WriteCandidateContent(
         string fullWatchedPath,
         EditSessionManifest manifest,
         string content,
-        string? manifestJson)
+        string? manifestJson,
+        bool validateOverlay)
     {
         EditSyntaxValidationResult syntaxValidation = editValidator.ValidateSyntaxIfCSharp(fullWatchedPath, content);
         if (syntaxValidation.HasErrors)
@@ -507,9 +518,9 @@ public sealed class WorkflowEditService
             : DetectDominantLineEnding(existingText);
         File.WriteAllText(manifest.WorkingFilePath, NormalizeLineEndingsForFile(content, lineEnding));
 
-        EditOverlayValidationResult overlayValidation = editValidator.ValidateCandidateOverlayCompilation(
-            manifest,
-            manifest.WorkingFilePath);
+        EditOverlayValidationResult overlayValidation = validateOverlay
+            ? editValidator.ValidateCandidateOverlayCompilation(manifest, manifest.WorkingFilePath)
+            : new EditOverlayValidationResult("planned-overlay-pending", false, 0, 0, []);
         manifest.OperationCount++;
         manifest.ManifestJson = manifestJson ?? string.Empty;
         manifest.LastSyntaxValidation = syntaxValidation;

@@ -10,6 +10,7 @@ Use when a C# task mentions symbols, references, callers, implementations, diagn
 - Start broad, then narrow: symbol search, type overview, references/callers/impact.
 - Apply this per target file or edit cycle. Do not shortcut with "I already discovered this earlier" when the target file or coupled edit set changes.
 - Treat empty `find_indexed_references` / `find_indexed_callers` as a result to verify, not proof of absence, before API renames or signature changes.
+- **Razor markup fallback:** when you are hunting for a usage in Razor and the index returns nothing — especially in **markup** (component bindings like `@bind-Value`, markup `@expression`s, event handlers) rather than `@code`/`.razor.cs` — fall back to **text/grep search against the `.razor` files**. Markup-binding references (`razor-generated:*`) are **environment-dependent**: they only index when the MSBuildWorkspace host Roslyn matches the registered SDK's Razor generator, so they may simply be absent on a given machine (see `../findings/RazorGeneratedReferencesEnvironment-2026-06-08.md`). The `@code` / `.razor.cs` C# path (`razor:*`) is reliable; the markup path is not. Do not conclude a markup symbol is unused from an empty index result — grep the markup.
 - Before writing a call site to a referenced type, load that type's real callable surface with `find_indexed_symbols`, `get_source_map`, or `get_symbol`.
 - For a **member**, query `find_indexed_symbols` with the qualified `Type.Member` text (or pass `containingType`) instead of the bare member name. The bare name substring-matches every homonym (e.g. `DatabaseId` resolves on 10 types, `GetByIdAsync` on 8), fanning out a large response; the qualified form binds to the one declaring type. This is a deliberate token optimization — prefer it for member navigation.
 - `find_indexed_references` returns the **lean** shape by default (omits `projectPath` and `fileContentHash` per row) to cut MCP token cost; pass `responseShape: "rich"` only when you actually need those fields. Lean is the right default for navigation.
@@ -50,7 +51,12 @@ Reach for these before re-grepping the extractor (`src/AIMonitor.MSBuild/MSBuild
 - **`ContainingType` is fully-qualified** (`SymbolDisplayFormat.CSharpErrorMessageFormat`), e.g.
   `WinFormsSample.Repositories.OrderRepository`.
 - **Razor `ReferenceKind`** is `"razor:" + node.Kind()` (e.g. `razor:InvocationExpression`); the ref's `FilePath`
-  ends with the `.razor` file. One `@code` block can emit several razor refs.
+  ends with the `.razor` file. One `@code` block can emit several razor refs. The `razor:*` rows (from the in-memory
+  `RazorProjectEngine` / `.razor.cs` code-behind) are reliable. The `razor-generated:*` rows (markup expressions and
+  component bindings, from the Roslyn source-generated Razor tree) are **environment-dependent** — absent when the
+  workspace host Roslyn is older than the registered SDK's Razor generator (a silent generator skip). Treat their
+  absence as expected, not a regression, and grep the markup when you need markup usages (see the Razor markup
+  fallback rule above and `../findings/RazorGeneratedReferencesEnvironment-2026-06-08.md`).
 - **Symbol-present does NOT imply references-extracted.** If a method body fails to bind (e.g. a missing `using`),
   `GetReferencedSymbol` returns null and **no call sites are emitted for that body** even though the symbol still
   indexes. Always assert call sites explicitly; never infer extraction completeness from symbol presence.

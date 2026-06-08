@@ -11,17 +11,20 @@ The active safety mechanism is monitor-owned Working files, pre-merge validation
 - Reason in the cloud; compose locally. Use source-map selectors and AIMonitor edit tools to describe the intended edit, then let local tooling splice/stage the candidate.
 - Use the Solution Index MCP surface for cheap project context before body reads: `get_solution_index_tree`, `query_solution_index`, `find_indexed_symbols`, `get_indexed_symbol`, `find_indexed_references`, `find_indexed_callers`, and `find_indexed_relationships`.
 - If the target file is already known, call `query_solution_index(scope: "file", value: "<relative path>")` first and use the returned symbol row's `StableSymbolKey`. Do not manually compose stable keys.
+- Before changing, removing, renaming, moving, or changing the signature/visibility of a C# symbol, perform a blast-radius check with references, callers, relationships, and one cross-check signal. Put every discovered affected watched file in the session plan before composing candidates.
 - Use the smallest safe edit unit: symbol edit before whole-file replacement.
 - Diff stability depends on complete local edit context. Use source-map/symbol views for semantic C# edits, the full Working file for text/whole-file edits, or bounded exact replacements constrained by the smallest safe edit rule, before staging.
 - For any file at or above 32KB in a cold session, call `refresh_file` and chunk-read the returned Working file path. Do not use `get_file` for that cold-session entry.
 - For warm-session text edits, do not re-read the file. Use the text already in context with `replace_text_in_file` and `expectedMatches: 1`, or `replace_span_in_file` when exact bounds are already known.
 - Stage candidates, let AIMonitor run pre-merge validation, then use Operator review.
+- If overlay/pre-merge validation fails, first try to fix the candidate or add the missed dependent file. If the agent believes the failure is false, stale, or otherwise not actionable, explain the evidence and ask the operator before using force validation or another override path.
 - For coupled multi-file C# edits, keep every required file in one monitor session and review the files deliberately as a
-  chain. Current pre-merge validation is per staged candidate; first-class all-files-at-once overlay validation is still
-  future work.
+  chain. Stage-readiness validation runs before WinMerge launch; the full staged overlay build runs before the terminal
+  planned decision completes and before accepted planned files are treated as index-fresh.
 - Record the Operator decision with `record_diff_decision`.
-- After each accepted `record_diff_decision`, check the returned `IndexRefresh` status. Accepted decisions refresh the
-  monitor-owned solution index immediately; do not assume a separate batch rebuild for a multi-file session.
+- After each accepted `record_diff_decision`, check the returned `IndexRefresh` status. In planned sessions, early accepted
+  decisions can return `deferred`; the terminal accepted planned decision runs the full staged overlay build and refreshes
+  the monitor-owned solution index for the accepted planned set.
 - Stop on `dirty-unexpected`; recovery is explicit refresh/rebase/restage or Operator reconcile.
 - A Working candidate persists across sessions when the watched-source baseline hash is unchanged. If the first edit in a new pass inherits prior in-progress candidate content, either continue deliberately or discard the Working mirror/state before starting a clean test.
 - Cached source-map or solution-index selectors are advisory only. Before `submit_symbol`, `remove_symbol`, or related submit/remove operations, refresh the file selector map with live `get_source_map(scope: "file", mode: "selector")` or verify the file with `check_file_hash`, then call `get_symbol`.
@@ -59,7 +62,7 @@ find_file, unless the full path was returned by a Roslyn or Monitor tool in this
 get_solution_index_tree for project orientation, or query_solution_index for folder/namespace/file slices
 query_solution_index(scope: "file", value: path) when the file is already known; use returned StableSymbolKey
 find_indexed_symbols / get_indexed_symbol for target declarations
-find_indexed_references / find_indexed_callers before changing public or shared APIs
+find_indexed_references / find_indexed_callers before changing, removing, renaming, moving, or changing signature/visibility of symbols
 find_indexed_relationships when partials, inheritance, overrides, or interface implementations may affect the edit
 get_source_map(scope: "file", mode: "selector")
 get_symbol for the smallest needed body
@@ -75,16 +78,15 @@ check IndexRefresh status before doing more index-dependent work
 For multi-file work:
 
 ```text
-start_monitor_session
-compose Working candidate A with sessionId
+start_monitor_session(filesPlanned: [...]) with the planned watched file set, even for one-file edits
+compose Working candidate A with sessionId on every mutation call
 stage_candidate_for_review for file A with sessionId
-compose Working candidate B with sessionId
+compose Working candidate B with sessionId on every mutation call
 stage_candidate_for_review for file B with sessionId
-pre-merge validation checks the staged candidate before WinMerge
-launch/review file A
-record decision for file A
-launch/review file B
-record decision for file B
+launch_staged_diff for file A; planned launch checks staged overlay readiness
+launch_staged_diff for file B before recording decisions
+record decision for file A; early accepted decisions may return deferred IndexRefresh
+record decision for file B; terminal accepted-overlay build must pass before final accept/index refresh
 check each accepted decision's IndexRefresh status before doing index-dependent follow-up
 ```
 

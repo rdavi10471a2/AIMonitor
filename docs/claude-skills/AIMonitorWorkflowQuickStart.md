@@ -43,19 +43,20 @@ get_symbol(symbolSelectorJson)
 submit_symbol(path, symbolSelectorJson, replacement)
 ```
 
-The index is a broad discovery surface. Source maps and symbols are the precise edit surface for C# member/type surgery.
+The index is a broad discovery surface. Source maps and symbols are the precise edit surface for C# member/type surgery. Before changing, removing, renaming, moving, or changing the signature/visibility of any symbol, perform a blast-radius check with indexed references/callers/relationships plus one cross-check signal. Declare every affected watched file in `start_monitor_session` before editing. Pre-merge validation is the guardrail for missed impact, not the discovery step.
 
 ## Existing File Edit
 
 ```text
-start_monitor_session
+start_monitor_session(filesPlanned: [...]) with the planned watched file set, even for one-file edits
 refresh_file(sourceFilePath, sessionId)
-edit only the returned Working candidate using MCP tools
+edit only the returned Working candidate using MCP tools, passing the same sessionId to every mutation tool
 stage_candidate_for_review(path, sessionId)
-launch_staged_diff(stagedRecordId)
+launch_staged_diff(stagedRecordId) for every planned staged record before recording decisions
 operator reviews/saves in WinMerge
 record_diff_decision(stagedRecordId, "accepted", expectedStagedHash)
 refresh_file before another edit to the same watched file
+ask the user whether to run `dotnet build` for the watched solution
 ```
 
 Safe editing tools include:
@@ -75,13 +76,14 @@ Do not edit watched source directly. Do not edit staged runtime files. After sta
 ## New File Edit
 
 ```text
-start_monitor_session
+start_monitor_session(filesPlanned: [...]) with the planned watched file set
 new_file(sourceFilePath, sessionId)
 submit_file(path, content, sessionId)
 stage_candidate_for_review(path, sessionId)
-launch_staged_diff(stagedRecordId)
+launch_staged_diff(stagedRecordId) for every planned staged record before recording decisions
 operator creates/saves watched file in WinMerge
 record_diff_decision(stagedRecordId, "accepted", expectedStagedHash)
+ask the user whether to run `dotnet build` for the watched solution
 ```
 
 Rejected new-file decisions leave watched source absent.
@@ -94,4 +96,6 @@ Rejected new-file decisions leave watched source absent.
 - `Yes Launch`: WinMerge opens despite failed validation; only record `accepted` if the operator deliberately saved the candidate into watched source.
 - No dialog available: ask the operator in chat before using `forceValidation`.
 
-Accepted or accepted-normalized decisions rebuild the solution index and return `indexRefresh`. Check that status before relying on fresh index rows.
+For planned sessions, `launch_staged_diff` confirms staged overlay readiness before WinMerge. Launch/review every planned staged record before recording decisions. The full planned staged overlay build runs at the terminal planned accepted decision before the accepted set is treated as final and before post-accept index refresh proceeds.
+
+Accepted or accepted-normalized decisions return `indexRefresh`. In planned sessions, early accepts can defer refresh until the terminal accepted decision. Check that status before relying on fresh index rows.

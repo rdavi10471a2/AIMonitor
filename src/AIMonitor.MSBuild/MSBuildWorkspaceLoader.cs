@@ -32,26 +32,125 @@ public sealed class MSBuildWorkspaceLoader
 
     private static bool registrationAttempted;
 
+    public MSBuildWorkspaceLoader()
+    {
+    }
+
     public async Task<MSBuildSolutionSnapshot> OpenSolutionAsync(
         string solutionPath,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<string, long, IReadOnlyDictionary<string, string>>? timingSink = null)
     {
         EnsureMSBuildRegistered();
-
-        using MSBuildWorkspace workspace = MSBuildWorkspace.Create();
-        Solution solution = await workspace.OpenSolutionAsync(solutionPath, cancellationToken: cancellationToken);
-        return await CreateSnapshotAsync(solutionPath, solution, workspace.Diagnostics, cancellationToken);
+        using (MSBuildWorkspace workspace = MSBuildWorkspace.Create())
+        {
+            Solution solution = await MeasureAsync(
+                "msbuild.open-solution",
+                timingSink,
+                new Dictionary<string, string>
+                {
+                    ["inputPath"] = Path.GetFullPath(solutionPath)
+                },
+                () => workspace.OpenSolutionAsync(solutionPath, cancellationToken: cancellationToken));
+            return await CreateSnapshotAsync(solutionPath, solution, workspace.Diagnostics, cancellationToken, timingSink);
+        }
     }
 
     public async Task<MSBuildSolutionSnapshot> OpenProjectAsync(
         string projectPath,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<string, long, IReadOnlyDictionary<string, string>>? timingSink = null)
+    {
+        EnsureMSBuildRegistered();
+        using (MSBuildWorkspace workspace = MSBuildWorkspace.Create())
+        {
+            Microsoft.CodeAnalysis.Project project = await MeasureAsync(
+                "msbuild.open-project",
+                timingSink,
+                new Dictionary<string, string>
+                {
+                    ["projectPath"] = Path.GetFullPath(projectPath)
+                },
+                () => workspace.OpenProjectAsync(projectPath, cancellationToken: cancellationToken));
+            return await CreateSnapshotAsync(projectPath, project.Solution, workspace.Diagnostics, cancellationToken, timingSink);
+        }
+    }
+
+    public async Task<MSBuildProjectFileSnapshot> OpenProjectFilesAsync(
+        string projectPath,
+        IReadOnlyList<string> filePaths,
+        IReadOnlyDictionary<string, MSBuildSymbolSnapshot> existingSymbolsByIdentity,
+        CancellationToken cancellationToken = default,
+        Action<string, long, IReadOnlyDictionary<string, string>>? timingSink = null)
     {
         EnsureMSBuildRegistered();
 
-        using MSBuildWorkspace workspace = MSBuildWorkspace.Create();
-        Microsoft.CodeAnalysis.Project project = await workspace.OpenProjectAsync(projectPath, cancellationToken: cancellationToken);
-        return await CreateSnapshotAsync(projectPath, project.Solution, workspace.Diagnostics, cancellationToken);
+        string normalizedProjectPath = Path.GetFullPath(projectPath);
+        string[] normalizedFilePaths = filePaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (normalizedFilePaths.Length == 0)
+        {
+            throw new ArgumentException("At least one file path is required.", nameof(filePaths));
+        }
+
+        using (MSBuildWorkspace workspace = MSBuildWorkspace.Create())
+        {
+            Microsoft.CodeAnalysis.Project project = await MeasureAsync(
+                "msbuild.open-project",
+                timingSink,
+                new Dictionary<string, string>
+                {
+                    ["projectPath"] = normalizedProjectPath
+                },
+                () => workspace.OpenProjectAsync(normalizedProjectPath, cancellationToken: cancellationToken));
+            HashSet<string> fileSet = normalizedFilePaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            Solution refreshedSolution = await RefreshProjectDocumentsFromDiskAsync(
+                project.Solution,
+                project,
+                fileSet,
+                cancellationToken);
+            project = refreshedSolution.GetProject(project.Id)
+                ?? throw new InvalidOperationException("MSBuild project disappeared after refreshing source text: " + normalizedProjectPath);
+            return await CreateProjectFileSnapshotAsync(
+                normalizedProjectPath,
+                project,
+                workspace.Diagnostics,
+                normalizedFilePaths,
+                existingSymbolsByIdentity,
+                cancellationToken,
+                timingSink);
+        }
+    }
+
+    private static async Task<Solution> RefreshProjectDocumentsFromDiskAsync(
+        Solution solution,
+        Microsoft.CodeAnalysis.Project project,
+        IReadOnlySet<string>? includedFilePaths,
+        CancellationToken cancellationToken)
+    {
+        foreach (Document document in project.Documents.Where(IsIndexableDocument).ToArray())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string? filePath = document.FilePath;
+            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+            {
+                continue;
+            }
+
+            string normalizedFilePath = Path.GetFullPath(filePath);
+            if (includedFilePaths is not null && !includedFilePaths.Contains(normalizedFilePath))
+            {
+                continue;
+            }
+
+            string text = await File.ReadAllTextAsync(normalizedFilePath, cancellationToken);
+            solution = solution.WithDocumentText(document.Id, SourceText.From(text), PreservationMode.PreserveValue);
+        }
+
+        return solution;
     }
 
     private static void EnsureMSBuildRegistered()
@@ -75,7 +174,8 @@ public sealed class MSBuildWorkspaceLoader
         string inputPath,
         Solution solution,
         IEnumerable<WorkspaceDiagnostic> diagnostics,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<string, long, IReadOnlyDictionary<string, string>>? timingSink = null)
     {
         Microsoft.CodeAnalysis.Project[] orderedRoslynProjects = solution.Projects
             .OrderBy(project => project.FilePath, StringComparer.OrdinalIgnoreCase)
@@ -89,31 +189,48 @@ public sealed class MSBuildWorkspaceLoader
         foreach (Microsoft.CodeAnalysis.Project project in orderedRoslynProjects)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Compilation? compilation = await project.GetCompilationAsync(cancellationToken);
+            Dictionary<string, string> projectTimingProperties = CreateProjectTimingProperties(project);
+            Compilation? compilation = await MeasureAsync(
+                "msbuild.solution.get-compilation-in-memory",
+                timingSink,
+                projectTimingProperties,
+                () => project.GetCompilationAsync(cancellationToken));
             compilations[project.Id] = compilation;
 
             MSBuildEvaluatedProject evaluatedProject = MSBuildEvaluatedProject.Empty;
             if (!string.IsNullOrWhiteSpace(project.FilePath) && File.Exists(project.FilePath))
             {
-                evaluatedProject = MSBuildEvaluatedProject.Load(project.FilePath);
+                evaluatedProject = Measure(
+                    "msbuild.solution.evaluate-project",
+                    timingSink,
+                    projectTimingProperties,
+                    () => MSBuildEvaluatedProject.Load(project.FilePath));
             }
 
             evaluatedProjects[project.Id] = evaluatedProject;
             ProjectSymbolIndex symbolIndex = compilation is null
                 ? ProjectSymbolIndex.Empty
-                : await ProjectSymbolIndex.BuildDeclarationsAsync(project, compilation, cancellationToken);
+                : await MeasureAsync(
+                    "msbuild.solution.build-declarations",
+                    timingSink,
+                    projectTimingProperties,
+                    () => ProjectSymbolIndex.BuildDeclarationsAsync(project, compilation, cancellationToken));
             IReadOnlyList<RazorDocumentIndex> razorDocuments = RazorDocumentIndex.BuildForProject(
                 project,
                 evaluatedProject.RazorLikeFiles);
             razorDocumentsByProject[project.Id] = razorDocuments;
             if (compilation is not null && razorDocuments.Count > 0)
             {
-                symbolIndex = await ProjectSymbolIndex.BuildRazorDeclarationsAsync(
-                    project,
-                    compilation,
-                    symbolIndex,
-                    razorDocuments,
-                    cancellationToken);
+                symbolIndex = await MeasureAsync(
+                    "msbuild.solution.build-razor-declarations",
+                    timingSink,
+                    projectTimingProperties,
+                    () => ProjectSymbolIndex.BuildRazorDeclarationsAsync(
+                        project,
+                        compilation,
+                        symbolIndex,
+                        razorDocuments,
+                        cancellationToken));
             }
 
             symbolIndexes[project.Id] = symbolIndex;
@@ -131,13 +248,17 @@ public sealed class MSBuildWorkspaceLoader
                 continue;
             }
 
-            symbolIndexes[project.Id] = await ProjectSymbolIndex.BuildReferencesAsync(
-                project,
-                compilation,
-                symbolIndexes[project.Id],
-                razorDocumentsByProject[project.Id],
-                solutionSymbolsByIdentity,
-                cancellationToken);
+            symbolIndexes[project.Id] = await MeasureAsync(
+                "msbuild.solution.build-references",
+                timingSink,
+                CreateProjectTimingProperties(project),
+                () => ProjectSymbolIndex.BuildReferencesAsync(
+                    project,
+                    compilation,
+                    symbolIndexes[project.Id],
+                    razorDocumentsByProject[project.Id],
+                    solutionSymbolsByIdentity,
+                    cancellationToken));
         }
 
         List<MSBuildProjectSnapshot> projects = [];
@@ -210,6 +331,157 @@ public sealed class MSBuildWorkspaceLoader
             Path.GetFullPath(inputPath),
             orderedProjects,
             diagnosticMessages);
+    }
+
+    private static async Task<MSBuildProjectFileSnapshot> CreateProjectFileSnapshotAsync(
+        string projectPath,
+        Microsoft.CodeAnalysis.Project project,
+        IEnumerable<WorkspaceDiagnostic> diagnostics,
+        IReadOnlyList<string> normalizedFilePaths,
+        IReadOnlyDictionary<string, MSBuildSymbolSnapshot> existingSymbolsByIdentity,
+        CancellationToken cancellationToken,
+        Action<string, long, IReadOnlyDictionary<string, string>>? timingSink = null)
+    {
+        Dictionary<string, string> timingProperties = CreateProjectFileTimingProperties(project, normalizedFilePaths);
+        Compilation? compilation = await MeasureAsync(
+            "msbuild.file.get-compilation-in-memory",
+            timingSink,
+            timingProperties,
+            () => project.GetCompilationAsync(cancellationToken));
+        if (compilation is null)
+        {
+            throw new InvalidOperationException("MSBuild did not return a compilation for project: " + projectPath);
+        }
+
+        MSBuildEvaluatedProject evaluatedProject = MSBuildEvaluatedProject.Empty;
+        if (!string.IsNullOrWhiteSpace(project.FilePath) && File.Exists(project.FilePath))
+        {
+            evaluatedProject = Measure(
+                "msbuild.file.evaluate-project",
+                timingSink,
+                timingProperties,
+                () => MSBuildEvaluatedProject.Load(project.FilePath));
+        }
+
+        IReadOnlyList<RazorDocumentIndex> razorDocuments = RazorDocumentIndex.BuildForProject(
+            project,
+            evaluatedProject.RazorLikeFiles);
+        ProjectSymbolIndex declarations = await MeasureAsync(
+            "msbuild.file.build-declarations",
+            timingSink,
+            timingProperties,
+            () => ProjectSymbolIndex.BuildDeclarationsAsync(
+                project,
+                compilation,
+                cancellationToken));
+        if (razorDocuments.Count > 0)
+        {
+            declarations = await MeasureAsync(
+                "msbuild.file.build-razor-declarations",
+                timingSink,
+                timingProperties,
+                () => ProjectSymbolIndex.BuildRazorDeclarationsAsync(
+                    project,
+                    compilation,
+                    declarations,
+                    razorDocuments,
+                    cancellationToken));
+        }
+
+        Dictionary<string, MSBuildSymbolSnapshot> symbolsByIdentity = new(existingSymbolsByIdentity, StringComparer.Ordinal);
+        foreach ((string identity, MSBuildSymbolSnapshot symbol) in declarations.SymbolsByIdentity)
+        {
+            symbolsByIdentity[identity] = symbol;
+        }
+
+        ProjectSymbolIndex index = await MeasureAsync(
+            "msbuild.file.build-references",
+            timingSink,
+            timingProperties,
+            () => ProjectSymbolIndex.BuildReferencesAsync(
+                project,
+                compilation,
+                declarations,
+                razorDocuments,
+                symbolsByIdentity,
+                cancellationToken));
+        string stableProjectKey = StableIdentifier.FromParts(
+            "project",
+            project.FilePath ?? string.Empty,
+            project.Language,
+            evaluatedProject.TargetFramework,
+            evaluatedProject.TargetFrameworks);
+        MSBuildDocumentSnapshot[] documents = project.Documents
+            .Where(IsIndexableDocument)
+            .Select(document => new MSBuildDocumentSnapshot(
+                StableIdentifier.FromParts("document", stableProjectKey, document.FilePath ?? string.Empty),
+                document.Name,
+                document.FilePath ?? string.Empty,
+                document.Folders.ToArray(),
+                ComputeFileHash(document.FilePath)))
+            .Concat(razorDocuments.Select(document => new MSBuildDocumentSnapshot(
+                StableIdentifier.FromParts("document", stableProjectKey, document.FilePath),
+                Path.GetFileName(document.FilePath),
+                document.FilePath,
+                GetDocumentFolders(project.FilePath, document.FilePath),
+                ComputeFileHash(document.FilePath))))
+            .OrderBy(document => document.FilePath, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        string[] diagnosticMessages = diagnostics
+            .Select(diagnostic => diagnostic.Message)
+            .Where(message => !string.IsNullOrWhiteSpace(message))
+            .ToArray();
+        return new MSBuildProjectFileSnapshot(
+            Path.GetFullPath(project.FilePath ?? projectPath),
+            documents,
+            index.Symbols,
+            index.References,
+            diagnosticMessages);
+    }
+
+    private static async Task<T> MeasureAsync<T>(
+        string phase,
+        Action<string, long, IReadOnlyDictionary<string, string>>? timingSink,
+        IReadOnlyDictionary<string, string> properties,
+        Func<Task<T>> action)
+    {
+        System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        T result = await action();
+        stopwatch.Stop();
+        timingSink?.Invoke(phase, stopwatch.ElapsedMilliseconds, properties);
+        return result;
+    }
+
+    private static T Measure<T>(
+        string phase,
+        Action<string, long, IReadOnlyDictionary<string, string>>? timingSink,
+        IReadOnlyDictionary<string, string> properties,
+        Func<T> action)
+    {
+        System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        T result = action();
+        stopwatch.Stop();
+        timingSink?.Invoke(phase, stopwatch.ElapsedMilliseconds, properties);
+        return result;
+    }
+
+    private static Dictionary<string, string> CreateProjectTimingProperties(Microsoft.CodeAnalysis.Project project)
+    {
+        return new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["projectPath"] = project.FilePath ?? string.Empty,
+            ["projectName"] = project.Name
+        };
+    }
+
+    private static Dictionary<string, string> CreateProjectFileTimingProperties(
+        Microsoft.CodeAnalysis.Project project,
+        IReadOnlyList<string> normalizedFilePaths)
+    {
+        Dictionary<string, string> properties = CreateProjectTimingProperties(project);
+        properties["fileCount"] = normalizedFilePaths.Count.ToString();
+        properties["filePaths"] = string.Join(";", normalizedFilePaths);
+        return properties;
     }
 
     internal static bool IsIndexableDocument(Document document)
@@ -306,6 +578,13 @@ public sealed record MSBuildProjectSnapshot(
     IReadOnlyList<MSBuildFrameworkReferenceSnapshot> FrameworkReferences,
     IReadOnlyList<MSBuildGlobalUsingSnapshot> GlobalUsings,
     IReadOnlyList<string> PreprocessorSymbols);
+
+public sealed record MSBuildProjectFileSnapshot(
+    string ProjectPath,
+    IReadOnlyList<MSBuildDocumentSnapshot> Documents,
+    IReadOnlyList<MSBuildSymbolSnapshot> Symbols,
+    IReadOnlyList<MSBuildReferenceSnapshot> References,
+    IReadOnlyList<string> Diagnostics);
 
 public sealed record MSBuildDocumentSnapshot(
     string StableDocumentKey,
@@ -539,7 +818,7 @@ internal sealed class ProjectSymbolIndex
         Dictionary<string, ISymbol> declaredSymbolsByIdentity = new(StringComparer.Ordinal);
         List<MSBuildSymbolSnapshot> symbolSnapshots = [];
         HashSet<string> stableSymbolKeys = new(StringComparer.Ordinal);
-        foreach (Document document in project.Documents.Where(MSBuildWorkspaceLoader.IsIndexableDocument))
+        foreach (Document document in GetIndexableDocuments(project, includedFilePaths: null))
         {
             SyntaxTree? tree = await document.GetSyntaxTreeAsync(cancellationToken);
             if (tree is null)
@@ -706,6 +985,21 @@ internal sealed class ProjectSymbolIndex
                 .ToArray(),
             declarations.SymbolsByIdentity,
             declarations.DeclaredSymbolsByIdentity);
+    }
+
+    private static IEnumerable<Document> GetIndexableDocuments(
+        Microsoft.CodeAnalysis.Project project,
+        IReadOnlySet<string>? includedFilePaths)
+    {
+        IEnumerable<Document> documents = project.Documents.Where(MSBuildWorkspaceLoader.IsIndexableDocument);
+        if (includedFilePaths is null)
+        {
+            return documents;
+        }
+
+        return documents.Where(document =>
+            !string.IsNullOrWhiteSpace(document.FilePath)
+            && includedFilePaths.Contains(Path.GetFullPath(document.FilePath)));
     }
 
     private static void AddRazorReferences(
