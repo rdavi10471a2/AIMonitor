@@ -133,3 +133,59 @@ if (useFileRefresh)
 ### Skill instruction (agent behavior — the documented gap)
 
 Add to the planning/blast-radius skill: *before finalizing the plan, run `find_indexed_references` on each symbol you intend to change; if referencing sites exist in other projects, (a) add any file you must edit to `filesPlanned`, and (b) know the engine will refresh those dependent projects' index rows via the closure.* The tool to do this already exists; the instruction to do it at plan time does not.
+
+---
+
+## All suggested fixes — implementation checklist
+
+Code sketches are illustrative (exact signatures to be confirmed against the branch); file locations are precise.
+
+### HIGH
+- **#1 Cross-project cascade** — see the detailed section above (plan-time inbound-reference closure, index-authoritative; guard in `PostAcceptIndexRefreshService`; FK-cascade backstop in `SolutionIndexStore.ReplaceProjectFiles`; two-project test).
+
+### MED
+- **Overlay fidelity (keep GATE 2 post-merge on the real tree).** Pick one:
+  - **(A) High-fidelity predictor:** in `src/AIMonitor.Runtime/StagedDiffLaunchWorkflow.cs`, when deferred *and all planned files are staged*, call the full overlay build instead of the hash-only check:
+    ```csharp
+    PreMergeValidationResult validation = deferBuildValidationUntilAccept
+        ? validationService.Validate(settings, record, stagedOverlayRecords) // full overlay build (was ValidateStagedOverlay, hash-only)
+        : validationService.Validate(settings, record, stagedOverlayRecords);
+    ```
+    Keeps the terminal real-tree build as the authoritative confirm → **2 builds/batch**, faithful prediction.
+  - **(B) Cheap + safe-fail:** keep the semantic GATE 1, but make a terminal `GATE 2` failure loud and **flag a session abandoned after merges** so the operator knows GATE 2 never ran. Accepts rare post-merge surprises (recoverable via VCS).
+- **Launch lockout/deadlock** — `src/AIMonitor.McpServer/Program.cs` `ShouldDeferBuildValidationUntilAccept`: treat already-decided planned files as satisfied; require an *active* staged record only for files **not yet decided**:
+  ```csharp
+  bool everyPlannedFileReady = plannedFiles.All(f =>
+      IsDecided(sessionRecords, f) ||                 // accepted/rejected already → satisfied
+      HasActiveStagedRecord(sessionRecords, f));      // else must be staged & undecided
+  ```
+- **"Scoped" is a whole-project rebuild; dead file-scoped overloads** — `src/AIMonitor.MSBuild/MSBuildWorkspaceLoader.cs`: delete the never-called `BuildDeclarationsAsync(...,IReadOnlySet<string> includedFilePaths,...)`, `BuildReferencesAsync(...,IReadOnlySet<string>,...)`, and `RefreshSolutionDocumentsFromDiskAsync`, **or** add a guard test; add a doc-comment that scoped refresh is project-granular.
+- **Accepted `.razor.cs` flagged stale** — `src/AIMonitor.Indexing/PostAcceptIndexRefreshService.cs` `MarkRefreshFilesFresh`: when `useFileRefresh` rebuilt the whole owning project, mark **every** accepted session file in that project fresh, not just the Razor-filtered `filePaths` (the `.razor.cs` rows *were* reindexed by the whole-project rebuild).
+- **Terminal build has no force-override** — `src/AIMonitor.Indexing/StagedDecisionWorkflow.cs` `ValidateTerminalPlannedOverlay`: honor an operator force path like single-file launch — when `validation.IsError` and the record carries `PreMergeValidationForceApproved`, record instead of throw.
+- **Shallow safety test** — add cases (in `WorkflowEditServiceSafetyTests` or Indexing) pinning: the lockout fix (interleave launch/decide on 2 planned files), the chosen fidelity behavior, and abandonment surfacing an un-validated state.
+
+### Refresh/validate scope = affected projects only (build vs index)
+
+Intent (should be documented; it wasn't): refresh and validate only the **affected project set** — edited projects ∪ their inbound dependents (the closure) — not the whole solution.
+
+- **Build (GATE 2):** MSBuild does affected-only **for free if built in place** on the real tree — its incremental up-to-date check rebuilds only changed projects + their dependents and skips the rest. MSBuild's incremental "affected" = changed + dependents = the **same direction** as the closure. The current `PreMergeValidationService.Validate` builds a **fresh copy** each run, which has no prior `obj/bin` and therefore **can't be incremental → full rebuild** (the compile-storm). Fix: build the real tree in place (post-merge GATE 2), or explicitly target the affected projects, so incrementality kicks in.
+- **Index refresh:** no automatic incrementality (MSBuildWorkspace/Roslyn load + extract). Scope re-extraction to the closure explicitly — that's HIGH #1.
+
+### Skills (the "explain why" gap)
+In `docs/claude-skills/AIMonitorWorkflowQuickStart.md`, `SessionOverlayValidation.md`, `SystemMonitorStaging.md`, `docs/system-memory/README.md`: document the scoped-refresh rationale + `refreshMode`, the `InboundReferencingProjects` closure, `SetMonitorSessionEditPlan`, the silent solution-fallback (a "rebuilt" status may have fallen back), and the **verbatim-merge rule** (no hand-editing in WinMerge — it breaks overlay≡watched). Also fold the two-gate model + GATE 1 noise classes from `docs/PlannedSessionEditFlow.md` into the skill.
+
+### Host contracts — `CLAUDE.md` / `AGENTS.md` (MED — they're the first thing an agent reads)
+
+The branch left **`CLAUDE.md` untouched** and added only **one unrelated line to `AGENTS.md`**, so both top-level host contracts still describe the pre-planned-session workflow and now misdirect agents. Required edits:
+
+**`CLAUDE.md` — "Watched-Source Safety" steps + the pre-merge paragraph:**
+1. Step 1 "Start or reuse the intended monitor session" → **"Start a *planned* session: `start_monitor_session` with `filesPlanned` listing every file you intend to change — required before any `refresh_file`/`new_file`/edit; mutations to unplanned files are rejected."**
+2. Add a planning sub-step: **"While planning, run `find_indexed_references` on each symbol you'll change; add any cross-project consumer you must edit to `filesPlanned`. The engine refreshes dependent projects' index rows via the inbound-reference closure."**
+3. Reconcile line 58 (`"If pre-merge validation fails, launch_staged_diff must not be treated as a warning…"`) with the **two-gate model**: GATE 1 (overlay semantic compile, pre-merge) is a *predictor that can be noisy* (Razor / duplicate-inclusion false positives) — a failing overlay is operator judgment and **may be merged anyway**; GATE 2 (full `dotnet build` on the real watched tree, post-accept) is the authoritative gate. The "hard-stop, not a warning" language should attach to GATE 2 / genuine breaks, not to noisy overlay errors.
+4. Add the **verbatim-merge rule**: "Merge the staged bytes verbatim in WinMerge — do not hand-edit during merge; the overlay's validity only transfers to watched source if watched ends up byte-equal to the staged candidate."
+
+**`AGENTS.md` — mirror in Codex/CLI vocabulary** (keep host-specific names per the CLAUDE.md "do not mix host names" rule). The existing AGENTS.md line still says `edit launch-diff` "must run the full pre-merge validation gate before WinMerge … the user must explicitly approve the validation override dialog" — the old single-gate model. **Resolve the cross-adapter inconsistency the review found:** planned sessions + deferred/two-gate validation are currently **MCP-only**; the CLI keeps build-at-launch with no planned requirement. So either (a) AGENTS.md must state plainly that the CLI path is build-at-launch / no planned sessions (so Codex doesn't assume parity), or (b) the CLI gains planned-session + closure parity and AGENTS.md documents it the same as CLAUDE.md. Pick one and make it explicit — today the two contracts silently describe different engines.
+
+### LOW / NIT
+- Remove the dead `using AIMonitor.App.Controls;` in `src/AIMonitor.App/Program.cs`.
+- Optional: deterministic tie-break for identical-tick staged-record timestamps (practically unreachable; superseding prevents two active records per path).
