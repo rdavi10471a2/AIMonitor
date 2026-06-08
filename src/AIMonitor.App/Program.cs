@@ -1,5 +1,7 @@
 namespace AIMonitor.App;
 
+using AIMonitor.App.Controls;
+
 static class Program
 {
     /// <summary>
@@ -11,6 +13,7 @@ static class Program
         // To customize application configuration such as set high DPI settings or default font,
         // see https://aka.ms/applicationconfiguration.
         ApplicationConfiguration.Initialize();
-        Application.Run(new Form1(AppStartupOptions.Parse(args)));
-    }    
+        AppStartupOptions options = AppStartupOptions.Parse(args);
+        Application.Run(new Form1(options));
+    }
 }

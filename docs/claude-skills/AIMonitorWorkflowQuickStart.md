@@ -48,7 +48,7 @@ The index is a broad discovery surface. Source maps and symbols are the precise 
 ## Existing File Edit
 
 ```text
-start_monitor_session
+ start_monitor_session with the planned watched file set, even for one-file edits
 refresh_file(sourceFilePath, sessionId)
 edit only the returned Working candidate using MCP tools
 stage_candidate_for_review(path, sessionId)
@@ -56,6 +56,7 @@ launch_staged_diff(stagedRecordId)
 operator reviews/saves in WinMerge
 record_diff_decision(stagedRecordId, "accepted", expectedStagedHash)
 refresh_file before another edit to the same watched file
+ask the user whether to run `dotnet build` for the watched solution
 ```
 
 Safe editing tools include:
@@ -75,13 +76,14 @@ Do not edit watched source directly. Do not edit staged runtime files. After sta
 ## New File Edit
 
 ```text
-start_monitor_session
+ start_monitor_session with the planned watched file set
 new_file(sourceFilePath, sessionId)
 submit_file(path, content, sessionId)
 stage_candidate_for_review(path, sessionId)
 launch_staged_diff(stagedRecordId)
 operator creates/saves watched file in WinMerge
 record_diff_decision(stagedRecordId, "accepted", expectedStagedHash)
+ask the user whether to run `dotnet build` for the watched solution
 ```
 
 Rejected new-file decisions leave watched source absent.

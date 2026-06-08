@@ -9,7 +9,7 @@ Compose and stage every coupled file in the same monitor session before the firs
 ## Flow
 
 ```text
-start_monitor_session
+start_monitor_session with every planned watched file in the coupled edit
 compose Working candidate A with sessionId
 stage_candidate_for_review for file A with sessionId
 compose Working candidate B with sessionId

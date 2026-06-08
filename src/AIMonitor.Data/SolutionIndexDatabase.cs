@@ -106,11 +106,15 @@ public sealed class SolutionIndexDatabase
         AddColumnIfMissing(connection, transaction, "symbols", "is_override", "integer not null default 0");
         AddColumnIfMissing(connection, transaction, "symbols", "method_kind", "text not null default ''");
 
+        DropSymbolDependentTableIfMissingCascade(connection, transaction, "symbol_relationships");
+        DropSymbolDependentTableIfMissingCascade(connection, transaction, "call_sites");
+        DropSymbolDependentTableIfMissingCascade(connection, transaction, "symbol_references");
+
         Execute(connection, transaction, """
             create table if not exists symbol_references (
                 id integer primary key autoincrement,
                 project_id integer not null references projects(id) on delete cascade,
-                target_stable_key text not null,
+                target_stable_key text not null references symbols(stable_key) on delete cascade,
                 file_path text not null,
                 line integer not null,
                 column integer not null,
@@ -123,10 +127,10 @@ public sealed class SolutionIndexDatabase
             create table if not exists call_sites (
                 id integer primary key autoincrement,
                 project_id integer not null references projects(id) on delete cascade,
-                caller_stable_key text not null,
+                caller_stable_key text not null references symbols(stable_key) on delete cascade,
                 caller_name text not null,
                 caller_kind text not null,
-                target_stable_key text not null,
+                target_stable_key text not null references symbols(stable_key) on delete cascade,
                 file_path text not null,
                 line integer not null,
                 column integer not null,
@@ -139,10 +143,10 @@ public sealed class SolutionIndexDatabase
             create table if not exists symbol_relationships (
                 id integer primary key autoincrement,
                 project_id integer not null references projects(id) on delete cascade,
-                source_stable_key text not null,
+                source_stable_key text not null references symbols(stable_key) on delete cascade,
                 source_name text not null,
                 source_kind text not null,
-                target_stable_key text not null,
+                target_stable_key text not null references symbols(stable_key) on delete cascade,
                 target_name text not null,
                 target_kind text not null,
                 relationship_kind text not null,
@@ -198,19 +202,28 @@ public sealed class SolutionIndexDatabase
 
         Execute(connection, transaction, "create index if not exists idx_projects_path on projects(project_path);");
         Execute(connection, transaction, "create index if not exists idx_projects_stable_key on projects(stable_key);");
+        Execute(connection, transaction, "create index if not exists idx_documents_project_id on documents(project_id);");
         Execute(connection, transaction, "create index if not exists idx_documents_file on documents(file_path);");
         Execute(connection, transaction, "create index if not exists idx_documents_stable_key on documents(stable_key);");
+        Execute(connection, transaction, "create index if not exists idx_symbols_project_id on symbols(project_id);");
         Execute(connection, transaction, "create index if not exists idx_symbols_name on symbols(name);");
         Execute(connection, transaction, "create index if not exists idx_symbols_file on symbols(file_path);");
+        Execute(connection, transaction, "create index if not exists idx_symbol_references_project_id on symbol_references(project_id);");
         Execute(connection, transaction, "create index if not exists idx_symbol_references_target on symbol_references(target_stable_key);");
         Execute(connection, transaction, "create index if not exists idx_symbol_references_file on symbol_references(file_path);");
+        Execute(connection, transaction, "create index if not exists idx_call_sites_project_id on call_sites(project_id);");
         Execute(connection, transaction, "create index if not exists idx_call_sites_target on call_sites(target_stable_key);");
         Execute(connection, transaction, "create index if not exists idx_call_sites_caller on call_sites(caller_stable_key);");
+        Execute(connection, transaction, "create index if not exists idx_symbol_relationships_project_id on symbol_relationships(project_id);");
         Execute(connection, transaction, "create index if not exists idx_symbol_relationships_target on symbol_relationships(target_stable_key);");
         Execute(connection, transaction, "create index if not exists idx_symbol_relationships_source on symbol_relationships(source_stable_key);");
+        Execute(connection, transaction, "create index if not exists idx_project_references_project_id on project_references(project_id);");
         Execute(connection, transaction, "create index if not exists idx_project_references_full_path on project_references(full_path);");
+        Execute(connection, transaction, "create index if not exists idx_package_references_project_id on package_references(project_id);");
         Execute(connection, transaction, "create index if not exists idx_package_references_include on package_references(include);");
+        Execute(connection, transaction, "create index if not exists idx_framework_references_project_id on framework_references(project_id);");
         Execute(connection, transaction, "create index if not exists idx_framework_references_include on framework_references(include);");
+        Execute(connection, transaction, "create index if not exists idx_global_usings_project_id on global_usings(project_id);");
         Execute(connection, transaction, "create index if not exists idx_global_usings_include on global_usings(include);");
 
         transaction.Commit();
@@ -244,5 +257,47 @@ public sealed class SolutionIndexDatabase
         }
 
         Execute(connection, transaction, $"alter table {tableName} add column {columnName} {definition};");
+    }
+
+    private static void DropSymbolDependentTableIfMissingCascade(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string tableName)
+    {
+        if (!TableExists(connection, transaction, tableName))
+        {
+            return;
+        }
+
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"pragma foreign_key_list({tableName});";
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            if (reader.GetString(2).Equals("symbols", StringComparison.OrdinalIgnoreCase)
+                && reader.GetString(6).Equals("CASCADE", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        Execute(connection, transaction, "drop table " + tableName + ";");
+    }
+
+    private static bool TableExists(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string tableName)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            select count(*)
+            from sqlite_master
+            where type = 'table' and name = $tableName;
+            """;
+        command.Parameters.AddWithValue("$tableName", tableName);
+        return Convert.ToInt32(command.ExecuteScalar() ?? 0) > 0;
     }
 }

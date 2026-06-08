@@ -75,7 +75,7 @@ check IndexRefresh status before doing more index-dependent work
 For multi-file work:
 
 ```text
-start_monitor_session
+start_monitor_session with the planned watched file set for the multi-file edit
 compose Working candidate A with sessionId
 stage_candidate_for_review for file A with sessionId
 compose Working candidate B with sessionId

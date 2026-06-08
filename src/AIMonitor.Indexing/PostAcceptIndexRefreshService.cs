@@ -13,39 +13,61 @@ public sealed class PostAcceptIndexRefreshService
         MonitorSettings settings,
         IMonitorLogger logger,
         StagedEditRecord record,
-        string source)
+        string source,
+        PostAcceptIndexRefreshPlan? refreshPlan = null)
     {
         Stopwatch stopwatch = Stopwatch.StartNew();
         string databasePath = MonitorDataPaths.GetDefaultIndexDatabasePath(settings);
+        string[] projectPaths = GetProjectRefreshPaths(record, refreshPlan);
+        string[] filePaths = GetFileRefreshPaths(record, refreshPlan);
+        bool useFileRefresh = projectPaths.Length == 1 && filePaths.Length > 0;
+        string refreshMode = useFileRefresh ? "file" : "solution";
         logger.Write(
             MonitorLogLevel.Information,
             source,
             "index.refresh-after-accept.started",
-            "Post-accept solution index rebuild started.",
+            useFileRefresh
+                ? "Post-accept planned file index refresh started."
+                : "Post-accept solution index rebuild started.",
             new Dictionary<string, string>
             {
                 ["stagedRecordId"] = record.StagedRecordId,
                 ["watchedFilePath"] = record.WatchedFilePath,
                 ["watchedSolutionPath"] = settings.WatchedSolutionPath,
-                ["databasePath"] = databasePath
+                ["databasePath"] = databasePath,
+                ["refreshMode"] = refreshMode,
+                ["projectPaths"] = string.Join(";", projectPaths),
+                ["filePaths"] = string.Join(";", filePaths)
             });
 
         try
         {
-            SolutionIndexSummary summary = new SolutionIndexRebuildService().RebuildAsync(settings).GetAwaiter().GetResult();
+            Action<string, long, IReadOnlyDictionary<string, string>> timingSink = CreateTimingSink(
+                logger,
+                source,
+                record,
+                refreshMode,
+                projectPaths,
+                filePaths);
+            SolutionIndexSummary summary = useFileRefresh
+                ? new SolutionIndexRebuildService().RefreshProjectFilesAsync(settings, projectPaths[0], filePaths, timingSink: timingSink).GetAwaiter().GetResult()
+                : new SolutionIndexRebuildService().RebuildAsync(settings, timingSink: timingSink).GetAwaiter().GetResult();
             stopwatch.Stop();
             PostAcceptIndexRefreshResult result = new()
             {
                 Status = "rebuilt",
+                RefreshMode = refreshMode,
                 IsError = false,
                 DatabasePath = databasePath,
                 ProjectCount = summary.ProjectCount,
                 DocumentCount = summary.DocumentCount,
                 DiagnosticCount = summary.DiagnosticCount,
                 DurationMs = stopwatch.ElapsedMilliseconds,
-                Message = "Post-accept solution index rebuild completed."
+                Message = useFileRefresh
+                    ? "Post-accept planned file index refresh completed."
+                    : "Post-accept solution index rebuild completed."
             };
-            new WorkflowEditService(settings).MarkIndexFresh(record.WatchedFilePath);
+            MarkRefreshFilesFresh(settings, record, filePaths);
             logger.Write(
                 MonitorLogLevel.Information,
                 source,
@@ -60,16 +82,76 @@ public sealed class PostAcceptIndexRefreshService
                     ["documentCount"] = result.DocumentCount.ToString(),
                     ["diagnosticCount"] = result.DiagnosticCount.ToString(),
                     ["durationMs"] = result.DurationMs.ToString(),
-                    ["isError"] = "false"
+                    ["isError"] = "false",
+                    ["refreshMode"] = result.RefreshMode,
+                    ["projectPaths"] = string.Join(";", projectPaths),
+                    ["filePaths"] = string.Join(";", filePaths)
                 });
             return result;
         }
         catch (Exception ex)
         {
+            if (useFileRefresh)
+            {
+                try
+                {
+                    Action<string, long, IReadOnlyDictionary<string, string>> fallbackTimingSink = CreateTimingSink(
+                        logger,
+                        source,
+                        record,
+                        "solution-fallback",
+                        projectPaths,
+                        filePaths);
+                    SolutionIndexSummary fallbackSummary = new SolutionIndexRebuildService().RebuildAsync(settings, timingSink: fallbackTimingSink).GetAwaiter().GetResult();
+                    stopwatch.Stop();
+                    PostAcceptIndexRefreshResult fallbackResult = new()
+                    {
+                        Status = "rebuilt",
+                        RefreshMode = "solution-fallback",
+                        IsError = false,
+                        DatabasePath = databasePath,
+                        ProjectCount = fallbackSummary.ProjectCount,
+                        DocumentCount = fallbackSummary.DocumentCount,
+                        DiagnosticCount = fallbackSummary.DiagnosticCount,
+                        DurationMs = stopwatch.ElapsedMilliseconds,
+                        Message = "Post-accept file index refresh failed; full solution index rebuild completed."
+                    };
+                    MarkRefreshFilesFresh(settings, record, filePaths);
+                    logger.Write(
+                        MonitorLogLevel.Information,
+                        source,
+                        "index.refresh-after-accept.completed",
+                        fallbackResult.Message,
+                        new Dictionary<string, string>
+                        {
+                            ["stagedRecordId"] = record.StagedRecordId,
+                            ["watchedFilePath"] = record.WatchedFilePath,
+                            ["databasePath"] = databasePath,
+                            ["projectCount"] = fallbackResult.ProjectCount.ToString(),
+                            ["documentCount"] = fallbackResult.DocumentCount.ToString(),
+                            ["diagnosticCount"] = fallbackResult.DiagnosticCount.ToString(),
+                            ["durationMs"] = fallbackResult.DurationMs.ToString(),
+                            ["isError"] = "false",
+                            ["refreshMode"] = fallbackResult.RefreshMode,
+                            ["projectPaths"] = string.Join(";", projectPaths),
+                            ["filePaths"] = string.Join(";", filePaths),
+                            ["refreshError"] = ex.Message
+                        });
+                    return fallbackResult;
+                }
+                catch (Exception fallbackEx)
+                {
+                    ex = new InvalidOperationException(
+                        "File index refresh failed, and the full solution fallback also failed: " + fallbackEx.Message,
+                        fallbackEx);
+                }
+            }
+
             stopwatch.Stop();
             PostAcceptIndexRefreshResult result = new()
             {
                 Status = "failed",
+                RefreshMode = refreshMode,
                 IsError = true,
                 DatabasePath = databasePath,
                 DurationMs = stopwatch.ElapsedMilliseconds,
@@ -87,9 +169,124 @@ public sealed class PostAcceptIndexRefreshService
                     ["databasePath"] = databasePath,
                     ["durationMs"] = result.DurationMs.ToString(),
                     ["isError"] = "true",
+                    ["refreshMode"] = result.RefreshMode,
+                    ["projectPaths"] = string.Join(";", projectPaths),
+                    ["filePaths"] = string.Join(";", filePaths),
                     ["error"] = ex.Message
                 });
             return result;
         }
+    }
+
+    public static PostAcceptIndexRefreshResult DeferredUntilPlannedFilesComplete()
+    {
+        return new PostAcceptIndexRefreshResult
+        {
+            Status = "deferred",
+            RefreshMode = "session-deferred",
+            Message = "Index refresh deferred until all planned session edit files have terminal decisions."
+        };
+    }
+
+    private static string[] GetProjectRefreshPaths(
+        StagedEditRecord record,
+        PostAcceptIndexRefreshPlan? refreshPlan)
+    {
+        if (!IsSafeFileScopedRefresh(record))
+        {
+            return [];
+        }
+
+        return refreshPlan?.OwningProjectPaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(Path.GetFullPath)
+            .Where(File.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray() ?? [];
+    }
+
+    private static string[] GetFileRefreshPaths(
+        StagedEditRecord record,
+        PostAcceptIndexRefreshPlan? refreshPlan)
+    {
+        if (!IsSafeFileScopedRefresh(record))
+        {
+            return [];
+        }
+
+        return refreshPlan?.ChangedFilePaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(Path.GetFullPath)
+            .Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !RazorLikePath(path))
+            .Where(File.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray() ?? [];
+    }
+
+    private static bool IsSafeFileScopedRefresh(StagedEditRecord record)
+    {
+        string extension = Path.GetExtension(record.WatchedFilePath);
+        return extension.Equals(".cs", StringComparison.OrdinalIgnoreCase)
+            && !RazorLikePath(record.WatchedFilePath)
+            && !Path.GetFileName(record.WatchedFilePath).Equals("Directory.Build.props", StringComparison.OrdinalIgnoreCase)
+            && !Path.GetFileName(record.WatchedFilePath).Equals("Directory.Build.targets", StringComparison.OrdinalIgnoreCase)
+            && !Path.GetFileName(record.WatchedFilePath).Equals("Directory.Packages.props", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool RazorLikePath(string path)
+    {
+        string fileName = Path.GetFileName(path);
+        return fileName.EndsWith(".razor.cs", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".cshtml.cs", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void MarkRefreshFilesFresh(
+        MonitorSettings settings,
+        StagedEditRecord record,
+        IReadOnlyList<string> filePaths)
+    {
+        WorkflowEditService workflowService = new(settings);
+        string[] paths = filePaths.Count == 0
+            ? [record.WatchedFilePath]
+            : filePaths.ToArray();
+        foreach (string path in paths)
+        {
+            workflowService.MarkIndexFresh(path);
+        }
+    }
+
+    private static Action<string, long, IReadOnlyDictionary<string, string>> CreateTimingSink(
+        IMonitorLogger logger,
+        string source,
+        StagedEditRecord record,
+        string refreshMode,
+        IReadOnlyList<string> projectPaths,
+        IReadOnlyList<string> filePaths)
+    {
+        return (phase, durationMs, properties) =>
+        {
+            Dictionary<string, string> logProperties = new(StringComparer.Ordinal)
+            {
+                ["stagedRecordId"] = record.StagedRecordId,
+                ["watchedFilePath"] = record.WatchedFilePath,
+                ["refreshMode"] = refreshMode,
+                ["phase"] = phase,
+                ["durationMs"] = durationMs.ToString(),
+                ["projectPaths"] = string.Join(";", projectPaths),
+                ["filePaths"] = string.Join(";", filePaths)
+            };
+            foreach (KeyValuePair<string, string> property in properties)
+            {
+                logProperties[property.Key] = property.Value;
+            }
+
+            logger.Write(
+                MonitorLogLevel.Information,
+                source,
+                "index.refresh-after-accept.phase",
+                "Post-accept index refresh phase completed.",
+                logProperties);
+        };
     }
 }

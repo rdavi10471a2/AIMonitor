@@ -39,7 +39,7 @@ get_staging_guide
 
 ```text
 AIMonitor solution-index/source-map discovery
-start_monitor_session for coupled work
+start_monitor_session with the planned watched file set for coupled work
 refresh_file/new_file into monitor-owned Working candidates
 use get_source_map/get_symbol/submit_symbol or typed edit tools
 stage all coupled candidates with the same sessionId

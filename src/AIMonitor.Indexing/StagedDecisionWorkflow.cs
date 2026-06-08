@@ -14,6 +14,8 @@ public sealed class StagedDecisionWorkflow
         string decision,
         string? expectedStagedHash,
         string source,
+        bool deferIndexRefresh = false,
+        PostAcceptIndexRefreshPlan? refreshPlan = null,
         bool verbose = false)
     {
         StagedEditRecord existing = workflowService.GetStagedRecord(stagedRecordId);
@@ -23,11 +25,23 @@ public sealed class StagedDecisionWorkflow
         PostAcceptIndexRefreshResult? indexRefresh = null;
         if (record.Classification is "accepted" or "accepted-normalized")
         {
+            indexRefresh = deferIndexRefresh
+                ? PostAcceptIndexRefreshService.DeferredUntilPlannedFilesComplete()
+                : new PostAcceptIndexRefreshService().RebuildAfterAcceptedDecision(
+                    settings,
+                    logger,
+                    record,
+                    source,
+                    refreshPlan);
+        }
+        else if (!deferIndexRefresh && refreshPlan is not null && refreshPlan.ChangedFilePaths.Count > 0)
+        {
             indexRefresh = new PostAcceptIndexRefreshService().RebuildAfterAcceptedDecision(
                 settings,
                 logger,
                 record,
-                source);
+                source,
+                refreshPlan);
         }
 
         StagedEditSummary summary = workflowService.CreateSummary(record);
@@ -53,6 +67,11 @@ public sealed class StagedDecisionWorkflow
         if (indexRefresh?.IsError == true)
         {
             return "Accept recorded, but the index rebuild failed. Index rows are stale. Re-run refresh_solution_index before trusting index queries.";
+        }
+
+        if (indexRefresh?.Status.Equals("deferred", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return "Decision recorded. Index refresh is deferred until all declared session edit files are decided.";
         }
 
         return record.Classification is "accepted" or "accepted-normalized"
