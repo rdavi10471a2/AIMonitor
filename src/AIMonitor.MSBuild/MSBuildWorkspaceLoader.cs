@@ -125,19 +125,6 @@ public sealed class MSBuildWorkspaceLoader
         }
     }
 
-    private static async Task<Solution> RefreshSolutionDocumentsFromDiskAsync(
-        Solution solution,
-        CancellationToken cancellationToken)
-    {
-        foreach (Microsoft.CodeAnalysis.Project project in solution.Projects.ToArray())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            solution = await RefreshProjectDocumentsFromDiskAsync(solution, project, includedFilePaths: null, cancellationToken);
-        }
-
-        return solution;
-    }
-
     private static async Task<Solution> RefreshProjectDocumentsFromDiskAsync(
         Solution solution,
         Microsoft.CodeAnalysis.Project project,
@@ -826,21 +813,12 @@ internal sealed class ProjectSymbolIndex
         Compilation compilation,
         CancellationToken cancellationToken)
     {
-        return await BuildDeclarationsAsync(project, compilation, null, cancellationToken);
-    }
-
-    public static async Task<ProjectSymbolIndex> BuildDeclarationsAsync(
-        Microsoft.CodeAnalysis.Project project,
-        Compilation compilation,
-        IReadOnlySet<string>? includedFilePaths,
-        CancellationToken cancellationToken)
-    {
         Dictionary<ISymbol, MSBuildSymbolSnapshot> declared = new(SymbolEqualityComparer.Default);
         Dictionary<string, MSBuildSymbolSnapshot> declaredByIdentity = new(StringComparer.Ordinal);
         Dictionary<string, ISymbol> declaredSymbolsByIdentity = new(StringComparer.Ordinal);
         List<MSBuildSymbolSnapshot> symbolSnapshots = [];
         HashSet<string> stableSymbolKeys = new(StringComparer.Ordinal);
-        foreach (Document document in GetIndexableDocuments(project, includedFilePaths))
+        foreach (Document document in GetIndexableDocuments(project, includedFilePaths: null))
         {
             SyntaxTree? tree = await document.GetSyntaxTreeAsync(cancellationToken);
             if (tree is null)
@@ -997,58 +975,6 @@ internal sealed class ProjectSymbolIndex
                 references,
                 referenceIdentities,
                 cancellationToken);
-        }
-
-        return new ProjectSymbolIndex(
-            declarations.Symbols,
-            references.OrderBy(reference => reference.FilePath, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(reference => reference.Line)
-                .ThenBy(reference => reference.Column)
-                .ToArray(),
-            declarations.SymbolsByIdentity,
-            declarations.DeclaredSymbolsByIdentity);
-    }
-
-    public static async Task<ProjectSymbolIndex> BuildReferencesAsync(
-        Microsoft.CodeAnalysis.Project project,
-        Compilation compilation,
-        ProjectSymbolIndex declarations,
-        IReadOnlySet<string> includedFilePaths,
-        IReadOnlyDictionary<string, MSBuildSymbolSnapshot> solutionSymbolsByIdentity,
-        CancellationToken cancellationToken)
-    {
-        List<MSBuildReferenceSnapshot> references = [];
-        HashSet<string> referenceIdentities = new(StringComparer.Ordinal);
-        AddRelationshipReferences(declarations, solutionSymbolsByIdentity, references, referenceIdentities);
-        foreach (Document document in GetIndexableDocuments(project, includedFilePaths))
-        {
-            SyntaxTree? tree = await document.GetSyntaxTreeAsync(cancellationToken);
-            if (tree is null)
-            {
-                continue;
-            }
-
-            SemanticModel model = compilation.GetSemanticModel(tree);
-            SyntaxNode root = await tree.GetRootAsync(cancellationToken);
-            foreach (SyntaxNode node in root.DescendantNodes().Where(node => IsReferenceCandidate(node) && !IsNestedDuplicateReferenceCandidate(node)))
-            {
-                ISymbol? target = GetReferencedSymbol(model, node, cancellationToken);
-                if (target is null || !TryGetSourceSymbol(target, solutionSymbolsByIdentity, out MSBuildSymbolSnapshot? targetSnapshot))
-                {
-                    continue;
-                }
-
-                FileLinePositionSpan span = tree.GetLineSpan(GetReferenceSpan(node), cancellationToken);
-                AddReference(
-                    references,
-                    referenceIdentities,
-                    targetSnapshot!,
-                    document.FilePath ?? string.Empty,
-                    span.StartLinePosition.Line + 1,
-                    span.StartLinePosition.Character + 1,
-                    GetReferenceKind(node, target),
-                    node.ToString());
-            }
         }
 
         return new ProjectSymbolIndex(

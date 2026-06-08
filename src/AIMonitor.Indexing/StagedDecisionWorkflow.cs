@@ -90,8 +90,11 @@ public sealed class StagedDecisionWorkflow
             settings,
             currentRecord,
             terminalValidationRecords);
-        if (validation.IsError)
+        if (validation.IsError && !currentRecord.PreMergeValidationForceApproved)
         {
+            // Parity with the single-file launch gate (WorkflowEditService accept check): a failed pre-merge build is a
+            // hard stop UNLESS the operator explicitly approved the override before launch. When force-approved, the
+            // failure is recorded (carried on the returned result) rather than thrown so the terminal decision can proceed.
             throw new InvalidOperationException(
                 "Terminal planned pre-merge validation failed before recording the final session decision: "
                 + validation.Message);

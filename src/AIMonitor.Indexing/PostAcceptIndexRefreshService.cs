@@ -89,7 +89,7 @@ public sealed class PostAcceptIndexRefreshService
                     ? "Post-accept planned project index refresh completed."
                     : "Post-accept solution index rebuild completed."
             };
-            MarkRefreshFilesFresh(settings, record, filePaths);
+            MarkRefreshFilesFresh(settings, record, filePaths, rebuiltWholeProjectOrSolution: useFileRefresh, refreshPlan);
             logger.Write(
                 MonitorLogLevel.Information,
                 source,
@@ -138,7 +138,8 @@ public sealed class PostAcceptIndexRefreshService
                         DurationMs = stopwatch.ElapsedMilliseconds,
                         Message = "Post-accept project index refresh failed; full solution index rebuild completed."
                     };
-                    MarkRefreshFilesFresh(settings, record, filePaths);
+                    // Solution fallback rebuilt the entire solution, so every accepted session file is fresh.
+                    MarkRefreshFilesFresh(settings, record, filePaths, rebuiltWholeProjectOrSolution: true, refreshPlan);
                     logger.Write(
                         MonitorLogLevel.Information,
                         source,
@@ -266,16 +267,50 @@ public sealed class PostAcceptIndexRefreshService
     private static void MarkRefreshFilesFresh(
         MonitorSettings settings,
         StagedEditRecord record,
-        IReadOnlyList<string> filePaths)
+        IReadOnlyList<string> filePaths,
+        bool rebuiltWholeProjectOrSolution,
+        PostAcceptIndexRefreshPlan? refreshPlan)
     {
         WorkflowEditService workflowService = new(settings);
-        string[] paths = filePaths.Count == 0
-            ? [record.WatchedFilePath]
-            : filePaths.ToArray();
-        foreach (string path in paths)
+        foreach (string path in GetFilesToMarkFresh(record, filePaths, rebuiltWholeProjectOrSolution, refreshPlan))
         {
             workflowService.MarkIndexFresh(path);
         }
+    }
+
+    private static IReadOnlyList<string> GetFilesToMarkFresh(
+        StagedEditRecord record,
+        IReadOnlyList<string> filePaths,
+        bool rebuiltWholeProjectOrSolution,
+        PostAcceptIndexRefreshPlan? refreshPlan)
+    {
+        // A project-scoped refresh rebuilds the ENTIRE owning project (and the solution fallback rebuilds everything),
+        // so every accepted session file in that scope was reindexed — including the .razor.cs / .cshtml.cs siblings
+        // that GetFileRefreshPaths filters out of the cheap-path file list. Mark all of those fresh too, not just the
+        // Razor-filtered .cs subset, otherwise an accepted .razor.cs is left flagged stale despite being reindexed.
+        if (rebuiltWholeProjectOrSolution && refreshPlan is not null)
+        {
+            HashSet<string> paths = new(StringComparer.OrdinalIgnoreCase);
+            foreach (string changed in refreshPlan.ChangedFilePaths)
+            {
+                if (!string.IsNullOrWhiteSpace(changed))
+                {
+                    paths.Add(changed);
+                }
+            }
+
+            foreach (string filtered in filePaths)
+            {
+                paths.Add(filtered);
+            }
+
+            paths.Add(record.WatchedFilePath);
+            return paths.ToArray();
+        }
+
+        return filePaths.Count == 0
+            ? [record.WatchedFilePath]
+            : filePaths.ToArray();
     }
 
     private static Action<string, long, IReadOnlyDictionary<string, string>> CreateTimingSink(

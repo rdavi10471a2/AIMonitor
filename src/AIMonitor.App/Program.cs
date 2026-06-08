@@ -1,7 +1,5 @@
 namespace AIMonitor.App;
 
-using AIMonitor.App.Controls;
-
 static class Program
 {
     /// <summary>
