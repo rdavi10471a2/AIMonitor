@@ -39,6 +39,16 @@ TERMINAL after last file decided →  ┌─────────────
 
 GATE 2 belongs after the merge by design. The flow chart above is correct.
 
+## GATE 1 is *allowed* to be noisy — that's why "merge anyway" exists
+
+GATE 1 cannot model `.razor` markup, Razor-generated code, or source generators, so some of its errors are **false positives** — e.g. a `.razor.cs` partial referencing generated members, `@inject` / `ComponentBase` plumbing, or other Razor-runtime artifacts the overlay can't see. Because GATE 1 is a **predictor, not the authority**, the workflow surfaces its result for human judgment and lets the operator **merge anyway** when the error is one of these known-noisy cases:
+
+- GATE 1 red **and clearly a real break** → replan / fix before merge.
+- GATE 1 red **but a recognizable noisy Razor/generated artifact** → operator may merge anyway.
+- GATE 1 green → proceed.
+
+In every case **GATE 2 — the full build on the real watched tree after merge — is the authoritative answer.** This is the design: GATE 1 trades fidelity for speed and is *allowed* to be noisy precisely because GATE 2 is the real check. (The same blind spot is why GATE 1 can also be falsely **green** — see below — so GATE 2 backstops the prediction in both directions.)
+
 ## The watch-item: fidelity, not placement
 
 The only real risk is **how faithfully GATE 1 predicts GATE 2.** As implemented, GATE 1 is a Roslyn **semantic** overlay — it skips `.razor` markup and runs no MSBuild, analyzers, or source/Razor generators. So GATE 1 can go **green** while the real build (GATE 2) would fail on exactly those error classes. When that happens, the operator merges on a green overlay and GATE 2 reports the failure **after** the files are on the real tree, leaving it transiently non-compiling until the operator acts.
