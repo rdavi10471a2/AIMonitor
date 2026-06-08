@@ -76,7 +76,7 @@ public sealed class SolutionIndexBuilder
             .ToDictionary(group => group.Key, group => ToSnapshot(group.First()), StringComparer.Ordinal);
         existingSymbolsStopwatch.Stop();
         timingSink?.Invoke(
-            "index.file.existing-symbols",
+            "index.project.existing-symbols",
             existingSymbolsStopwatch.ElapsedMilliseconds,
             new Dictionary<string, string>
             {
@@ -94,7 +94,7 @@ public sealed class SolutionIndexBuilder
             timingSink);
         msbuildSnapshotStopwatch.Stop();
         timingSink?.Invoke(
-            "index.file.msbuild-snapshot",
+            "index.project.msbuild-snapshot",
             msbuildSnapshotStopwatch.ElapsedMilliseconds,
             new Dictionary<string, string>
             {
@@ -116,7 +116,7 @@ public sealed class SolutionIndexBuilder
             timingSink);
         sqliteReplaceStopwatch.Stop();
         timingSink?.Invoke(
-            "index.file.sqlite-replace",
+            "index.project.sqlite-replace",
             sqliteReplaceStopwatch.ElapsedMilliseconds,
             new Dictionary<string, string>
             {

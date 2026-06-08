@@ -906,7 +906,7 @@ public sealed class AIMonitorTools
         [Description("Return the full staged record inline for debugging. Defaults to compact response.")] bool verbose = false)
     {
         runtimeState.Touch();
-        StagedDecisionIndexOptions indexOptions = BuildDecisionIndexOptions(stagedRecordId, decision);
+        PlannedSessionDecisionOptions decisionOptions = BuildPlannedSessionDecisionOptions(stagedRecordId, decision);
         return new StagedDecisionWorkflow().Record(
             settings,
             logger,
@@ -915,9 +915,10 @@ public sealed class AIMonitorTools
             decision,
             expectedStagedHash,
             "AIMonitor.McpServer",
-            indexOptions.DeferIndexRefresh,
-            indexOptions.RefreshPlan,
-            verbose);
+            decisionOptions.DeferIndexRefresh,
+            decisionOptions.RefreshPlan,
+            verbose,
+            decisionOptions.TerminalValidationRecords);
     }
 
     [McpServerTool]
@@ -1362,18 +1363,18 @@ public sealed class AIMonitorTools
         }
     }
 
-    private StagedDecisionIndexOptions BuildDecisionIndexOptions(string stagedRecordId, string requestedDecision)
+    private PlannedSessionDecisionOptions BuildPlannedSessionDecisionOptions(string stagedRecordId, string requestedDecision)
     {
         StagedEditRecord currentRecord = workflowService.GetStagedRecord(stagedRecordId);
         if (string.IsNullOrWhiteSpace(currentRecord.SessionId))
         {
-            return new StagedDecisionIndexOptions(false, null);
+            return new PlannedSessionDecisionOptions(false, null, []);
         }
 
         AIMonitorSessionEditPlan? editPlan = LoadSessionById(currentRecord.SessionId)?.EditPlan;
         if (editPlan is null || editPlan.FilesPlanned.Count == 0)
         {
-            return new StagedDecisionIndexOptions(false, null);
+            return new PlannedSessionDecisionOptions(false, null, []);
         }
 
         IReadOnlyList<StagedEditRecord> sessionRecords = workflowService.ListStagedRecords(currentRecord.SessionId);
@@ -1386,12 +1387,13 @@ public sealed class AIMonitorTools
         bool allPlannedFilesDecided = editPlan.FilesPlanned.All(file =>
             terminalPlannedPaths.Contains(Path.GetFullPath(file.SourceFilePath)));
 
+        string normalizedDecision = requestedDecision.Trim().ToLowerInvariant();
         HashSet<string> acceptedPaths = sessionRecords
             .Where(record => !record.StagedRecordId.Equals(stagedRecordId, StringComparison.Ordinal)
                 && record.Classification is "accepted" or "accepted-normalized")
             .Select(record => Path.GetFullPath(record.WatchedFilePath))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (requestedDecision.Equals("accepted", StringComparison.OrdinalIgnoreCase))
+        if (normalizedDecision.Equals("accepted", StringComparison.OrdinalIgnoreCase))
         {
             acceptedPaths.Add(Path.GetFullPath(currentRecord.WatchedFilePath));
         }
@@ -1401,7 +1403,7 @@ public sealed class AIMonitorTools
             .ToArray();
         if (acceptedPlannedFiles.Length == 0)
         {
-            return new StagedDecisionIndexOptions(false, null);
+            return new PlannedSessionDecisionOptions(false, null, []);
         }
 
         PostAcceptIndexRefreshPlan refreshPlan = new()
@@ -1409,7 +1411,16 @@ public sealed class AIMonitorTools
             ChangedFilePaths = acceptedPlannedFiles.Select(file => file.SourceFilePath).ToArray(),
             OwningProjectPaths = acceptedPlannedFiles.Select(file => file.OwningProjectPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
         };
-        return new StagedDecisionIndexOptions(!allPlannedFilesDecided, refreshPlan);
+        StagedEditRecord[] terminalValidationRecords = !allPlannedFilesDecided
+            ? []
+            : sessionRecords
+                .Append(currentRecord)
+                .Where(record => acceptedPaths.Contains(Path.GetFullPath(record.WatchedFilePath)))
+                .GroupBy(record => Path.GetFullPath(record.WatchedFilePath), StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.OrderByDescending(record => record.CreatedAtUtc, StringComparer.Ordinal).First())
+                .OrderBy(record => record.RelativePath, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        return new PlannedSessionDecisionOptions(!allPlannedFilesDecided, refreshPlan, terminalValidationRecords);
     }
 
     private bool ShouldDeferPlannedOverlayValidation(string? sessionId, string sourceFilePath)
@@ -1496,14 +1507,16 @@ public sealed class AIMonitorTools
         foreach (AIMonitorSessionPlannedFileInput input in filesPlanned)
         {
             string sourceFilePath = ResolveWatchedPath(input.SourceFilePath);
-            if (plannedFiles.Any(file => file.SourceFilePath.Equals(sourceFilePath, StringComparison.OrdinalIgnoreCase)))
+            string owningProjectPath = string.IsNullOrWhiteSpace(input.OwningProjectPath)
+                ? ResolveOwningProjectPath(sourceFilePath)
+                : Path.GetFullPath(input.OwningProjectPath);
+            if (plannedFiles.Any(file =>
+                file.SourceFilePath.Equals(sourceFilePath, StringComparison.OrdinalIgnoreCase)
+                && file.OwningProjectPath.Equals(owningProjectPath, StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
             }
 
-            string owningProjectPath = string.IsNullOrWhiteSpace(input.OwningProjectPath)
-                ? ResolveOwningProjectPath(sourceFilePath)
-                : Path.GetFullPath(input.OwningProjectPath);
             plannedFiles.Add(new AIMonitorSessionPlannedFile(
                 sourceFilePath,
                 workflowPaths.GetRelativeWatchedPath(sourceFilePath),
@@ -1781,9 +1794,10 @@ public sealed record AIMonitorSessionPlannedFileInput(
     string? Role = null,
     string? Reason = null);
 
-public sealed record StagedDecisionIndexOptions(
+public sealed record PlannedSessionDecisionOptions(
     bool DeferIndexRefresh,
-    PostAcceptIndexRefreshPlan? RefreshPlan);
+    PostAcceptIndexRefreshPlan? RefreshPlan,
+    IReadOnlyList<StagedEditRecord> TerminalValidationRecords);
 
 public sealed record AIMonitorSessionSummary(
     string SessionId,

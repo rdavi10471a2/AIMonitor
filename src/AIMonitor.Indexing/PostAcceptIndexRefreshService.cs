@@ -21,13 +21,13 @@ public sealed class PostAcceptIndexRefreshService
         string[] projectPaths = GetProjectRefreshPaths(record, refreshPlan);
         string[] filePaths = GetFileRefreshPaths(record, refreshPlan);
         bool useFileRefresh = projectPaths.Length == 1 && filePaths.Length > 0;
-        string refreshMode = useFileRefresh ? "file" : "solution";
+        string refreshMode = useFileRefresh ? "project" : "solution";
         logger.Write(
             MonitorLogLevel.Information,
             source,
             "index.refresh-after-accept.started",
             useFileRefresh
-                ? "Post-accept planned file index refresh started."
+                ? "Post-accept planned project index refresh started."
                 : "Post-accept solution index rebuild started.",
             new Dictionary<string, string>
             {
@@ -64,7 +64,7 @@ public sealed class PostAcceptIndexRefreshService
                 DiagnosticCount = summary.DiagnosticCount,
                 DurationMs = stopwatch.ElapsedMilliseconds,
                 Message = useFileRefresh
-                    ? "Post-accept planned file index refresh completed."
+                    ? "Post-accept planned project index refresh completed."
                     : "Post-accept solution index rebuild completed."
             };
             MarkRefreshFilesFresh(settings, record, filePaths);
@@ -114,7 +114,7 @@ public sealed class PostAcceptIndexRefreshService
                         DocumentCount = fallbackSummary.DocumentCount,
                         DiagnosticCount = fallbackSummary.DiagnosticCount,
                         DurationMs = stopwatch.ElapsedMilliseconds,
-                        Message = "Post-accept file index refresh failed; full solution index rebuild completed."
+                        Message = "Post-accept project index refresh failed; full solution index rebuild completed."
                     };
                     MarkRefreshFilesFresh(settings, record, filePaths);
                     logger.Write(
@@ -142,7 +142,7 @@ public sealed class PostAcceptIndexRefreshService
                 catch (Exception fallbackEx)
                 {
                     ex = new InvalidOperationException(
-                        "File index refresh failed, and the full solution fallback also failed: " + fallbackEx.Message,
+                        "Project index refresh failed, and the full solution fallback also failed: " + fallbackEx.Message,
                         fallbackEx);
                 }
             }

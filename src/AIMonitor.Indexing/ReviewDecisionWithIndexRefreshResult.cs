@@ -26,5 +26,7 @@ public sealed class ReviewDecisionWithIndexRefreshResult
 
     public PostAcceptIndexRefreshResult? IndexRefresh { get; set; }
 
+    public PreMergeValidationResult? TerminalPreMergeValidation { get; set; }
+
     public string NextStep { get; set; } = string.Empty;
 }

@@ -90,17 +90,7 @@ public sealed class SolutionIndexStore
                 ["symbolCount"] = symbols.Count.ToString(),
                 ["referenceCount"] = references.Count.ToString()
             };
-            Measure(
-                "index.sqlite.delete-project-file-rows",
-                timingSink,
-                fileProperties,
-                () =>
-                {
-                    foreach (string filePath in normalizedFilePaths)
-                    {
-                        DeleteProjectFileRows(connection, transaction, projectId, filePath);
-                    }
-                });
+            Measure("index.sqlite.delete-project-rows", timingSink, fileProperties, () => DeleteProjectRows(connection, transaction, projectId));
 
             Measure("index.sqlite.insert-documents", timingSink, fileProperties, () => InsertDocuments(connection, transaction, projectId, documents));
             Measure("index.sqlite.insert-symbols", timingSink, fileProperties, () => InsertSymbols(connection, transaction, projectId, symbols));
@@ -607,42 +597,36 @@ public sealed class SolutionIndexStore
         return Convert.ToInt64(result);
     }
 
-    private static void DeleteProjectFileRows(
+    private static void DeleteProjectRows(
         SqliteConnection connection,
         SqliteTransaction transaction,
-        long projectId,
-        string filePath)
+        long projectId)
     {
         Execute(connection, transaction, """
             delete from symbol_relationships
-            where project_id = $projectId and file_path = $filePath;
+            where project_id = $projectId;
             """,
-            ("$projectId", projectId),
-            ("$filePath", filePath));
+            ("$projectId", projectId));
         Execute(connection, transaction, """
             delete from call_sites
-            where project_id = $projectId and file_path = $filePath;
+            where project_id = $projectId;
             """,
-            ("$projectId", projectId),
-            ("$filePath", filePath));
+            ("$projectId", projectId));
         Execute(connection, transaction, """
             delete from symbol_references
-            where project_id = $projectId and file_path = $filePath;
+            where project_id = $projectId;
             """,
-            ("$projectId", projectId),
-            ("$filePath", filePath));
+            ("$projectId", projectId));
         Execute(connection, transaction, """
             delete from symbols
-            where project_id = $projectId and file_path = $filePath;
+            where project_id = $projectId;
             """,
-            ("$projectId", projectId),
-            ("$filePath", filePath));
+            ("$projectId", projectId));
         Execute(connection, transaction, """
             delete from documents
-            where project_id = $projectId and file_path = $filePath;
+            where project_id = $projectId;
             """,
-            ("$projectId", projectId),
-            ("$filePath", filePath));
+            ("$projectId", projectId));
     }
 
     private static long InsertProject(

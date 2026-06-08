@@ -43,12 +43,12 @@ get_symbol(symbolSelectorJson)
 submit_symbol(path, symbolSelectorJson, replacement)
 ```
 
-The index is a broad discovery surface. Source maps and symbols are the precise edit surface for C# member/type surgery.
+The index is a broad discovery surface. Source maps and symbols are the precise edit surface for C# member/type surgery. Before changing, removing, renaming, moving, or changing the signature/visibility of any symbol, perform a blast-radius check with indexed references/callers/relationships plus one cross-check signal. Declare every affected watched file in `start_monitor_session` before editing. Pre-merge validation is the guardrail for missed impact, not the discovery step.
 
 ## Existing File Edit
 
 ```text
- start_monitor_session with the planned watched file set, even for one-file edits
+start_monitor_session with the planned watched file set, even for one-file edits
 refresh_file(sourceFilePath, sessionId)
 edit only the returned Working candidate using MCP tools
 stage_candidate_for_review(path, sessionId)
@@ -76,7 +76,7 @@ Do not edit watched source directly. Do not edit staged runtime files. After sta
 ## New File Edit
 
 ```text
- start_monitor_session with the planned watched file set
+start_monitor_session with the planned watched file set
 new_file(sourceFilePath, sessionId)
 submit_file(path, content, sessionId)
 stage_candidate_for_review(path, sessionId)
@@ -95,5 +95,7 @@ Rejected new-file decisions leave watched source absent.
 - `Cancel`: WinMerge does not open; fix the Working candidate and stage again.
 - `Yes Launch`: WinMerge opens despite failed validation; only record `accepted` if the operator deliberately saved the candidate into watched source.
 - No dialog available: ask the operator in chat before using `forceValidation`.
+
+For planned sessions, `launch_staged_diff` confirms staged overlay readiness before WinMerge. The full planned staged overlay build runs at the terminal planned decision before the accepted set is treated as final and before post-accept index refresh proceeds.
 
 Accepted or accepted-normalized decisions rebuild the solution index and return `indexRefresh`. Check that status before relying on fresh index rows.

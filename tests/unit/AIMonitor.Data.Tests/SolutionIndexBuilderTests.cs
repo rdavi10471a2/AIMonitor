@@ -62,4 +62,94 @@ public sealed class SolutionIndexBuilderTests
         Assert.Equal("net10.0", projects[0].TargetFramework);
         Assert.Contains(documents, document => document.Name == "Program.cs");
     }
+
+    [Fact]
+    public async Task RefreshProjectFilesAsync_rebuilds_project_references_for_refreshed_file()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "AIMonitorTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string projectPath = Path.Combine(root, "CascadeFixture.csproj");
+        string providerPath = Path.Combine(root, "Provider.cs");
+        string callerPath = Path.Combine(root, "Caller.cs");
+
+        await File.WriteAllTextAsync(projectPath, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        await File.WriteAllTextAsync(providerPath, """
+            namespace CascadeFixture;
+
+            public sealed class Provider
+            {
+                public string Target()
+                {
+                    return "old";
+                }
+            }
+            """);
+
+        await File.WriteAllTextAsync(callerPath, """
+            namespace CascadeFixture;
+
+            public sealed class Caller
+            {
+                public string Use(Provider provider)
+                {
+                    return provider.Target();
+                }
+            }
+            """);
+
+        MonitorSettings settings = MonitorSettings.Create(root, projectPath);
+        string databasePath = MonitorDataPaths.GetDefaultIndexDatabasePath(settings);
+        SolutionIndexStore store = new(new SolutionIndexDatabase(databasePath));
+        SolutionIndexBuilder builder = new(new MSBuildWorkspaceLoader(), store);
+
+        await builder.RebuildAsync(settings);
+        IndexedSymbolRow oldTarget = store.ListSymbols().Single(symbol => symbol.Name == "Target" && symbol.Kind == "Method");
+
+        Assert.Contains(store.ListReferences(), reference =>
+            reference.TargetStableKey == oldTarget.StableKey
+            && reference.FilePath.Equals(callerPath, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(store.ListCallSites(), callSite =>
+            callSite.TargetStableKey == oldTarget.StableKey
+            && callSite.FilePath.Equals(callerPath, StringComparison.OrdinalIgnoreCase));
+
+        await File.WriteAllTextAsync(providerPath, """
+            namespace CascadeFixture;
+
+            public sealed class Provider
+            {
+                public string RenamedTarget()
+                {
+                    return "new";
+                }
+            }
+            """);
+
+        List<(string Phase, long DurationMs, IReadOnlyDictionary<string, string> Properties)> timings = [];
+        await builder.RefreshProjectFilesAsync(
+            settings,
+            projectPath,
+            [providerPath],
+            timingSink: (phase, durationMs, properties) =>
+            {
+                timings.Add((phase, durationMs, new Dictionary<string, string>(properties, StringComparer.Ordinal)));
+            });
+
+        Assert.DoesNotContain(store.ListSymbols(), symbol => symbol.StableKey == oldTarget.StableKey);
+        Assert.Contains(store.ListSymbols(), symbol => symbol.Name == "RenamedTarget" && symbol.Kind == "Method");
+        Assert.DoesNotContain(store.ListReferences(), reference => reference.TargetStableKey == oldTarget.StableKey);
+        Assert.DoesNotContain(store.ListCallSites(), callSite => callSite.TargetStableKey == oldTarget.StableKey);
+        Assert.Contains(timings, timing => timing.Phase == "msbuild.file.get-compilation-in-memory");
+        Assert.Contains(timings, timing => timing.Phase == "index.project.msbuild-snapshot");
+        Assert.Contains(timings, timing => timing.Phase == "index.project.sqlite-replace");
+        Assert.All(timings, timing => Assert.True(timing.DurationMs >= 0));
+    }
 }

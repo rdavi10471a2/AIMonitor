@@ -1,7 +1,9 @@
 using AIMonitor.Core;
 using AIMonitor.Data;
+using AIMonitor.Indexing;
 using AIMonitor.Logging;
 using AIMonitor.MSBuild;
+using AIMonitor.Workflow;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -53,6 +55,21 @@ internal static class Program
         if (args.Contains("--mcp-live-multi-file-session", StringComparer.OrdinalIgnoreCase))
         {
             return await RunMcpLiveMultiFileSessionAsync();
+        }
+
+        if (args.Contains("--mcp-live-human-multi-file-session", StringComparer.OrdinalIgnoreCase))
+        {
+            return await RunMcpLiveHumanMultiFileSessionAsync(args);
+        }
+
+        if (args.Contains("--mcp-live-accepted-multi-file-session", StringComparer.OrdinalIgnoreCase))
+        {
+            return await RunMcpLiveAcceptedMultiFileSessionAsync();
+        }
+
+        if (args.Contains("--mcp-live-accepted-three-file-interface-session", StringComparer.OrdinalIgnoreCase))
+        {
+            return await RunMcpLiveAcceptedThreeFileInterfaceSessionAsync();
         }
 
         if (args.Contains("--mcp-live-human-winmerge", StringComparer.OrdinalIgnoreCase))
@@ -114,6 +131,9 @@ internal static class Program
         Console.WriteLine("  --mcp-live-edit-workflow  Run file-level MCP edit calls through the stdio bridge against the monitor-owned Working copy, then reject.");
         Console.WriteLine("  --mcp-live-all-edit-tools Run non-human file and Roslyn edit tools through the stdio bridge against a monitor-owned new-file candidate, then reject.");
         Console.WriteLine("  --mcp-live-multi-file-session Run a two-file staged session through the stdio bridge, then reject both files.");
+        Console.WriteLine("  --mcp-live-human-multi-file-session [--force-validation] Stage two planned files, launch WinMerge, and print timed decision commands.");
+        Console.WriteLine("  --mcp-live-accepted-multi-file-session Stage two planned files, run non-interactive full validation, simulate accept for both files, and time the final rebuild/index refresh.");
+        Console.WriteLine("  --mcp-live-accepted-three-file-interface-session Seed a 3-file contract baseline, discover external references, rename one property across all 3 files, and time overlay plus final rebuild.");
         Console.WriteLine("  --mcp-live-human-winmerge Launch real WinMerge through the live MCP bridge and stop for human save/reject.");
         Console.WriteLine("  --mcp-live-human-existing-winmerge Launch real WinMerge for an existing-file edit through the live MCP bridge.");
         Console.WriteLine("  --mcp-live-human-member-pairs-winmerge Create an AppConfig class with paired member categories, stage, and launch WinMerge.");
@@ -680,54 +700,562 @@ internal static class Program
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
         string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
         string configurationNamespace = ResolveConfigurationNamespace(repositoryRoot, settingsPath);
-        string firstRelativePath = "AppConfig/AIMonitorBridgeMultiFileOne.cs";
-        string secondRelativePath = "AppConfig/AIMonitorBridgeMultiFileTwo.cs";
+        string marker = DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssfff");
+        string firstClassName = $"AIMonitorBridgeMultiFileOne_{marker}";
+        string secondClassName = $"AIMonitorBridgeMultiFileTwo_{marker}";
+        string firstRelativePath = $"AppConfig/{firstClassName}.cs";
+        string secondRelativePath = $"AppConfig/{secondClassName}.cs";
+        MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot, settingsPath);
+        string projectPath = Path.Combine(
+            settings.WatchedProjectFolder,
+            $"{Path.GetFileNameWithoutExtension(settings.WatchedSolutionPath)}.csproj");
+        List<(string Name, long ElapsedMilliseconds)> timings = new();
 
         await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
-        CallToolResult session = await CallAndPrintAsync(
+        CallToolResult session = await CallAndPrintTimedAsync(
+            timings,
             client,
             "start_monitor_session",
             new Dictionary<string, object?>
             {
-                ["title"] = "bridge multi-file session smoke"
+                ["purpose"] = "bridge multi-file session smoke",
+                ["filesPlanned"] = new object[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["sourceFilePath"] = firstRelativePath,
+                        ["owningProjectPath"] = projectPath,
+                        ["role"] = "new-file",
+                        ["reason"] = "First file for MCP multi-file session smoke."
+                    },
+                    new Dictionary<string, object?>
+                    {
+                        ["sourceFilePath"] = secondRelativePath,
+                        ["owningProjectPath"] = projectPath,
+                        ["role"] = "new-file",
+                        ["reason"] = "Second file for MCP multi-file session smoke."
+                    }
+                }
             });
         string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
 
-        await CreateStageAndRejectNewFileAsync(
+        CallToolResult firstSubmit = await ComposeNewFileAsync(
+            timings,
             client,
             sessionId,
             firstRelativePath,
             $$"""
             namespace {{configurationNamespace}}
             {
-                public static class AIMonitorBridgeMultiFileOne
+                public static class {{firstClassName}}
                 {
                     public static string Value => "one";
                 }
             }
             """);
-        await CreateStageAndRejectNewFileAsync(
+        AssertNestedJsonString(
+            ExtractToolText(firstSubmit),
+            ["overlayValidation", "status"],
+            "planned-overlay-pending");
+
+        CallToolResult secondSubmit = await ComposeNewFileAsync(
+            timings,
             client,
             sessionId,
             secondRelativePath,
             $$"""
             namespace {{configurationNamespace}}
             {
-                public static class AIMonitorBridgeMultiFileTwo
+                public static class {{secondClassName}}
                 {
-                    public static string Value => AIMonitorBridgeMultiFileOne.Value + ":two";
+                    public static string Value => {{firstClassName}}.Value + ":two";
                 }
             }
             """);
+        AssertNestedJsonStringIsNot(
+            ExtractToolText(secondSubmit),
+            ["overlayValidation", "status"],
+            "planned-overlay-pending");
 
-        await CallAndPrintAsync(
+        CallToolResult firstStage = await StageNewFileAsync(timings, client, sessionId, firstRelativePath);
+        CallToolResult secondStage = await StageNewFileAsync(timings, client, sessionId, secondRelativePath);
+        string firstStagedRecordId = ExtractJsonString(ExtractToolText(firstStage), "stagedRecordId");
+        string secondStagedRecordId = ExtractJsonString(ExtractToolText(secondStage), "stagedRecordId");
+
+        await CallAndPrintTimedAsync(
+            timings,
             client,
             "list_session_staged_records",
             new Dictionary<string, object?>
             {
                 ["sessionId"] = sessionId
             });
+        await RecordRejectedAsync(timings, client, firstStagedRecordId);
+        await RecordRejectedAsync(timings, client, secondStagedRecordId);
+        PrintTimings("MCP live multi-file session timings", timings);
         return 0;
+    }
+
+    private static async Task<int> RunMcpLiveHumanMultiFileSessionAsync(string[] args)
+    {
+        bool forceValidation = args.Contains("--force-validation", StringComparer.OrdinalIgnoreCase);
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
+        string configurationNamespace = ResolveConfigurationNamespace(repositoryRoot, settingsPath);
+        string marker = DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssfff");
+        string firstClassName = $"AIMonitorBridgeHumanMultiFileOne_{marker}";
+        string secondClassName = $"AIMonitorBridgeHumanMultiFileTwo_{marker}";
+        string firstRelativePath = $"AppConfig/{firstClassName}.cs";
+        string secondRelativePath = $"AppConfig/{secondClassName}.cs";
+        MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot, settingsPath);
+        string projectPath = Path.Combine(
+            settings.WatchedProjectFolder,
+            $"{Path.GetFileNameWithoutExtension(settings.WatchedSolutionPath)}.csproj");
+        List<(string Name, long ElapsedMilliseconds)> timings = new();
+
+        await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
+        CallToolResult session = await CallAndPrintTimedAsync(
+            timings,
+            client,
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["purpose"] = "bridge human multi-file WinMerge timing smoke",
+                ["filesPlanned"] = new object[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["sourceFilePath"] = firstRelativePath,
+                        ["owningProjectPath"] = projectPath,
+                        ["role"] = "new-file",
+                        ["reason"] = "First file for human MCP multi-file timing smoke."
+                    },
+                    new Dictionary<string, object?>
+                    {
+                        ["sourceFilePath"] = secondRelativePath,
+                        ["owningProjectPath"] = projectPath,
+                        ["role"] = "new-file",
+                        ["reason"] = "Second file for human MCP multi-file timing smoke."
+                    }
+                }
+            });
+        string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
+
+        CallToolResult firstSubmit = await ComposeNewFileAsync(
+            timings,
+            client,
+            sessionId,
+            firstRelativePath,
+            $$"""
+            namespace {{configurationNamespace}}
+            {
+                public static class {{firstClassName}}
+                {
+                    public static string Value => "one";
+                }
+            }
+            """);
+        AssertNestedJsonString(
+            ExtractToolText(firstSubmit),
+            ["overlayValidation", "status"],
+            "planned-overlay-pending");
+
+        CallToolResult secondSubmit = await ComposeNewFileAsync(
+            timings,
+            client,
+            sessionId,
+            secondRelativePath,
+            $$"""
+            namespace {{configurationNamespace}}
+            {
+                public static class {{secondClassName}}
+                {
+                    public static string Value => {{firstClassName}}.Value + ":two";
+                }
+            }
+            """);
+        AssertNestedJsonStringIsNot(
+            ExtractToolText(secondSubmit),
+            ["overlayValidation", "status"],
+            "planned-overlay-pending");
+
+        CallToolResult firstStage = await StageNewFileAsync(timings, client, sessionId, firstRelativePath);
+        CallToolResult secondStage = await StageNewFileAsync(timings, client, sessionId, secondRelativePath);
+        string firstStageJson = ExtractToolText(firstStage);
+        string secondStageJson = ExtractToolText(secondStage);
+        string firstStagedRecordId = ExtractJsonString(firstStageJson, "stagedRecordId");
+        string secondStagedRecordId = ExtractJsonString(secondStageJson, "stagedRecordId");
+        string firstStagedHash = ExtractJsonString(firstStageJson, "stagedHash");
+        string secondStagedHash = ExtractJsonString(secondStageJson, "stagedHash");
+
+        await CallAndPrintTimedAsync(
+            timings,
+            client,
+            "list_session_staged_records",
+            new Dictionary<string, object?>
+            {
+                ["sessionId"] = sessionId
+            });
+        CallToolResult firstLaunch = await LaunchStagedDiffAsync(timings, client, firstStagedRecordId, forceValidation);
+        CallToolResult secondLaunch = await LaunchStagedDiffAsync(timings, client, secondStagedRecordId, forceValidation);
+
+        PrintTimings("MCP live human multi-file timings before decision", timings);
+        Console.WriteLine();
+        Console.WriteLine("Human multi-file WinMerge smoke launched.");
+        Console.WriteLine($"Force validation: {forceValidation}");
+        Console.WriteLine($"Session ID: {sessionId}");
+        Console.WriteLine($"First staged record ID: {firstStagedRecordId}");
+        Console.WriteLine($"First expected staged hash: {firstStagedHash}");
+        Console.WriteLine($"Second staged record ID: {secondStagedRecordId}");
+        Console.WriteLine($"Second expected staged hash: {secondStagedHash}");
+        Console.WriteLine("After reviewing/saving in WinMerge, record accepted decisions in order with:");
+        Console.WriteLine($"dotnet .\\tests\\smoke\\AIMonitor.ToolSmokeTests\\bin\\Debug\\net10.0\\AIMonitor.ToolSmokeTests.dll --config {settingsPath} --mcp-live-record-decision --staged-record-id {firstStagedRecordId} --decision accepted --expected-staged-hash {firstStagedHash}");
+        Console.WriteLine($"dotnet .\\tests\\smoke\\AIMonitor.ToolSmokeTests\\bin\\Debug\\net10.0\\AIMonitor.ToolSmokeTests.dll --config {settingsPath} --mcp-live-record-decision --staged-record-id {secondStagedRecordId} --decision accepted --expected-staged-hash {secondStagedHash}");
+        Console.WriteLine("Or reject with:");
+        Console.WriteLine($"dotnet .\\tests\\smoke\\AIMonitor.ToolSmokeTests\\bin\\Debug\\net10.0\\AIMonitor.ToolSmokeTests.dll --config {settingsPath} --mcp-live-record-decision --staged-record-id {firstStagedRecordId} --decision rejected");
+        Console.WriteLine($"dotnet .\\tests\\smoke\\AIMonitor.ToolSmokeTests\\bin\\Debug\\net10.0\\AIMonitor.ToolSmokeTests.dll --config {settingsPath} --mcp-live-record-decision --staged-record-id {secondStagedRecordId} --decision rejected");
+        Console.WriteLine();
+        Console.WriteLine("First launch response:");
+        Console.WriteLine(ExtractToolText(firstLaunch));
+        Console.WriteLine();
+        Console.WriteLine("Second launch response:");
+        Console.WriteLine(ExtractToolText(secondLaunch));
+        return firstLaunch.IsError == true || secondLaunch.IsError == true ? 1 : 0;
+    }
+
+    private static async Task<int> RunMcpLiveAcceptedMultiFileSessionAsync()
+    {
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
+        string configurationNamespace = ResolveConfigurationNamespace(repositoryRoot, settingsPath);
+        string marker = DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssfff");
+        string firstClassName = $"AIMonitorBridgeAcceptedMultiFileOne_{marker}";
+        string secondClassName = $"AIMonitorBridgeAcceptedMultiFileTwo_{marker}";
+        string firstRelativePath = $"AppConfig/{firstClassName}.cs";
+        string secondRelativePath = $"AppConfig/{secondClassName}.cs";
+        MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot, settingsPath);
+        string projectPath = Path.Combine(
+            settings.WatchedProjectFolder,
+            $"{Path.GetFileNameWithoutExtension(settings.WatchedSolutionPath)}.csproj");
+        List<(string Name, long ElapsedMilliseconds)> timings = new();
+
+        await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
+        CallToolResult session = await CallAndPrintTimedAsync(
+            timings,
+            client,
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["purpose"] = "bridge accepted multi-file timing smoke",
+                ["filesPlanned"] = new object[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["sourceFilePath"] = firstRelativePath,
+                        ["owningProjectPath"] = projectPath,
+                        ["role"] = "new-file",
+                        ["reason"] = "First file for accepted MCP multi-file timing smoke."
+                    },
+                    new Dictionary<string, object?>
+                    {
+                        ["sourceFilePath"] = secondRelativePath,
+                        ["owningProjectPath"] = projectPath,
+                        ["role"] = "new-file",
+                        ["reason"] = "Second file for accepted MCP multi-file timing smoke."
+                    }
+                }
+            });
+        string sessionId = ExtractJsonString(ExtractToolText(session), "sessionId");
+
+        CallToolResult firstSubmit = await ComposeNewFileAsync(
+            timings,
+            client,
+            sessionId,
+            firstRelativePath,
+            $$"""
+            namespace {{configurationNamespace}}
+            {
+                public static class {{firstClassName}}
+                {
+                    public static string Value => "one";
+                }
+            }
+            """);
+        AssertNestedJsonString(
+            ExtractToolText(firstSubmit),
+            ["overlayValidation", "status"],
+            "planned-overlay-pending");
+
+        CallToolResult secondSubmit = await ComposeNewFileAsync(
+            timings,
+            client,
+            sessionId,
+            secondRelativePath,
+            $$"""
+            namespace {{configurationNamespace}}
+            {
+                public static class {{secondClassName}}
+                {
+                    public static string Value => {{firstClassName}}.Value + ":two";
+                }
+            }
+            """);
+        AssertNestedJsonStringIsNot(
+            ExtractToolText(secondSubmit),
+            ["overlayValidation", "status"],
+            "planned-overlay-pending");
+
+        CallToolResult firstStage = await StageNewFileAsync(timings, client, sessionId, firstRelativePath);
+        CallToolResult secondStage = await StageNewFileAsync(timings, client, sessionId, secondRelativePath);
+        string firstStagedRecordId = ExtractJsonString(ExtractToolText(firstStage), "stagedRecordId");
+        string secondStagedRecordId = ExtractJsonString(ExtractToolText(secondStage), "stagedRecordId");
+        string firstStagedHash = ExtractJsonString(ExtractToolText(firstStage), "stagedHash");
+        string secondStagedHash = ExtractJsonString(ExtractToolText(secondStage), "stagedHash");
+
+        WorkflowEditService workflowService = new(settings);
+        StagedEditRecord firstRecord = workflowService.GetStagedRecord(firstStagedRecordId);
+        StagedEditRecord secondRecord = workflowService.GetStagedRecord(secondStagedRecordId);
+        StagedEditRecord[] overlayRecords = [firstRecord, secondRecord];
+        PreMergeValidationService validationService = new();
+        Stopwatch validationStopwatch = Stopwatch.StartNew();
+        PreMergeValidationResult validation = validationService.Validate(settings, secondRecord, overlayRecords);
+        validationStopwatch.Stop();
+        timings.Add(("pre_merge_validation", validationStopwatch.ElapsedMilliseconds));
+        if (validation.IsError)
+        {
+            Console.Error.WriteLine("Accepted multi-file timing smoke validation failed.");
+            Console.Error.WriteLine(validation.Message);
+            foreach (string diagnostic in validation.Diagnostics)
+            {
+                Console.Error.WriteLine(diagnostic);
+            }
+
+            return 1;
+        }
+
+        foreach (StagedEditRecord record in overlayRecords)
+        {
+            workflowService.RecordPreMergeValidation(record.StagedRecordId, validation, forceApproved: false);
+            workflowService.PrepareReviewFileForLaunch(record.StagedRecordId);
+            Directory.CreateDirectory(Path.GetDirectoryName(record.WatchedFilePath) ?? ".");
+            File.Copy(record.StagedFilePath, record.WatchedFilePath, overwrite: true);
+            workflowService.RecordDiffLaunch(record.StagedRecordId, launched: true, "Non-interactive timing smoke simulated review launch.");
+        }
+
+        IMonitorLogger logger = CreateMonitorLogger(settings);
+        PostAcceptIndexRefreshPlan refreshPlan = new()
+        {
+            ChangedFilePaths = [firstRecord.WatchedFilePath, secondRecord.WatchedFilePath],
+            OwningProjectPaths = [projectPath]
+        };
+
+        Stopwatch firstAcceptStopwatch = Stopwatch.StartNew();
+        ReviewDecisionWithIndexRefreshResult firstAccept = new StagedDecisionWorkflow().Record(
+            settings,
+            logger,
+            workflowService,
+            firstStagedRecordId,
+            "accepted",
+            firstStagedHash,
+            "AIMonitor.ToolSmokeTests",
+            deferIndexRefresh: true,
+            refreshPlan: refreshPlan);
+        firstAcceptStopwatch.Stop();
+        timings.Add(("record_diff_decision_accepted_deferred", firstAcceptStopwatch.ElapsedMilliseconds));
+
+        Stopwatch secondAcceptStopwatch = Stopwatch.StartNew();
+        ReviewDecisionWithIndexRefreshResult secondAccept = new StagedDecisionWorkflow().Record(
+            settings,
+            logger,
+            workflowService,
+            secondStagedRecordId,
+            "accepted",
+            secondStagedHash,
+            "AIMonitor.ToolSmokeTests",
+            deferIndexRefresh: false,
+            refreshPlan: refreshPlan);
+        secondAcceptStopwatch.Stop();
+        timings.Add(("record_diff_decision_accepted_final", secondAcceptStopwatch.ElapsedMilliseconds));
+
+        PrintTimings("MCP live accepted multi-file session timings", timings);
+        Console.WriteLine();
+        Console.WriteLine($"Validation status: {validation.Status}");
+        Console.WriteLine($"First accept classification: {firstAccept.Classification}");
+        Console.WriteLine($"First accept index refresh status: {firstAccept.IndexRefresh?.Status ?? "<none>"}");
+        Console.WriteLine($"Second accept classification: {secondAccept.Classification}");
+        Console.WriteLine($"Second accept index refresh status: {secondAccept.IndexRefresh?.Status ?? "<none>"}");
+        Console.WriteLine($"Second accept index refresh mode: {secondAccept.IndexRefresh?.RefreshMode ?? "<none>"}");
+        Console.WriteLine($"Second accept index refresh duration: {secondAccept.IndexRefresh?.DurationMs ?? 0} ms");
+        Console.WriteLine($"Second accept message: {secondAccept.IndexRefresh?.Message ?? secondAccept.Message}");
+        return secondAccept.IndexRefresh?.IsError == true ? 1 : 0;
+    }
+
+    private static async Task<int> RunMcpLiveAcceptedThreeFileInterfaceSessionAsync()
+    {
+        string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
+        string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
+        string configurationNamespace = ResolveConfigurationNamespace(repositoryRoot, settingsPath);
+        string marker = DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssfff");
+        string ownerClassName = $"AIMonitorBridgeContractOwner_{marker}";
+        string firstConsumerClassName = $"AIMonitorBridgeContractConsumerOne_{marker}";
+        string secondConsumerClassName = $"AIMonitorBridgeContractConsumerTwo_{marker}";
+        const string originalPropertyName = "LegacyValue";
+        const string renamedPropertyName = "CurrentValue";
+        string ownerRelativePath = $"AppConfig/{ownerClassName}.cs";
+        string firstConsumerRelativePath = $"AppConfig/{firstConsumerClassName}.cs";
+        string secondConsumerRelativePath = $"AppConfig/{secondConsumerClassName}.cs";
+        MonitorSettings settings = MonitorSettingsLoader.Load(repositoryRoot, settingsPath);
+        string projectPath = Path.Combine(
+            settings.WatchedProjectFolder,
+            $"{Path.GetFileNameWithoutExtension(settings.WatchedSolutionPath)}.csproj");
+        List<(string Name, long ElapsedMilliseconds)> timings = new();
+
+        await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
+
+        string ownerSeedContent = CreateContractOwnerContent(configurationNamespace, ownerClassName, originalPropertyName);
+        string firstConsumerSeedContent = CreateFirstContractConsumerContent(configurationNamespace, ownerClassName, firstConsumerClassName, originalPropertyName);
+        string secondConsumerSeedContent = CreateSecondContractConsumerContent(configurationNamespace, ownerClassName, secondConsumerClassName, originalPropertyName);
+
+        AcceptSessionArtifacts seed = await SeedAcceptedThreeFileBaselineAsync(
+            client,
+            settings,
+            projectPath,
+            ownerRelativePath,
+            ownerSeedContent,
+            firstConsumerRelativePath,
+            firstConsumerSeedContent,
+            secondConsumerRelativePath,
+            secondConsumerSeedContent);
+
+        CallToolResult refreshIndex = await CallAndPrintTimedAsync(
+            timings,
+            client,
+            "refresh_solution_index",
+            new Dictionary<string, object?>());
+        if (refreshIndex.IsError == true)
+        {
+            Console.Error.WriteLine("Baseline solution index refresh failed before dependency discovery.");
+            Console.Error.WriteLine(ExtractToolText(refreshIndex));
+            return 1;
+        }
+
+        CallToolResult renameSession = await CallAndPrintTimedAsync(
+            timings,
+            client,
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["purpose"] = "three-file interface-change timing smoke",
+                ["filesPlanned"] = new object[]
+                {
+                    CreatePlannedFile(ownerRelativePath, projectPath, "existing-file", "Owns the contract member being renamed."),
+                    CreatePlannedFile(firstConsumerRelativePath, projectPath, "existing-file", "First external consumer of the contract member."),
+                    CreatePlannedFile(secondConsumerRelativePath, projectPath, "existing-file", "Second external consumer of the contract member.")
+                }
+            });
+        string renameSessionId = ExtractJsonString(ExtractToolText(renameSession), "sessionId");
+
+        CallToolResult symbolSearch = await CallAndPrintTimedAsync(
+            timings,
+            client,
+            "find_indexed_symbols",
+            new Dictionary<string, object?>
+            {
+                ["text"] = $"{ownerClassName}.{originalPropertyName}",
+                ["kind"] = "Property"
+            });
+        string ownerPropertyStableKey = FindStableKey(
+            ExtractToolText(symbolSearch),
+            symbol => symbol.GetProperty("name").GetString() == originalPropertyName
+                && (symbol.GetProperty("containingType").GetString() ?? string.Empty).EndsWith(ownerClassName, StringComparison.Ordinal));
+
+        CallToolResult referenceSearch = await CallAndPrintTimedAsync(
+            timings,
+            client,
+            "find_indexed_references",
+            new Dictionary<string, object?>
+            {
+                ["stableSymbolKey"] = ownerPropertyStableKey,
+                ["responseShape"] = "rich"
+            });
+        string referencesJson = ExtractToolText(referenceSearch);
+        AssertContainsText(referencesJson, firstConsumerClassName);
+        AssertContainsText(referencesJson, secondConsumerClassName);
+
+        await RefreshExistingFileAsync(timings, client, renameSessionId, ownerRelativePath);
+        await RefreshExistingFileAsync(timings, client, renameSessionId, firstConsumerRelativePath);
+        await RefreshExistingFileAsync(timings, client, renameSessionId, secondConsumerRelativePath);
+
+        string ownerRenameContent = CreateContractOwnerContent(configurationNamespace, ownerClassName, renamedPropertyName);
+        string firstConsumerRenameContent = CreateFirstContractConsumerContent(configurationNamespace, ownerClassName, firstConsumerClassName, renamedPropertyName);
+        string secondConsumerRenameContent = CreateSecondContractConsumerContent(configurationNamespace, ownerClassName, secondConsumerClassName, renamedPropertyName);
+
+        CallToolResult ownerSubmit = await SubmitExistingFileAsync(
+            timings,
+            client,
+            renameSessionId,
+            ownerRelativePath,
+            ownerRenameContent);
+        string ownerOverlayStatus = ExtractNestedJsonString(
+            ExtractToolText(ownerSubmit),
+            ["overlayValidation", "status"]);
+
+        CallToolResult firstConsumerSubmit = await SubmitExistingFileAsync(
+            timings,
+            client,
+            renameSessionId,
+            firstConsumerRelativePath,
+            firstConsumerRenameContent);
+        string firstConsumerOverlayStatus = ExtractNestedJsonString(
+            ExtractToolText(firstConsumerSubmit),
+            ["overlayValidation", "status"]);
+
+        CallToolResult secondConsumerSubmit = await SubmitExistingFileAsync(
+            timings,
+            client,
+            renameSessionId,
+            secondConsumerRelativePath,
+            secondConsumerRenameContent);
+        string secondConsumerOverlayStatus = ExtractNestedJsonString(
+            ExtractToolText(secondConsumerSubmit),
+            ["overlayValidation", "status"]);
+
+        CallToolResult ownerStage = await StageExistingFileAsync(timings, client, renameSessionId, ownerRelativePath, "three-file interface rename smoke");
+        CallToolResult firstConsumerStage = await StageExistingFileAsync(timings, client, renameSessionId, firstConsumerRelativePath, "three-file interface rename smoke");
+        CallToolResult secondConsumerStage = await StageExistingFileAsync(timings, client, renameSessionId, secondConsumerRelativePath, "three-file interface rename smoke");
+
+        AcceptSessionArtifacts rename = AcceptPlannedSession(
+            settings,
+            projectPath,
+            [
+                ExtractJsonString(ExtractToolText(ownerStage), "stagedRecordId"),
+                ExtractJsonString(ExtractToolText(firstConsumerStage), "stagedRecordId"),
+                ExtractJsonString(ExtractToolText(secondConsumerStage), "stagedRecordId")
+            ],
+            [
+                ExtractJsonString(ExtractToolText(ownerStage), "stagedHash"),
+                ExtractJsonString(ExtractToolText(firstConsumerStage), "stagedHash"),
+                ExtractJsonString(ExtractToolText(secondConsumerStage), "stagedHash")
+            ],
+            timings,
+            "three_file_pre_merge_validation",
+            "three_file_record_diff_decision_accepted_deferred_1",
+            "three_file_record_diff_decision_accepted_deferred_2",
+            "three_file_record_diff_decision_accepted_final");
+
+        PrintTimings("MCP live accepted three-file interface session timings", timings);
+        Console.WriteLine();
+        Console.WriteLine($"Seed session validation status: {seed.Validation.Status}");
+        Console.WriteLine($"Rename session validation status: {rename.Validation.Status}");
+        Console.WriteLine($"Reference search stable key: {ownerPropertyStableKey}");
+        Console.WriteLine($"Reference search confirmed consumers: {firstConsumerRelativePath}, {secondConsumerRelativePath}");
+        Console.WriteLine($"Overlay statuses: owner={ownerOverlayStatus}, consumer1={firstConsumerOverlayStatus}, consumer2={secondConsumerOverlayStatus}");
+        Console.WriteLine($"Final accept classification: {rename.FinalAccept.Classification}");
+        Console.WriteLine($"Final index refresh status: {rename.FinalAccept.IndexRefresh?.Status ?? "<none>"}");
+        Console.WriteLine($"Final index refresh mode: {rename.FinalAccept.IndexRefresh?.RefreshMode ?? "<none>"}");
+        Console.WriteLine($"Final index refresh duration: {rename.FinalAccept.IndexRefresh?.DurationMs ?? 0} ms");
+        Console.WriteLine($"Final accept message: {rename.FinalAccept.IndexRefresh?.Message ?? rename.FinalAccept.Message}");
+        return rename.FinalAccept.IndexRefresh?.IsError == true ? 1 : 0;
     }
 
     private static async Task<int> RunMcpLiveHumanWinMergeAsync()
@@ -1435,9 +1963,11 @@ internal static class Program
         string? expectedStagedHash = GetOption(args, "--expected-staged-hash");
         string repositoryRoot = ResolveRepositoryRoot(AppContext.BaseDirectory);
         string settingsPath = ResolveSmokeSettingsPath(repositoryRoot);
+        List<(string Name, long ElapsedMilliseconds)> timings = new();
 
         await using McpClient client = await CreateBridgeClientAsync(repositoryRoot, settingsPath);
-        await CallAndPrintAsync(
+        CallToolResult result = await CallAndPrintTimedAsync(
+            timings,
             client,
             "record_diff_decision",
             new Dictionary<string, object?>
@@ -1446,16 +1976,20 @@ internal static class Program
                 ["decision"] = decision,
                 ["expectedStagedHash"] = expectedStagedHash
             });
-        return 0;
+        PrintTimings("MCP live record decision timings", timings);
+        Console.WriteLine(ExtractToolText(result));
+        return result.IsError == true ? 1 : 0;
     }
 
-    private static async Task CreateStageAndRejectNewFileAsync(
+    private static async Task<CallToolResult> ComposeNewFileAsync(
+        List<(string Name, long ElapsedMilliseconds)> timings,
         McpClient client,
         string sessionId,
         string relativePath,
         string content)
     {
-        await CallAndPrintAsync(
+        CallToolResult newFile = await CallAndPrintTimedAsync(
+            timings,
             client,
             "new_file",
             new Dictionary<string, object?>
@@ -1463,7 +1997,9 @@ internal static class Program
                 ["sourceFilePath"] = relativePath,
                 ["sessionId"] = sessionId
             });
-        await CallAndPrintAsync(
+        _ = newFile;
+        return await CallAndPrintTimedAsync(
+            timings,
             client,
             "submit_file",
             new Dictionary<string, object?>
@@ -1472,7 +2008,16 @@ internal static class Program
                 ["content"] = content,
                 ["sessionId"] = sessionId
             });
-        CallToolResult stage = await CallAndPrintAsync(
+    }
+
+    private static async Task<CallToolResult> StageNewFileAsync(
+        List<(string Name, long ElapsedMilliseconds)> timings,
+        McpClient client,
+        string sessionId,
+        string relativePath)
+    {
+        return await CallAndPrintTimedAsync(
+            timings,
             client,
             "stage_candidate_for_review",
             new Dictionary<string, object?>
@@ -1481,8 +2026,32 @@ internal static class Program
                 ["ledgerSummary"] = "bridge multi-file session smoke",
                 ["sessionId"] = sessionId
             });
-        string stagedRecordId = ExtractJsonString(ExtractToolText(stage), "stagedRecordId");
-        await CallAndPrintAsync(
+    }
+
+    private static async Task<CallToolResult> LaunchStagedDiffAsync(
+        List<(string Name, long ElapsedMilliseconds)> timings,
+        McpClient client,
+        string stagedRecordId,
+        bool forceValidation)
+    {
+        return await CallAndPrintTimedAsync(
+            timings,
+            client,
+            "launch_staged_diff",
+            new Dictionary<string, object?>
+            {
+                ["stagedRecordId"] = stagedRecordId,
+                ["forceValidation"] = forceValidation
+            });
+    }
+
+    private static async Task RecordRejectedAsync(
+        List<(string Name, long ElapsedMilliseconds)> timings,
+        McpClient client,
+        string stagedRecordId)
+    {
+        await CallAndPrintTimedAsync(
+            timings,
             client,
             "record_diff_decision",
             new Dictionary<string, object?>
@@ -1490,6 +2059,290 @@ internal static class Program
                 ["stagedRecordId"] = stagedRecordId,
                 ["decision"] = "rejected"
             });
+    }
+
+    private static async Task<CallToolResult> CallAndPrintTimedAsync(
+        List<(string Name, long ElapsedMilliseconds)> timings,
+        McpClient client,
+        string toolName,
+        Dictionary<string, object?>? arguments = null)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        CallToolResult result = await CallAndPrintAsync(client, toolName, arguments);
+        stopwatch.Stop();
+        timings.Add((toolName, stopwatch.ElapsedMilliseconds));
+        return result;
+    }
+
+    private static void PrintTimings(string title, IReadOnlyList<(string Name, long ElapsedMilliseconds)> timings)
+    {
+        Console.WriteLine(title);
+        long total = 0;
+        foreach ((string name, long elapsedMilliseconds) in timings)
+        {
+            total += elapsedMilliseconds;
+            Console.WriteLine($"  {name}: {elapsedMilliseconds} ms");
+        }
+
+        Console.WriteLine($"  total: {total} ms");
+    }
+
+    private static async Task<AcceptSessionArtifacts> SeedAcceptedThreeFileBaselineAsync(
+        McpClient client,
+        MonitorSettings settings,
+        string projectPath,
+        string ownerRelativePath,
+        string ownerContent,
+        string firstConsumerRelativePath,
+        string firstConsumerContent,
+        string secondConsumerRelativePath,
+        string secondConsumerContent)
+    {
+        CallToolResult seedSession = await CallAndPrintAsync(
+            client,
+            "start_monitor_session",
+            new Dictionary<string, object?>
+            {
+                ["purpose"] = "three-file interface baseline seed",
+                ["filesPlanned"] = new object[]
+                {
+                    CreatePlannedFile(ownerRelativePath, projectPath, "new-file", "Owns the original contract member."),
+                    CreatePlannedFile(firstConsumerRelativePath, projectPath, "new-file", "First consumer of the original contract member."),
+                    CreatePlannedFile(secondConsumerRelativePath, projectPath, "new-file", "Second consumer of the original contract member.")
+                }
+            });
+        string seedSessionId = ExtractJsonString(ExtractToolText(seedSession), "sessionId");
+
+        CallToolResult ownerSubmit = await ComposeNewFileAsync(new List<(string Name, long ElapsedMilliseconds)>(), client, seedSessionId, ownerRelativePath, ownerContent);
+        CallToolResult firstSubmit = await ComposeNewFileAsync(new List<(string Name, long ElapsedMilliseconds)>(), client, seedSessionId, firstConsumerRelativePath, firstConsumerContent);
+        CallToolResult secondSubmit = await ComposeNewFileAsync(new List<(string Name, long ElapsedMilliseconds)>(), client, seedSessionId, secondConsumerRelativePath, secondConsumerContent);
+        _ = ownerSubmit;
+        _ = firstSubmit;
+        _ = secondSubmit;
+
+        CallToolResult ownerStage = await StageNewFileAsync(new List<(string Name, long ElapsedMilliseconds)>(), client, seedSessionId, ownerRelativePath);
+        CallToolResult firstStage = await StageNewFileAsync(new List<(string Name, long ElapsedMilliseconds)>(), client, seedSessionId, firstConsumerRelativePath);
+        CallToolResult secondStage = await StageNewFileAsync(new List<(string Name, long ElapsedMilliseconds)>(), client, seedSessionId, secondConsumerRelativePath);
+
+        return AcceptPlannedSession(
+            settings,
+            projectPath,
+            [
+                ExtractJsonString(ExtractToolText(ownerStage), "stagedRecordId"),
+                ExtractJsonString(ExtractToolText(firstStage), "stagedRecordId"),
+                ExtractJsonString(ExtractToolText(secondStage), "stagedRecordId")
+            ],
+            [
+                ExtractJsonString(ExtractToolText(ownerStage), "stagedHash"),
+                ExtractJsonString(ExtractToolText(firstStage), "stagedHash"),
+                ExtractJsonString(ExtractToolText(secondStage), "stagedHash")
+            ],
+            new List<(string Name, long ElapsedMilliseconds)>(),
+            "seed_pre_merge_validation",
+            "seed_record_diff_decision_accepted_deferred_1",
+            "seed_record_diff_decision_accepted_deferred_2",
+            "seed_record_diff_decision_accepted_final");
+    }
+
+    private static AcceptSessionArtifacts AcceptPlannedSession(
+        MonitorSettings settings,
+        string projectPath,
+        IReadOnlyList<string> stagedRecordIds,
+        IReadOnlyList<string> stagedHashes,
+        List<(string Name, long ElapsedMilliseconds)> timings,
+        string validationTimingName,
+        string firstDeferredTimingName,
+        string secondDeferredTimingName,
+        string finalTimingName)
+    {
+        WorkflowEditService workflowService = new(settings);
+        StagedEditRecord[] overlayRecords = stagedRecordIds
+            .Select(workflowService.GetStagedRecord)
+            .ToArray();
+        PreMergeValidationService validationService = new();
+        Stopwatch validationStopwatch = Stopwatch.StartNew();
+        PreMergeValidationResult validation = validationService.Validate(settings, overlayRecords[^1], overlayRecords);
+        validationStopwatch.Stop();
+        timings.Add((validationTimingName, validationStopwatch.ElapsedMilliseconds));
+        if (validation.IsError)
+        {
+            throw new InvalidOperationException($"Validation failed during accepted timing smoke: {validation.Message}");
+        }
+
+        foreach (StagedEditRecord record in overlayRecords)
+        {
+            workflowService.RecordPreMergeValidation(record.StagedRecordId, validation, forceApproved: false);
+            workflowService.PrepareReviewFileForLaunch(record.StagedRecordId);
+            Directory.CreateDirectory(Path.GetDirectoryName(record.WatchedFilePath) ?? ".");
+            File.Copy(record.StagedFilePath, record.WatchedFilePath, overwrite: true);
+            workflowService.RecordDiffLaunch(record.StagedRecordId, launched: true, "Non-interactive timing smoke simulated review launch.");
+        }
+
+        IMonitorLogger logger = CreateMonitorLogger(settings);
+        PostAcceptIndexRefreshPlan refreshPlan = new()
+        {
+            ChangedFilePaths = overlayRecords.Select(record => record.WatchedFilePath).ToArray(),
+            OwningProjectPaths = [projectPath]
+        };
+
+        ReviewDecisionWithIndexRefreshResult? finalAccept = null;
+        for (int index = 0; index < overlayRecords.Length; index++)
+        {
+            bool deferIndexRefresh = index < overlayRecords.Length - 1;
+            Stopwatch acceptStopwatch = Stopwatch.StartNew();
+            ReviewDecisionWithIndexRefreshResult accept = new StagedDecisionWorkflow().Record(
+                settings,
+                logger,
+                workflowService,
+                stagedRecordIds[index],
+                "accepted",
+                stagedHashes[index],
+                "AIMonitor.ToolSmokeTests",
+                deferIndexRefresh: deferIndexRefresh,
+                refreshPlan: refreshPlan);
+            acceptStopwatch.Stop();
+            string timingName = index switch
+            {
+                0 => firstDeferredTimingName,
+                1 => secondDeferredTimingName,
+                _ => finalTimingName
+            };
+            timings.Add((timingName, acceptStopwatch.ElapsedMilliseconds));
+            finalAccept = accept;
+        }
+
+        return new AcceptSessionArtifacts(validation, finalAccept ?? throw new InvalidOperationException("Expected a final accept result."));
+    }
+
+    private static Dictionary<string, object?> CreatePlannedFile(string relativePath, string projectPath, string role, string reason)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["sourceFilePath"] = relativePath,
+            ["owningProjectPath"] = projectPath,
+            ["role"] = role,
+            ["reason"] = reason
+        };
+    }
+
+    private static string CreateContractOwnerContent(string configurationNamespace, string ownerClassName, string propertyName)
+    {
+        return $$"""
+            namespace {{configurationNamespace}}
+            {
+                public static class {{ownerClassName}}
+                {
+                    public static string {{propertyName}} => "{{propertyName}}";
+                }
+            }
+            """;
+    }
+
+    private static string CreateFirstContractConsumerContent(string configurationNamespace, string ownerClassName, string consumerClassName, string propertyName)
+    {
+        return $$"""
+            namespace {{configurationNamespace}}
+            {
+                public static class {{consumerClassName}}
+                {
+                    public static string Read() => {{ownerClassName}}.{{propertyName}};
+                }
+            }
+            """;
+    }
+
+    private static string CreateSecondContractConsumerContent(string configurationNamespace, string ownerClassName, string consumerClassName, string propertyName)
+    {
+        return $$"""
+            namespace {{configurationNamespace}}
+            {
+                public static class {{consumerClassName}}
+                {
+                    public static string Compose() => {{ownerClassName}}.{{propertyName}} + ":suffix";
+                }
+            }
+            """;
+    }
+
+    private static async Task RefreshExistingFileAsync(
+        List<(string Name, long ElapsedMilliseconds)> timings,
+        McpClient client,
+        string sessionId,
+        string relativePath)
+    {
+        await CallAndPrintTimedAsync(
+            timings,
+            client,
+            "refresh_file",
+            new Dictionary<string, object?>
+            {
+                ["sourceFilePath"] = relativePath,
+                ["sessionId"] = sessionId
+            });
+    }
+
+    private static async Task<CallToolResult> SubmitExistingFileAsync(
+        List<(string Name, long ElapsedMilliseconds)> timings,
+        McpClient client,
+        string sessionId,
+        string relativePath,
+        string content)
+    {
+        return await CallAndPrintTimedAsync(
+            timings,
+            client,
+            "submit_file",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["content"] = content,
+                ["sessionId"] = sessionId
+            });
+    }
+
+    private static async Task<CallToolResult> StageExistingFileAsync(
+        List<(string Name, long ElapsedMilliseconds)> timings,
+        McpClient client,
+        string sessionId,
+        string relativePath,
+        string ledgerSummary)
+    {
+        return await CallAndPrintTimedAsync(
+            timings,
+            client,
+            "stage_candidate_for_review",
+            new Dictionary<string, object?>
+            {
+                ["path"] = relativePath,
+                ["ledgerSummary"] = ledgerSummary,
+                ["sessionId"] = sessionId
+            });
+    }
+
+    private static string FindStableKey(string symbolsJson, Func<JsonElement, bool> predicate)
+    {
+        using JsonDocument document = JsonDocument.Parse(symbolsJson);
+        JsonElement array = document.RootElement.ValueKind == JsonValueKind.Array
+            ? document.RootElement
+            : document.RootElement.EnumerateObject().First(property => property.Value.ValueKind == JsonValueKind.Array).Value;
+        foreach (JsonElement element in array.EnumerateArray())
+        {
+            JsonElement symbol = element.TryGetProperty("symbol", out JsonElement inner) ? inner : element;
+            if (predicate(symbol))
+            {
+                return symbol.GetProperty("stableKey").GetString() ?? string.Empty;
+            }
+        }
+
+        throw new InvalidOperationException($"No indexed symbol matched in: {symbolsJson}");
+    }
+
+    private static void AssertContainsText(string text, string expectedFragment)
+    {
+        if (!text.Contains(expectedFragment, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Expected text fragment '{expectedFragment}' was not present.");
+        }
     }
 
     private static async Task<McpClient> CreateBridgeClientAsync(string repositoryRoot, string settingsPath)
@@ -1577,6 +2430,46 @@ internal static class Program
         }
 
         return value.GetString() ?? string.Empty;
+    }
+
+    private static void AssertNestedJsonString(string json, IReadOnlyList<string> path, string expected)
+    {
+        string actual = ExtractNestedJsonString(json, path);
+        if (!actual.Equals(expected, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Expected JSON path '{string.Join(".", path)}' to be '{expected}', but found '{actual}'.");
+        }
+    }
+
+    private static void AssertNestedJsonStringIsNot(string json, IReadOnlyList<string> path, string unexpected)
+    {
+        string actual = ExtractNestedJsonString(json, path);
+        if (actual.Equals(unexpected, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Expected JSON path '{string.Join(".", path)}' to move past '{unexpected}'.");
+        }
+    }
+
+    private static string ExtractNestedJsonString(string json, IReadOnlyList<string> path)
+    {
+        using JsonDocument document = JsonDocument.Parse(json);
+        JsonElement current = document.RootElement;
+        foreach (string segment in path)
+        {
+            if (!current.TryGetProperty(segment, out JsonElement next))
+            {
+                throw new InvalidOperationException($"Expected JSON path '{string.Join(".", path)}'.");
+            }
+
+            current = next;
+        }
+
+        if (current.ValueKind != JsonValueKind.String)
+        {
+            throw new InvalidOperationException($"Expected JSON path '{string.Join(".", path)}' to be a string.");
+        }
+
+        return current.GetString() ?? string.Empty;
     }
 
     private static string GetRequiredOption(string[] args, string name)
@@ -1992,6 +2885,10 @@ internal static class Program
         int ExpectedReferences);
 
     private sealed record RoslynCounts(bool TargetResolved, int ReferenceCount);
+
+    private sealed record AcceptSessionArtifacts(
+        PreMergeValidationResult Validation,
+        ReviewDecisionWithIndexRefreshResult FinalAccept);
 
     private sealed record MatrixResult(
         MatrixCheck Check,

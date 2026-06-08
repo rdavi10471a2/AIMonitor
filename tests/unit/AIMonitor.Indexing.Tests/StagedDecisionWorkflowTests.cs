@@ -94,6 +94,132 @@ public sealed class StagedDecisionWorkflowTests
         Assert.True(workflowService.GetStatus(sourcePath).IndexStale);
     }
 
+    [Fact]
+    public void Record_blocks_terminal_planned_accept_when_accepted_overlay_does_not_build()
+    {
+        string tempRoot = Path.Combine(Path.GetTempPath(), "AIMonitorIndexingTests", Guid.NewGuid().ToString("N"));
+        string repositoryRoot = Path.Combine(tempRoot, "Repo");
+        string runtimeRoot = Path.Combine(tempRoot, "Runtime");
+        string watchedRoot = Path.Combine(tempRoot, "Watched");
+        string projectPath = Path.Combine(watchedRoot, "Example.csproj");
+        string providerPath = Path.Combine(watchedRoot, "Provider.cs");
+        string consumerPath = Path.Combine(watchedRoot, "Consumer.cs");
+
+        Directory.CreateDirectory(watchedRoot);
+        File.WriteAllText(
+            projectPath,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <OutputType>Library</OutputType>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.WriteAllText(
+            providerPath,
+            """
+            namespace Example;
+
+            public static class Provider
+            {
+                public static string Value => "original";
+            }
+            """);
+        File.WriteAllText(
+            consumerPath,
+            """
+            namespace Example;
+
+            public static class Consumer
+            {
+                public static string Read()
+                {
+                    return Provider.Value;
+                }
+            }
+            """);
+
+        MonitorSettings settings = MonitorSettings.Create(repositoryRoot, projectPath, runtimeRoot);
+        WorkflowEditService workflowService = new(settings);
+        EditSessionStatus providerRefresh = workflowService.Refresh(providerPath);
+        EditSessionStatus consumerRefresh = workflowService.Refresh(consumerPath);
+        File.WriteAllText(
+            providerRefresh.WorkingFilePath,
+            """
+            namespace Example;
+
+            public static class Provider
+            {
+                public static string RenamedValue => "candidate";
+            }
+            """);
+        File.WriteAllText(
+            consumerRefresh.WorkingFilePath,
+            """
+            namespace Example;
+
+            public static class Consumer
+            {
+                public static string Read()
+                {
+                    return Provider.Value + ":candidate";
+                }
+            }
+            """);
+
+        StagedEditRecord providerRecord = workflowService.Stage(providerPath, sessionId: "planned-session");
+        StagedEditRecord consumerRecord = workflowService.Stage(consumerPath, sessionId: "planned-session");
+        PreMergeValidationResult stagedOverlayReady = new()
+        {
+            Status = "planned-staged-overlay-ready",
+            IsError = false
+        };
+        workflowService.RecordPreMergeValidation(providerRecord.StagedRecordId, stagedOverlayReady, forceApproved: false);
+        workflowService.RecordPreMergeValidation(consumerRecord.StagedRecordId, stagedOverlayReady, forceApproved: false);
+        workflowService.RecordDiffLaunch(providerRecord.StagedRecordId, launched: true, "test launch");
+        workflowService.RecordDiffLaunch(consumerRecord.StagedRecordId, launched: true, "test launch");
+        File.Copy(providerRecord.StagedFilePath, providerPath, overwrite: true);
+
+        ReviewDecisionWithIndexRefreshResult firstAccept = new StagedDecisionWorkflow().Record(
+            settings,
+            NullMonitorLogger.Instance,
+            workflowService,
+            providerRecord.StagedRecordId,
+            "accepted",
+            providerRecord.StagedHash,
+            "AIMonitor.Indexing.Tests",
+            deferIndexRefresh: true);
+
+        Assert.Equal("deferred", firstAccept.IndexRefresh?.Status);
+
+        File.Copy(consumerRecord.StagedFilePath, consumerPath, overwrite: true);
+        InvalidOperationException ex = Assert.Throws<InvalidOperationException>(() => new StagedDecisionWorkflow().Record(
+            settings,
+            NullMonitorLogger.Instance,
+            workflowService,
+            consumerRecord.StagedRecordId,
+            "accepted",
+            consumerRecord.StagedHash,
+            "AIMonitor.Indexing.Tests",
+            deferIndexRefresh: false,
+            refreshPlan: new PostAcceptIndexRefreshPlan
+            {
+                ChangedFilePaths = [providerPath, consumerPath],
+                OwningProjectPaths = [projectPath]
+            },
+            terminalValidationRecords:
+            [
+                workflowService.GetStagedRecord(providerRecord.StagedRecordId),
+                workflowService.GetStagedRecord(consumerRecord.StagedRecordId)
+            ]));
+
+        Assert.Contains("Terminal planned pre-merge validation failed", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(string.Empty, workflowService.GetStagedRecord(consumerRecord.StagedRecordId).Decision);
+    }
+
     private sealed class NullMonitorLogger : IMonitorLogger
     {
         public static readonly NullMonitorLogger Instance = new();

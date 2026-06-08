@@ -106,6 +106,14 @@ public sealed class MSBuildWorkspaceLoader
                     ["projectPath"] = normalizedProjectPath
                 },
                 () => workspace.OpenProjectAsync(normalizedProjectPath, cancellationToken: cancellationToken));
+            HashSet<string> fileSet = normalizedFilePaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            Solution refreshedSolution = await RefreshProjectDocumentsFromDiskAsync(
+                project.Solution,
+                project,
+                fileSet,
+                cancellationToken);
+            project = refreshedSolution.GetProject(project.Id)
+                ?? throw new InvalidOperationException("MSBuild project disappeared after refreshing source text: " + normalizedProjectPath);
             return await CreateProjectFileSnapshotAsync(
                 normalizedProjectPath,
                 project,
@@ -347,7 +355,6 @@ public sealed class MSBuildWorkspaceLoader
         CancellationToken cancellationToken,
         Action<string, long, IReadOnlyDictionary<string, string>>? timingSink = null)
     {
-        HashSet<string> fileSet = normalizedFilePaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, string> timingProperties = CreateProjectFileTimingProperties(project, normalizedFilePaths);
         Compilation? compilation = await MeasureAsync(
             "msbuild.file.get-compilation-in-memory",
@@ -376,7 +383,6 @@ public sealed class MSBuildWorkspaceLoader
             () => ProjectSymbolIndex.BuildDeclarationsAsync(
                 project,
                 compilation,
-                fileSet,
                 cancellationToken));
         Dictionary<string, MSBuildSymbolSnapshot> symbolsByIdentity = new(existingSymbolsByIdentity, StringComparer.Ordinal);
         foreach ((string identity, MSBuildSymbolSnapshot symbol) in declarations.SymbolsByIdentity)
@@ -392,7 +398,7 @@ public sealed class MSBuildWorkspaceLoader
                 project,
                 compilation,
                 declarations,
-                fileSet,
+                Array.Empty<RazorDocumentIndex>(),
                 symbolsByIdentity,
                 cancellationToken));
         string stableProjectKey = StableIdentifier.FromParts(
@@ -403,8 +409,6 @@ public sealed class MSBuildWorkspaceLoader
             evaluatedProject.TargetFrameworks);
         MSBuildDocumentSnapshot[] documents = project.Documents
             .Where(IsIndexableDocument)
-            .Where(document => !string.IsNullOrWhiteSpace(document.FilePath)
-                && fileSet.Contains(Path.GetFullPath(document.FilePath)))
             .Select(document => new MSBuildDocumentSnapshot(
                 StableIdentifier.FromParts("document", stableProjectKey, document.FilePath ?? string.Empty),
                 document.Name,

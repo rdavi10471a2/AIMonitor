@@ -16,10 +16,17 @@ public sealed class StagedDecisionWorkflow
         string source,
         bool deferIndexRefresh = false,
         PostAcceptIndexRefreshPlan? refreshPlan = null,
-        bool verbose = false)
+        bool verbose = false,
+        IReadOnlyList<StagedEditRecord>? terminalValidationRecords = null)
     {
         StagedEditRecord existing = workflowService.GetStagedRecord(stagedRecordId);
         WorkflowEditService.EnsureRecordNotDecided(existing);
+        PreMergeValidationResult? terminalValidation = ValidateTerminalPlannedOverlay(
+            settings,
+            existing,
+            refreshPlan,
+            deferIndexRefresh,
+            terminalValidationRecords);
 
         StagedEditRecord record = workflowService.RecordDecision(stagedRecordId, decision, expectedStagedHash);
         PostAcceptIndexRefreshResult? indexRefresh = null;
@@ -58,8 +65,39 @@ public sealed class StagedDecisionWorkflow
             StagedRecordPath = summary.RecordPath,
             StagedRecord = verbose ? record : null,
             IndexRefresh = indexRefresh,
+            TerminalPreMergeValidation = terminalValidation,
             NextStep = CreateNextStep(record, indexRefresh)
         };
+    }
+
+    private static PreMergeValidationResult? ValidateTerminalPlannedOverlay(
+        MonitorSettings settings,
+        StagedEditRecord currentRecord,
+        PostAcceptIndexRefreshPlan? refreshPlan,
+        bool deferIndexRefresh,
+        IReadOnlyList<StagedEditRecord>? terminalValidationRecords)
+    {
+        if (deferIndexRefresh
+            || refreshPlan is null
+            || refreshPlan.ChangedFilePaths.Count == 0
+            || terminalValidationRecords is null
+            || terminalValidationRecords.Count == 0)
+        {
+            return null;
+        }
+
+        PreMergeValidationResult validation = new PreMergeValidationService().Validate(
+            settings,
+            currentRecord,
+            terminalValidationRecords);
+        if (validation.IsError)
+        {
+            throw new InvalidOperationException(
+                "Terminal planned pre-merge validation failed before recording the final session decision: "
+                + validation.Message);
+        }
+
+        return validation;
     }
 
     private static string CreateNextStep(StagedEditRecord record, PostAcceptIndexRefreshResult? indexRefresh)

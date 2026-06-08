@@ -245,6 +245,63 @@ public sealed class MSBuildWorkspaceLoaderTests
         Assert.StartsWith("razor-generated:", reference.ReferenceKind, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task OpenProjectFilesAsync_reparses_changed_file_before_extracting_symbols()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "AIMonitorTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string projectPath = Path.Combine(root, "RefreshFixture.csproj");
+        string sourcePath = Path.Combine(root, "RefreshTarget.cs");
+
+        await File.WriteAllTextAsync(projectPath, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        await File.WriteAllTextAsync(sourcePath, """
+            namespace RefreshFixture;
+
+            public sealed class RefreshTarget
+            {
+                public string Marker => "old";
+            }
+            """);
+
+        MSBuildWorkspaceLoader loader = new();
+        MSBuildSolutionSnapshot initialSnapshot = await loader.OpenProjectAsync(projectPath);
+
+        Assert.DoesNotContain(initialSnapshot.Projects[0].Symbols, symbol => symbol.Name == "AddedAfterReload");
+
+        await File.WriteAllTextAsync(sourcePath, """
+            namespace RefreshFixture;
+
+            public sealed class RefreshTarget
+            {
+                public string Marker => "new";
+
+                public string AddedAfterReload()
+                {
+                    return Marker;
+                }
+            }
+            """);
+
+        MSBuildProjectFileSnapshot refreshedSnapshot = await loader.OpenProjectFilesAsync(
+            projectPath,
+            [sourcePath],
+            new Dictionary<string, MSBuildSymbolSnapshot>(StringComparer.Ordinal));
+
+        MSBuildDocumentSnapshot refreshedDocument = Assert.Single(refreshedSnapshot.Documents);
+        Assert.Equal(ComputeFileHash(sourcePath), refreshedDocument.ContentHash);
+        Assert.Contains(refreshedSnapshot.Symbols, symbol => symbol.Name == "AddedAfterReload" && symbol.Kind == "Method");
+        Assert.Contains(refreshedSnapshot.References, reference => reference.Snippet == "Marker");
+    }
+
     private static string ComputeFileHash(string filePath)
     {
         using FileStream stream = File.OpenRead(filePath);
