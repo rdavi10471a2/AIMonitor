@@ -41,7 +41,12 @@ GATE 2 belongs after the merge by design. The flow chart above is correct.
 
 ## GATE 1 is *allowed* to be noisy — that's why "merge anyway" exists
 
-GATE 1 cannot model `.razor` markup, Razor-generated code, or source generators, so some of its errors are **false positives** — e.g. a `.razor.cs` partial referencing generated members, `@inject` / `ComponentBase` plumbing, or other Razor-runtime artifacts the overlay can't see. Because GATE 1 is a **predictor, not the authority**, the workflow surfaces its result for human judgment and lets the operator **merge anyway** when the error is one of these known-noisy cases:
+GATE 1 assembles its own in-memory compilation and cannot model `.razor`/generated/source-gen output, so some of its errors are **false positives**. Two known-noisy classes:
+
+- **Razor / generated artifacts** — a `.razor.cs` partial referencing generated members, `@inject` / `ComponentBase` plumbing, or other Razor-runtime/source-gen artifacts the overlay can't see.
+- **Duplicate inclusion** — because GATE 1 hand-builds the compilation, a type or file can get pulled in twice (e.g. resolving from both source and a referenced assembly — the classic dual-`SqlClient` / "type defined in multiple places" / ambiguous-reference case), producing duplicate-definition errors that the real MSBuild build (GATE 2) does not. The agent is generally good at recognizing these and letting the flow continue.
+
+Because GATE 1 is a **predictor, not the authority**, the workflow surfaces its result for human judgment and lets the operator **merge anyway** when the error is one of these known-noisy cases:
 
 - GATE 1 red **and clearly a real break** → replan / fix before merge.
 - GATE 1 red **but a recognizable noisy Razor/generated artifact** → operator may merge anyway.
