@@ -16,6 +16,12 @@ The branch's core idea is coherent and the **watched-source safety floor is pres
 
 Reviewed at branch HEAD `63f9620` ("Preserve Razor rows during scoped refresh") — no rework commit is published on origin as of this review.
 
+## Design intent (operator clarification, 2026-06-08) — credited
+
+The goal is sound and the review credits it: `main` ran a full-solution build on **every** overlay validation and around **each merge** — a compile-storm of several builds per multi-file change. The branch turns edits into **verifiable batches**: the agent develops a full up-front plan via the MCP tools, and the batch is validated as a coherent unit instead of compiling after every file. That is the right direction and the per-launch build is **not** sacred.
+
+The HIGH safety finding below is **not** "don't defer / go back to per-file compiling." It is a **placement** problem: the branch validates the batch build at the *terminal accept*, i.e. **after** the operator has already merged the earlier files into watched source. By the operator's own framing, a batch is only "verifiable" if it is verified **before** it is committed. The fix preserves the perf win **and** the safety floor: run the single batch build **up front (at launch, over the staged overlay), before any WinMerge save** — then the operator merges an already-verified batch. Same number of builds (one per batch), but nothing reaches watched source until the whole plan compiles.
+
 ## Functional correctness vs main
 
 ### HIGH — verified real (adversarially confirmed)
@@ -55,7 +61,7 @@ So an operator reading only the skills understands the rules and the safety moti
 
 Rework before merge:
 1. **Cross-project cascade (HIGH):** don't let project-scoped delete cascade-drop other projects' inbound refs — drop the `ON DELETE CASCADE` for the scoped path, re-extract inbound refs, or fall back to full rebuild when the refreshed project has inbound cross-project references. Add a **multi-project scoped-refresh test**.
-2. **Deferred-build safety (HIGH):** restore a pre-merge build gate before watched-source mutation, or add rollback-on-terminal-failure + abandonment handling; document the rollback story. Make the "safety test" actually pin the deferred-build invariant.
+2. **Deferred-build placement (HIGH):** keep the batch (one build per plan — that's the perf win), but run it **at launch over the staged overlay, before any file is merged into watched source**, not at the terminal accept after the merges. Same build count, but nothing is committed until the whole plan compiles — verify-before-commit without restoring per-file compiles. Add abandonment handling; make the "safety test" actually pin it.
 3. **Lockout (MED):** treat already-decided planned files as satisfied so the per-file flow doesn't deadlock.
 4. **Remove dead file-scoped overloads** or guard them.
 5. **Skills:** document the scoped-refresh + Razor-preservation rationale, `SetMonitorSessionEditPlan`, and the solution-fallback (close the "explain why" gap).
