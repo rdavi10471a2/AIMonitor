@@ -32,35 +32,23 @@ TERMINAL after last file decided →  ┌─────────────
                                     └─────────────────────────────────────┘
 ```
 
-## The one risk, pinned to the chart
+## The two gates answer different questions (both correctly placed)
 
-`GATE 2` (the full `dotnet build`) sits **below** the `← file lands in watched source HERE` line.
+- **GATE 1 — overlay compile (pre-merge):** *"if we apply all of this, will it still compile?"* A prediction against the overlay (watched + the staged files swapped in), before anything touches the real tree. Its job is to gate the **decision to merge**.
+- **GATE 2 — full build on the real watched tree (post-merge):** *"did it actually compile?"* This is intentionally **after** the merge, because the point is to verify the **real source tree the operator just committed** — not a copy — and to catch any merge-time divergence. You can only build the real tree once it exists.
 
-- `GATE 1` is **semantic-only** (Roslyn overlay) — it cannot see `.razor` markup, source/Razor generators, analyzers, or MSBuild/cross-project errors.
-- `GATE 2` is the compile that **can** see those — but it runs **after** the files are already merged into watched source.
-- So a full-build-only error clears `GATE 1`, gets merged, and only fails at `GATE 2` → watched source is left **non-compiling with no rollback** (worse if the session is abandoned before the terminal step, so `GATE 2` never runs).
+GATE 2 belongs after the merge by design. The flow chart above is correct.
 
-The common case (cross-file C# breaks) is caught by `GATE 1` before merge, so this is narrow — but real.
+## The watch-item: fidelity, not placement
 
-## The fix — one box moves up
+The only real risk is **how faithfully GATE 1 predicts GATE 2.** As implemented, GATE 1 is a Roslyn **semantic** overlay — it skips `.razor` markup and runs no MSBuild, analyzers, or source/Razor generators. So GATE 1 can go **green** while the real build (GATE 2) would fail on exactly those error classes. When that happens, the operator merges on a green overlay and GATE 2 reports the failure **after** the files are on the real tree, leaving it transiently non-compiling until the operator acts.
 
-Run the full build **before** any merge (the operator's "verifiable batch / overlay-first" model). Same number of builds; nothing reaches watched source until the whole plan compiles.
+This is recoverable — the operator is in the loop, GATE 2 surfaces the break, and watched source is under version control — but it is a behavior change from `main`, where the pre-merge gate was a full build that blocked a build-breaking merge up front.
 
-```
-... GATE 1 (unchanged: fast inner-loop semantic check during editing) ...
-            │ clean / approved
-STAGE    stage_candidate_for_review(A,B,C)
-         ┌─────────────────────────────────────┐
-         │ GATE 2 (MOVED UP): FULL dotnet build  │   <-- the box that was at the bottom
-         │ over the staged overlay, BEFORE merge │
-         └─────────────────────────────────────┘
-            │ green  (red → nothing merged; agent replans / asks user)
-REVIEW   launch_staged_diff (diff only)
-         user merges each file in WinMerge   ← merging an already-validated batch
-         record_diff_decision(accepted)
-            │
-TERMINAL index rebuild only (already green; no second build needed)
-```
+Levers (in order; **do not** relocate GATE 2 — building the real tree post-merge is the intended authoritative check):
+1. **Raise GATE 1 fidelity** toward a full overlay build (or at least cover Razor / MSBuild / analyzers / source-gen) so a green overlay reliably predicts a green GATE 2 — fewer post-merge surprises.
+2. **Make a GATE 2 failure loud, and don't let an abandoned session skip it silently** — that's the one way the real tree stays broken without anyone being told.
+3. Recovery is via version control; there is no automatic rollback of a merged file.
 
 ## Two rules the flow depends on (document them)
 
