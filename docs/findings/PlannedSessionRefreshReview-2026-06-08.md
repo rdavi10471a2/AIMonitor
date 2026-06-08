@@ -62,10 +62,74 @@ So an operator reading only the skills understands the rules and the safety moti
 ## Recommendation
 
 Rework before merge:
-1. **Cross-project cascade (HIGH):** don't let project-scoped delete cascade-drop other projects' inbound refs — drop the `ON DELETE CASCADE` for the scoped path, re-extract inbound refs, or fall back to full rebuild when the refreshed project has inbound cross-project references. Add a **multi-project scoped-refresh test**.
+1. **Cross-project cascade (HIGH):** see the detailed fix below — a plan-time inbound-reference closure + a store backstop + a multi-project test.
 2. **Overlay fidelity (MED) — keep GATE 2 post-merge.** The post-merge full build on the real tree is intended and correct; don't move it. Instead raise GATE 1 (the pre-merge overlay) toward a full overlay build so a green prediction reliably matches the real build, surface a GATE 2 failure loudly, and ensure an abandoned session can't skip GATE 2 silently. Make the "safety test" actually pin the deferred-build behavior.
 3. **Lockout (MED):** treat already-decided planned files as satisfied so the per-file flow doesn't deadlock.
 4. **Remove dead file-scoped overloads** or guard them.
 5. **Skills:** document the scoped-refresh + Razor-preservation rationale, `SetMonitorSessionEditPlan`, and the solution-fallback (close the "explain why" gap).
 
 Reviewed against `origin/main` @ `46699c5`; branch @ `63f9620`. Full per-finding evidence + adversarial verdicts in the workflow transcript.
+
+---
+
+## HIGH #1 fix — detail (plan-time inbound-reference closure)
+
+**Root cause.** Scoped refresh of project A deletes A's symbol rows; `ON DELETE CASCADE` then drops *other* projects' `symbol_references`/`call_sites`/`symbol_relationships` rows that **target A's symbols**, and the re-insert only restores A's own rows. So inbound cross-project references vanish until a full rebuild. (A second symptom: even without the cascade, if an edit changes a symbol's `stable_key`, inbound refs in unrefreshed projects go stale.)
+
+**Direction matters.** The endangered rows belong to projects that **reference into A** (inbound dependents) — *not* A's own dependencies. Fixing this is about finding "who references A," not "what A references."
+
+### Planning model: a new engine-derived section
+
+`filesPlanned` stays the agent's **edit scope**. The plan gains a separate, **engine-populated** section — the **refresh closure / `InboundReferencingProjects`** — distinct because a project can need its index rows regenerated *without* any source edit. Compute it at plan time in two grains:
+
+- **Cheap gate (MSBuild `ProjectReference` graph):** if A has *zero* reverse dependencies (a true leaf nothing references), the closure is empty → scoped refresh is always safe; skip the index query.
+- **Precise set (index — authoritative):** which projects actually hold references to A's *symbols* (the query below). Use the index, **not** the raw `ProjectReference` edges: .NET project references are transitive, so a project can reference A's symbols without a *direct* `ProjectReference` to A — direct build-graph dependents would under-count. That set ∪ A = the refresh closure (project-granular; reverse direction).
+
+The agent's only new duty: during planning, check `find_indexed_references` for cross-project sites and add a consumer to `filesPlanned` **only if it must be edited**. The closure itself is derived, never hand-typed.
+
+### Code + locations
+
+**Detection — `src/AIMonitor.Data/SolutionIndexStore.cs`** (uses the existing `projects` id↔path join):
+```csharp
+public IReadOnlyList<string> GetInboundDependentProjectPaths(string projectPath)
+{
+    using SqliteConnection connection = database.OpenConnection();
+    using SqliteCommand command = connection.CreateCommand();
+    command.CommandText = """
+        select distinct rp.project_path
+        from symbol_references r
+        join symbols  s  on s.stable_key = r.target_stable_key
+        join projects sp on sp.id = s.project_id      -- declares the symbol
+        join projects rp on rp.id = r.project_id      -- references it
+        where sp.project_path = $p and r.project_id <> s.project_id
+        -- UNION the same shape over call_sites(target_stable_key)
+        -- and symbol_relationships(target_stable_key, source_stable_key)
+        """;
+    command.Parameters.AddWithValue("$p", projectPath);
+    // read distinct project_path into a List<string>
+}
+```
+
+**Guard — `src/AIMonitor.Indexing/PostAcceptIndexRefreshService.cs`**, at the existing `useFileRefresh` decision (~line 22):
+```csharp
+bool useFileRefresh = projectPaths.Length == 1 && filePaths.Length > 0;
+if (useFileRefresh)
+{
+    var store = new SolutionIndexStore(new SolutionIndexDatabase(databasePath));
+    if (store.GetInboundDependentProjectPaths(projectPaths[0]).Count > 0)
+    {
+        useFileRefresh = false;   // MVP: full rebuild.
+        // optimization: refresh the CLOSURE = projectPaths[0] ∪ inbound dependents
+    }
+}
+```
+
+**Carry-forward — `src/AIMonitor.Indexing/PostAcceptIndexRefreshPlan.cs`**: add `string[] InboundReferencingProjects` (the closure beyond A), populated at plan build so it's inspectable in `indexRefresh` telemetry and the refresh reads it instead of recomputing.
+
+**Backstop — `src/AIMonitor.Data/SolutionIndexStore.cs` `ReplaceProjectFiles`**: wrap the single-project delete+reinsert in `pragma foreign_keys=off` (reinsert restores A's symbols at the same `stable_key`, so other projects' inbound rows stay valid), **or** drop `ON DELETE CASCADE` on the cross-project target FKs and delete only by `project_id`. Defense-in-depth even if planning misjudges.
+
+**Test — `tests/unit/AIMonitor.Data.Tests`**: a two-project fixture where B references a symbol in A, scope-refresh A, assert B's inbound references survive.
+
+### Skill instruction (agent behavior — the documented gap)
+
+Add to the planning/blast-radius skill: *before finalizing the plan, run `find_indexed_references` on each symbol you intend to change; if referencing sites exist in other projects, (a) add any file you must edit to `filesPlanned`, and (b) know the engine will refresh those dependent projects' index rows via the closure.* The tool to do this already exists; the instruction to do it at plan time does not.
