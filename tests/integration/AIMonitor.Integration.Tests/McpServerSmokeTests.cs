@@ -166,10 +166,14 @@ public sealed class McpServerSmokeTests
         CallToolResult guide = await client.CallToolAsync("get_staging_guide");
         Assert.False(guide.IsError == true, ExtractToolText(guide));
         string guideText = ExtractToolText(guide);
+        Assert.Contains("start_monitor_session", guideText, StringComparison.Ordinal);
+        Assert.Contains("filesPlanned", guideText, StringComparison.Ordinal);
         Assert.Contains("refresh_file", guideText, StringComparison.Ordinal);
         Assert.Contains("stage_candidate_for_review", guideText, StringComparison.Ordinal);
         Assert.Contains("launch_staged_diff", guideText, StringComparison.Ordinal);
-        Assert.Contains("pre-merge validation", guideText, StringComparison.OrdinalIgnoreCase);
+        // The branch defers full build/index validation to the terminal planned accept; the guide
+        // describes that placement rather than a per-launch "pre-merge validation" step.
+        Assert.Contains("validation runs at the terminal planned accept", guideText, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("WinMerge", guideText, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("record_diff_decision", guideText, StringComparison.Ordinal);
         Assert.Contains("indexRefresh", guideText, StringComparison.Ordinal);
@@ -323,6 +327,8 @@ public sealed class McpServerSmokeTests
         Assert.Contains("\"callerName\":\"Caller\"", callersJson, StringComparison.Ordinal);
         Assert.Contains("\"callKind\":\"InvocationExpression\"", callersJson, StringComparison.Ordinal);
 
+        // Lean is the DEFAULT response shape: caller/target identity is present, but the
+        // token-heavy fileContentHash (and other full-row fields) are omitted.
         CallToolResult references = await client.CallToolAsync(
             "find_indexed_references",
             new Dictionary<string, object?>
@@ -335,7 +341,20 @@ public sealed class McpServerSmokeTests
         Assert.Contains("\"targetKind\":\"Method\"", referencesJson, StringComparison.Ordinal);
         Assert.Contains("\"callerStableKey\":\"" + callerStableKey + "\"", referencesJson, StringComparison.Ordinal);
         Assert.Contains("\"callerName\":\"Caller\"", referencesJson, StringComparison.Ordinal);
-        Assert.Contains("\"fileContentHash\"", referencesJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"fileContentHash\"", referencesJson, StringComparison.Ordinal);
+
+        // Rich shape opts back into the full persisted row, including fileContentHash.
+        CallToolResult richReferences = await client.CallToolAsync(
+            "find_indexed_references",
+            new Dictionary<string, object?>
+            {
+                ["stableSymbolKey"] = targetStableKey,
+                ["responseShape"] = "rich"
+            });
+        Assert.False(richReferences.IsError == true);
+        string richReferencesJson = ExtractToolText(richReferences);
+        Assert.Contains("\"targetName\":\"Target\"", richReferencesJson, StringComparison.Ordinal);
+        Assert.Contains("\"fileContentHash\"", richReferencesJson, StringComparison.Ordinal);
 
         CallToolResult relationships = await client.CallToolAsync(
             "find_indexed_relationships",
@@ -403,12 +422,14 @@ public sealed class McpServerSmokeTests
     {
         McpFixture fixture = CreateFixture();
         await using McpClient client = await CreateClientAsync(fixture);
+        string sessionId = await StartPlannedSessionAsync(client, fixture, "refresh and stage working copy", fixture.ProgramFilePath);
 
         CallToolResult refresh = await client.CallToolAsync(
             "refresh_file",
             new Dictionary<string, object?>
             {
-                ["sourceFilePath"] = fixture.ProgramFilePath
+                ["sourceFilePath"] = fixture.ProgramFilePath,
+                ["sessionId"] = sessionId
             });
         Assert.False(refresh.IsError == true);
         string refreshJson = ExtractToolText(refresh);
@@ -423,7 +444,8 @@ public sealed class McpServerSmokeTests
             new Dictionary<string, object?>
             {
                 ["path"] = fixture.ProgramFilePath,
-                ["ledgerSummary"] = "mcp smoke candidate"
+                ["ledgerSummary"] = "mcp smoke candidate",
+                ["sessionId"] = sessionId
         });
         Assert.False(stage.IsError == true);
         string stageJson = ExtractToolText(stage);
