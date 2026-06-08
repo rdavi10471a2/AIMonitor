@@ -376,6 +376,9 @@ public sealed class MSBuildWorkspaceLoader
                 () => MSBuildEvaluatedProject.Load(project.FilePath));
         }
 
+        IReadOnlyList<RazorDocumentIndex> razorDocuments = RazorDocumentIndex.BuildForProject(
+            project,
+            evaluatedProject.RazorLikeFiles);
         ProjectSymbolIndex declarations = await MeasureAsync(
             "msbuild.file.build-declarations",
             timingSink,
@@ -384,6 +387,20 @@ public sealed class MSBuildWorkspaceLoader
                 project,
                 compilation,
                 cancellationToken));
+        if (razorDocuments.Count > 0)
+        {
+            declarations = await MeasureAsync(
+                "msbuild.file.build-razor-declarations",
+                timingSink,
+                timingProperties,
+                () => ProjectSymbolIndex.BuildRazorDeclarationsAsync(
+                    project,
+                    compilation,
+                    declarations,
+                    razorDocuments,
+                    cancellationToken));
+        }
+
         Dictionary<string, MSBuildSymbolSnapshot> symbolsByIdentity = new(existingSymbolsByIdentity, StringComparer.Ordinal);
         foreach ((string identity, MSBuildSymbolSnapshot symbol) in declarations.SymbolsByIdentity)
         {
@@ -398,7 +415,7 @@ public sealed class MSBuildWorkspaceLoader
                 project,
                 compilation,
                 declarations,
-                Array.Empty<RazorDocumentIndex>(),
+                razorDocuments,
                 symbolsByIdentity,
                 cancellationToken));
         string stableProjectKey = StableIdentifier.FromParts(
@@ -415,6 +432,12 @@ public sealed class MSBuildWorkspaceLoader
                 document.FilePath ?? string.Empty,
                 document.Folders.ToArray(),
                 ComputeFileHash(document.FilePath)))
+            .Concat(razorDocuments.Select(document => new MSBuildDocumentSnapshot(
+                StableIdentifier.FromParts("document", stableProjectKey, document.FilePath),
+                Path.GetFileName(document.FilePath),
+                document.FilePath,
+                GetDocumentFolders(project.FilePath, document.FilePath),
+                ComputeFileHash(document.FilePath))))
             .OrderBy(document => document.FilePath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         string[] diagnosticMessages = diagnostics
