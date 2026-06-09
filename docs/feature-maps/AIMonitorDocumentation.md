@@ -107,6 +107,15 @@ stale                 source hash no longer matches manifest
 
 ## Skill Requirements
 
+The prior `ArchitectureDiagramming` skill work is the seed for the documentation engine's semantic shape. Keep it in this branch as planning evidence, even if it is not ready to route as a default Claude skill yet:
+
+```text
+docs/claude-skills/ArchitectureDiagramming.md
+docs/skill-evals/architecture-diagramming/
+```
+
+That work should be treated as a backbone for generated docs because it already forces generated prose through the same axes this feature needs: actor, artifact, gate, authority, dataflow, failure path, and freshness.
+
 The generation skill should:
 
 - identify actors, artifacts, gates, state, authority, and dataflow;
@@ -115,6 +124,24 @@ The generation skill should:
 - avoid full-system claims in per-file docs;
 - separate implemented evidence from inferred or doc-only claims;
 - include an evidence gap section when tests, index freshness, or semantic data are missing.
+
+## Skill Provenance
+
+The architecture-diagramming skill came from three sources:
+
+1. Operator discussion about AIMonitor's planned-session/two-gate model, especially the difference between predictive overlay checks and authoritative post-accept build/index evidence.
+2. Existing AIMonitor contracts in `docs/system-memory/README.md`, `docs/feature-maps/CliWorkflowEditLoop.md`, MCP skill cards, and index/Razor boundary notes.
+3. A read-only eval run against AIMonitor main, stored at `docs/skill-evals/architecture-diagramming/runs/2026-06-08-main-6f15f66-wegener.md`.
+
+The eval did not use a live AIMonitor MCP server. It used docs, source, and tests as evidence and explicitly recorded:
+
+```text
+MCP visibility: no live AIMonitor MCP tools visible; used docs/source/tests as evidence.
+```
+
+That limitation is important. The eval proves the skill is useful as a source/docs reasoning frame. It does not yet prove MCP-backed documentation generation. AIMonitor.Documentation should eventually rerun this style of eval with live MCP exploration tools visible and label which claims came from MCP, source, tests, docs, or inference.
+
+The most important lesson from the eval was not a diagram format. It was the freshness rule: generated docs must separate implemented code, published contracts, branch/proposal docs, and inference. If docs and code disagree, the generated output should show the disagreement instead of smoothing it into a confident lie.
 
 ## MCP / Adapter Surface Ideas
 
