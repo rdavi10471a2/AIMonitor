@@ -264,6 +264,17 @@ flowchart LR
 
 Where flow is **ambiguous** — multiple roots, a focus mixing inbound and outbound, or a large residual SCC with no clean source — a purely mechanical order can be wrong. That is the case flagged for **AI/Human interaction**: the engine proposes a direction + ordering and the operator confirms or flips it (this fits the convo-mode confirm pattern — a proposal, not an auto-applied layout). Treat this as a finding to converge with the other layout experiments, not a decided rule — see §10.
 
+**The sharper open question — polarity (don't make it feel backwards).** `TB` vs `LR` is secondary; the hard part is *which rank end reads as "foundation" vs "output."* Call edges point caller→callee (dependency direction), but a viewer expects the **depended-upon foundation pinned to the anchor edge** (bottom for `TB`, left for `LR`), **high-level outputs at the far end**, and dependency arrows flowing output→foundation. Mapping raw topological order *without* choosing this polarity is exactly what feels backwards. Candidate rule: rank by dependency depth, pin the **most-depended-upon (callees/leaves) as the foundation band** and **entry points (roots) as the output band** — but proving this reads right across real graphs is the experiment.
+
+**Banded layout (the sketched effect).** Bucket nodes by topological rank into **named bands**, rendering each band as a row of same-rank nodes rather than a free DAG, so same-tier things sit together:
+
+```text
+   output layer 1        output layer 2
+foundation 1     foundation 2     foundation 3
+```
+
+In mermaid this is a `subgraph` per band (or rank-aligned via invisible spacer edges) keyed to the computed rank. Open sub-questions: where to cut band boundaries (per-rank vs merged tiers), and how to **name** the tiers — "foundation"/"output" are viewer-facing labels the call graph alone does not supply, so naming is a likely AI/human step. Operator's standing belief: dataflow gives the rank; the polarity + banding is the part still being proven.
+
 **Feeding `*.aim.md`.** The inbound `G` drops verbatim into the `Used By` section's mermaid block; the outbound `G` into `Dataflow`. The writer then emits one bullet per edge with its evidence tag — e.g. `- CheckoutController.Post -> calls Submit() — caller-verified (Checkout.cs:42)` and `- 3 unresolved sites — name-inferred`. The `Folder.aim.md` band gets the project fold (§3.5); per-class docs get the focus neighborhood.
 
 **Region rule (from the feature map — honored, not re-decided).** The writer regenerates **only** between AI-maintained markers (`.designer.cs` pattern, e.g. `<!-- AIMONITOR:GENERATED:BEGIN dataflow -->` … `:END`). Human-editable regions are **hard walls copied verbatim**. If a marker is missing/malformed the writer **errors and emits a stale/needs-review note** — it does **not** guess the boundary or overwrite intent.
@@ -323,4 +334,4 @@ The manifest is staged in the same or a linked record. There is **no direct writ
 5. **Click-link URL scheme** (`aim://symbol/<stableKey>`) — adopt, or omit until an IDE/MCP consumer exists. **Undecided.**
 6. **`IndexVerified (file-attributed)` sub-level** (§4.3) — introduce a distinct evidence sub-level, or fold into `NameInferred` with a note. This touches the `SourceDocEvidenceLevel` enum the feature map owns, so it is the operator's call. **Undecided.**
 7. **Citation surface** — symbol-name-only in prose (maximally diff-stable) vs `StableKey`+relative-offset (more precise, slightly noisier). **Undecided.**
-8. **Layout direction & layering (§7).** Derive orientation (`TB`/`LR`) and node ordering mechanically from the dataflow topological rank (operator's hypothesis: dataflow is sufficient), with AI/human confirmation where flow is ambiguous — vs a fixed `LR` default. Pending convergence with the parallel layout experiments. **Undecided.**
+8. **Layout direction, polarity & banding (§7).** The core open problem: which rank end reads as "foundation" vs "output" so the diagram does not feel backwards, and whether to render rank-**banded** layers (foundation…output rows) instead of a free DAG. Candidate: rank from dataflow (operator's hypothesis: dataflow is sufficient), pin most-depended-upon = foundation at the anchor edge, band by rank, AI/human to name tiers and resolve ambiguous flow. Pending the parallel layout experiments. **Undecided.**
