@@ -10,6 +10,7 @@
     <Project Path="src/AIMonitor.Cli/AIMonitor.Cli.csproj" />
     <Project Path="src/AIMonitor.Core/AIMonitor.Core.csproj" />
     <Project Path="src/AIMonitor.Data/AIMonitor.Data.csproj" />
+    <Project Path="src/AIMonitor.Documentation/AIMonitor.Documentation.csproj" />
     <Project Path="src/AIMonitor.Indexing/AIMonitor.Indexing.csproj" />
     <Project Path="src/AIMonitor.Logging/AIMonitor.Logging.csproj" />
     <Project Path="src/AIMonitor.McpServer/AIMonitor.McpServer.csproj" />
@@ -57,6 +58,7 @@
     <File Path="docs/components/AIMonitor.Cli.md" />
     <File Path="docs/components/AIMonitor.Core.md" />
     <File Path="docs/components/AIMonitor.Data.md" />
+    <File Path="docs/components/AIMonitor.Documentation.md" />
     <File Path="docs/components/AIMonitor.Indexing.md" />
     <File Path="docs/components/AIMonitor.Logging.md" />
     <File Path="docs/components/AIMonitor.McpServer.md" />
@@ -69,6 +71,7 @@
     <File Path="docs/decisions/0001-name-and-scope.md" />
   </Folder>
   <Folder Name="/docs/feature-maps/">
+    <File Path="docs/feature-maps/AIMonitorDocumentation.md" />
     <File Path="docs/feature-maps/README.md" />
   </Folder>
   <Folder Name="/docs/findings/">
@@ -85,6 +88,7 @@
     <File Path="docs/claude-skills/AsyncPropagation.md" />
     <File Path="docs/claude-skills/FormattingOracle.md" />
     <File Path="docs/claude-skills/AIMonitorSkillPack.md" />
+    <File Path="docs/claude-skills/ArchitectureDiagramming.md" />
     <File Path="docs/claude-skills/PartialClassRefactor.md" />
     <File Path="docs/claude-skills/README.md" />
     <File Path="docs/claude-skills/ReviewQueueAndGates.md" />

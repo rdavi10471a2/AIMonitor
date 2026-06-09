@@ -1,0 +1,15 @@
+namespace AIMonitor.Documentation
+{
+    public enum SourceDocEvidenceLevel
+    {
+        SourceVerified,
+        IndexVerified,
+        TestBacked,
+        DocContract,
+        NameInferred,
+        CallerVerified,
+        GrepBacked,
+        Weak,
+        Stale
+    }
+}

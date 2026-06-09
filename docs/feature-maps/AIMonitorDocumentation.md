@@ -21,14 +21,17 @@ Do not start with project-wide generation, class-picker UI, or a standalone gene
 Initial output shape:
 
 ```text
-SourceDocs/
-  <relative path from repo root>/
-    SomeClass.cs.md
-    AnotherClass.cs.md
-  manifest.json
+SelectedFolder/
+  Docs/
+    Folder.aim.md
+    SomeClass.aim.md
+    AnotherClass.aim.md
+    manifest.aim.json
 ```
 
-The `SourceDocs` root mirrors the source tree without placing generated docs beside product source files. The manifest records source paths, source hashes, generated timestamps, evidence level, and freshness status.
+The first version keeps generated docs under the selected folder's `Docs/` subfolder. `Folder.aim.md` is the folder-level overview. Each `*.aim.md` file documents one source file, initially `.cs` files only. The manifest records source paths, source hashes, generated timestamps, evidence level, and freshness status.
+
+Future root-level agent docs can describe how agents should discover and use folder-local documentation, but the first slice should avoid a repo-wide documentation system.
 
 ## Workflow
 
@@ -39,7 +42,7 @@ SELECT   operator selects a folder
            |
 READ     documentation service gathers source, index, tests, docs, and naming evidence
            |
-WRITE    generate SourceDocs candidates as monitor-owned Working files
+WRITE    generate Docs/*.aim.md candidates as monitor-owned Working files
            |
 STAGE    stage generated docs as immutable review records
            |
@@ -47,7 +50,7 @@ REVIEW   launch WinMerge immediately
            |
 DECIDE   operator accepts/rejects generated docs
            |
-STATE    accepted docs land in SourceDocs; manifest/freshness evidence updates
+STATE    accepted docs land in Docs/; manifest/freshness evidence updates
 ```
 
 Key point: "show proposed docs" means go straight to merge/review. The diff tool is the preview surface.
@@ -57,10 +60,11 @@ Key point: "show proposed docs" means go straight to merge/review. The diff tool
 - Source files and tests are evidence.
 - Solution index rows are evidence when fresh.
 - Generated docs are derived evidence.
-- `SourceDocs/manifest.json` records freshness; it is not a substitute for source.
+- `Docs/manifest.aim.json` records freshness; it is not a substitute for source.
 - WinMerge review remains the human acceptance point.
 - `record-decision` remains the durable classification point.
 - Documentation generation must not introduce a second mutation path.
+- Documentation MCP tools should expose exploration only by default. Mutation-capable workflow tools remain delegated through the existing safe edit surface and should be discoverable/configurable separately.
 
 ## Initial Document Shape
 
@@ -84,12 +88,14 @@ Confidence: source verified
 
 ## Key Methods
 
+## Used By
+
 ## Invariants
 
 ## Evidence
 ```
 
-The document should prefer dataflow and ownership over broad prose. It should label weak claims instead of smoothing over missing evidence.
+The document should prefer dataflow and ownership over broad prose. It should make a best effort to answer "who uses me" from fresh index/caller evidence, source search, or explicitly weak/name-inferred evidence. It should label weak claims instead of smoothing over missing evidence.
 
 ## Evidence Levels
 
@@ -101,9 +107,28 @@ index-verified        fresh solution index evidence was used
 test-backed           matching tests or smoke coverage were found
 doc-contract          repo docs state the behavior
 name-inferred         meaning inferred from naming/call shape only
+caller-verified       indexed callers/references identify known consumers
+grep-backed           source search found textual consumers but semantic binding is weak
 weak                  evidence gap remains
 stale                 source hash no longer matches manifest
 ```
+
+## Research Notes
+
+Initial research supports this direction but also warns against overclaiming:
+
+- Source code summarization research treats identifier names as useful evidence, but notes that names alone miss data dependence, control flow, and deeper semantic information.
+- Identifier-name research supports the idea that names encode behavioral roles and affect comprehension, which makes AI-generated, consistently named code a plausible documentation input.
+- Architecture decision documentation research emphasizes rationale, constraints, and relationships; generated docs should record authority and evidence, not only box-and-line structure.
+- MCP capability and tool discovery are an explicit protocol concept. AIMonitor should use that to expose read-only documentation/exploration tools separately from mutation-capable workflow tools.
+
+Research links:
+
+- Model Context Protocol tools: `https://modelcontextprotocol.io/specification/draft/server/tools`
+- MCP architecture/capability discovery: `https://modelcontextprotocol.io/docs/learn/architecture`
+- Source code summarization survey: `https://www.mdpi.com/2073-8994/14/3/471`
+- Identifier semantic representation benchmark: `https://arxiv.org/abs/1910.05177`
+- Identifier names and behavioral roles: `https://arxiv.org/abs/2505.18444`
 
 ## Skill Requirements
 
@@ -150,28 +175,41 @@ The eventual MCP surface should route through shared services:
 ```text
 generate_source_docs
 check_source_docs_freshness
-list_source_docs_manifest
+list_documentation_manifest
 explain_source_doc
 stage_generated_docs
 ```
 
 For the first implementation, these tools should still use the normal workflow services for candidate creation, staging, WinMerge launch, and decision classification.
 
+MCP tool discovery should be delegated by capability set:
+
+```text
+documentation/exploration tools: visible by default
+workflow mutation tools: hidden unless the host/config enables safe edit operations
+```
+
+The documentation generator should not miss evidence because mutation tools are hidden. Read-only exploration should include enough source/index/caller/status tools to generate docs and label gaps.
+
+On task completion, the back door should ask the operator whether to generate docs for the containing folder of changed files. If accepted, it should run the same documentation workflow and go straight to merge/review for the generated docs.
+
 ## First Vertical Slice
 
-1. Add `AIMonitor.Documentation` service/project or namespace with SourceDocs manifest models.
+1. Add `AIMonitor.Documentation` service/project or namespace with folder-local documentation manifest models.
 2. Implement folder scan for `.cs` files.
 3. Generate deterministic Markdown cards from source text and available index/test evidence.
 4. Write candidates through the existing Working/new-file workflow.
 5. Stage generated docs and launch WinMerge immediately.
 6. Record accept/reject decisions through the existing workflow.
 7. Add freshness check from manifest source hashes.
-8. Add focused tests for manifest mapping, freshness classification, and no direct watched-source mutation.
+8. Add best-effort caller/consumer evidence to individual file docs.
+9. Add a task-completion prompt that asks whether to generate docs for containing folders.
+10. Add focused tests for manifest mapping, freshness classification, caller evidence labels, capability-gated tool discovery, and no direct watched-source mutation.
 
 ## Known Risks
 
 - Generated prose can overclaim semantic meaning if evidence labels are not enforced.
 - Large folder selections can produce noisy review batches.
-- SourceDocs manifest updates must go through the same reviewed path or freshness evidence can drift.
+- Manifest updates must go through the same reviewed path or freshness evidence can drift.
 - Razor/Blazor docs must preserve the existing boundary: C# and source-map evidence are strong; markup binding claims need grep/smoke-backed labels.
 - A generic `AIMonitorMCPBase` extraction could distract from the first useful product slice and is intentionally deferred.

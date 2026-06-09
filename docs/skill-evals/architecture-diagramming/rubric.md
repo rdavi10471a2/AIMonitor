@@ -8,6 +8,7 @@ Score each item 0-2.
 - Names the evidence surface used.
 - Flags uncertainty when evidence is unavailable.
 - Separates implemented code, published docs, branch/proposal docs, and inference.
+- Treats hidden mutation tools as acceptable capability gating when read-only exploration remains available.
 
 ## Diagram Quality
 
@@ -29,6 +30,7 @@ Score each item 0-2.
 - Captures adapter-over-shared-service architecture.
 - Captures index/MSBuild/Razor refresh boundaries without promising full Visual Studio Razor semantics.
 - Captures Plan Board context retrieval through the Planning surface, not task-memory files.
+- For documentation scenarios, uses folder-local `Docs/*.aim.md` shape and includes best-effort consumer/caller evidence.
 
 ## Skill Critique
 

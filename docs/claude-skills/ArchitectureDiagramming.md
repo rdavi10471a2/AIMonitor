@@ -42,6 +42,8 @@ get_staging_guide
 
 Use tool descriptions as the live contract for argument names. Do not infer MCP behavior from CLI command names.
 
+When a host exposes capability-gated tool groups, prefer read-only exploration tools for documentation and diagramming. Do not require mutation tools to be visible. If mutation tools are hidden, label that as expected capability gating instead of a missing documentation signal.
+
 ## Freshness Check
 
 Before diagramming a repo with active branches or review docs, separate evidence by freshness:
@@ -83,6 +85,26 @@ After the diagram, add a short key explaining what the diagram proves.
 - `source-map evidence`
 
 Avoid mushy labels such as `validation`, `refresh`, `sync`, `process`, or `finalize` unless the next sentence defines them.
+
+## Documentation Engine Notes
+
+When this card is used as part of AIMonitor.Documentation planning, prefer folder-local docs:
+
+```text
+SelectedFolder/
+  Docs/
+    Folder.aim.md
+    SomeClass.aim.md
+    manifest.aim.json
+```
+
+For each `.cs` file doc, make a best effort to explain "who uses me" from indexed callers/references, source search, or explicitly weak inference. Do not imply a consumer relationship is semantic when the evidence is only textual.
+
+Keep generated docs compact:
+
+- folder docs describe folder purpose, owned concepts, dataflow, and evidence gaps;
+- file docs describe one source file's purpose, ownership, dataflow, key methods, known consumers, invariants, and evidence;
+- user-editable sections may come later, but generated sections must remain hash/freshness aware.
 
 ## Portable Host Vocabulary
 
