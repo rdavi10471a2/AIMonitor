@@ -258,6 +258,12 @@ flowchart LR
   REF1 -. "ref x3 (name-inferred)" .-> OS_Submit
 ```
 
+**Layout direction & layering (parallel-experiment finding — open).** Parallel experiments confirm that diagram **orientation and node ordering are load-bearing, not cosmetic**: a correct graph laid out against its code flow reads as noise. The primary axis (mermaid `flowchart TB` vs `LR`) and the within-axis ordering should be **derived from code flow**, not pinned to the example's default `LR`.
+
+> **Working hypothesis (operator — believed sufficient, not yet proven):** *dataflow already carries the layering signal.* The outbound flow edges (`E_call` + consumer-kind `E_rel`) form a DAG once cycles are condensed (§3.5 Tarjan); a Kahn topological rank over that condensation gives the layer order, and increasing rank maps to the primary axis (entry/caller → leaf/callee). Choose `TB` vs `LR` from the ranked graph's shape — deep-and-narrow → `TB`, shallow-and-wide → `LR` — to fit the page. Under this hypothesis the emitter sets `direction` **and** rank-order from the *same* traversal that built `G`, with no hand-tuning.
+
+Where flow is **ambiguous** — multiple roots, a focus mixing inbound and outbound, or a large residual SCC with no clean source — a purely mechanical order can be wrong. That is the case flagged for **AI/Human interaction**: the engine proposes a direction + ordering and the operator confirms or flips it (this fits the convo-mode confirm pattern — a proposal, not an auto-applied layout). Treat this as a finding to converge with the other layout experiments, not a decided rule — see §10.
+
 **Feeding `*.aim.md`.** The inbound `G` drops verbatim into the `Used By` section's mermaid block; the outbound `G` into `Dataflow`. The writer then emits one bullet per edge with its evidence tag — e.g. `- CheckoutController.Post -> calls Submit() — caller-verified (Checkout.cs:42)` and `- 3 unresolved sites — name-inferred`. The `Folder.aim.md` band gets the project fold (§3.5); per-class docs get the focus neighborhood.
 
 **Region rule (from the feature map — honored, not re-decided).** The writer regenerates **only** between AI-maintained markers (`.designer.cs` pattern, e.g. `<!-- AIMONITOR:GENERATED:BEGIN dataflow -->` … `:END`). Human-editable regions are **hard walls copied verbatim**. If a marker is missing/malformed the writer **errors and emits a stale/needs-review note** — it does **not** guess the boundary or overwrite intent.
@@ -317,3 +323,4 @@ The manifest is staged in the same or a linked record. There is **no direct writ
 5. **Click-link URL scheme** (`aim://symbol/<stableKey>`) — adopt, or omit until an IDE/MCP consumer exists. **Undecided.**
 6. **`IndexVerified (file-attributed)` sub-level** (§4.3) — introduce a distinct evidence sub-level, or fold into `NameInferred` with a note. This touches the `SourceDocEvidenceLevel` enum the feature map owns, so it is the operator's call. **Undecided.**
 7. **Citation surface** — symbol-name-only in prose (maximally diff-stable) vs `StableKey`+relative-offset (more precise, slightly noisier). **Undecided.**
+8. **Layout direction & layering (§7).** Derive orientation (`TB`/`LR`) and node ordering mechanically from the dataflow topological rank (operator's hypothesis: dataflow is sufficient), with AI/human confirmation where flow is ambiguous — vs a fixed `LR` default. Pending convergence with the parallel layout experiments. **Undecided.**
